@@ -87,8 +87,8 @@ export default function Home() {
     return 'Fadi@Attack2026!SecureKey#X9';
   });
 
-  // ===== SESALLAMEH MODE =====
-  const [mode, setMode] = useState('attack'); // 'attack' or 'sesallameh'
+  // ===== SMART BOT MODE =====
+  const [mode, setMode] = useState('attack'); // 'attack' or 'smart'
   const [sesInstances, setSesInstances] = useState('3');
   const [sesDuration, setSesDuration] = useState('5');
   const [sesPhase, setSesPhase] = useState('idle'); // idle, deploying, running, finished
@@ -98,6 +98,7 @@ export default function Home() {
   const sesCountdownRef = useRef(null);
   const [sesStartTime, setSesStartTime] = useState(null);
   const [sesRemaining, setSesRemaining] = useState(null);
+  const [smartUrl, setSmartUrl] = useState('https://sesallameh.com/new-appointment');
 
   // Persist
   useEffect(() => { if (panelApiKey) localStorage.setItem('panelApiKey', panelApiKey); }, [panelApiKey]);
@@ -250,7 +251,7 @@ export default function Home() {
       const res = await fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
-        body: JSON.stringify({ action: 'status-sesallameh', servers })
+        body: JSON.stringify({ action: 'status-smart', servers })
       });
       const data = await res.json();
       if (data.results) {
@@ -460,12 +461,12 @@ export default function Home() {
   // ===== SESALLAMEH ACTIONS =====
   const handleDeploySes = async () => {
     setLoading(true);
-    addLog('📤 جاري رفع سكريبت حجز سلامة...');
+    addLog('📤 جاري رفع سكريبت البوت الذكي...');
     try {
       const res = await fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
-        body: JSON.stringify({ action: 'deploy-sesallameh', servers })
+        body: JSON.stringify({ action: 'deploy-smart', servers })
       });
       const data = await res.json();
       if (data.results) data.results.forEach(r => addLog(r.status === 'success' ? `✅ ${r.host}: ${r.output || 'تم'}` : `❌ ${r.host}: ${r.error}`));
@@ -475,16 +476,17 @@ export default function Home() {
 
   const handleStartSes = async () => {
     if (servers.length === 0) return addLog('❌ لا يوجد سيرفرات');
+    if (!smartUrl || !/^https?:\/\//i.test(smartUrl)) return addLog('❌ ادخل رابط صحيح');
     setLoading(true);
     setSesPhase('deploying');
-    addLog('📤 جاري رفع سكريبت سلامة...');
+    addLog('📤 جاري رفع البوت الذكي...');
 
     // Auto-deploy first
     try {
       const deployRes = await fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
-        body: JSON.stringify({ action: 'deploy-sesallameh', servers })
+        body: JSON.stringify({ action: 'deploy-smart', servers })
       });
       const deployData = await deployRes.json();
       if (deployData.results) {
@@ -496,13 +498,14 @@ export default function Home() {
     }
 
     // Start the bot
-    addLog(`🚀 جاري بدء حجز سلامة على ${servers.length} سيرفرات | ${sesDuration} دقيقة | ${sesInstances} متصفحات لكل سيرفر`);
+    addLog(`🚀 جاري بدء البوت الذكي على ${servers.length} سيرفرات | ${smartUrl} | ${sesDuration} دقيقة | ${sesInstances} متصفحات`);
     try {
       const res = await fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
         body: JSON.stringify({
-          action: 'start-sesallameh',
+          action: 'start-smart',
+          url: smartUrl,
           durationMin: parseInt(sesDuration),
           instances: parseInt(sesInstances),
           servers,
@@ -523,7 +526,7 @@ export default function Home() {
           setSesPhase('running');
           setSesStartTime(Date.now());
           setSesRemaining(parseInt(sesDuration) * 60);
-          addLog(`⚡ حجز سلامة شغال على ${successCount}/${servers.length} سيرفرات`);
+          addLog(`⚡ البوت الذكي شغال على ${successCount}/${servers.length} سيرفرات`);
           setTimeout(startSesMonitoring, 5000);
         } else {
           addLog('❌ فشل البدء');
@@ -539,12 +542,12 @@ export default function Home() {
 
   const handleStopSes = async () => {
     setLoading(true);
-    addLog('⏹️ جاري إيقاف حجز سلامة...');
+    addLog('⏹️ جاري إيقاف البوت الذكي...');
     try {
       const res = await fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
-        body: JSON.stringify({ action: 'stop-sesallameh', servers })
+        body: JSON.stringify({ action: 'stop-smart', servers })
       });
       const data = await res.json();
       if (data.results) data.results.forEach(r => addLog(`✅ ${r.host}: ${r.output || 'تم الإيقاف'}`));
@@ -583,7 +586,7 @@ export default function Home() {
   const phaseText = { idle: '⚪ جاهز', scanning: '🔍 يفحص الموقع...', starting: '🚀 يبدأ الهجوم...', running: '⚡ شغال', finished: '✅ انتهى' };
   const phaseColor = { idle: '#6b7280', scanning: '#facc15', starting: '#f97316', running: '#22c55e', finished: '#3b82f6' };
 
-  const sesPhaseText = { idle: '⚪ جاهز', deploying: '📤 يرفع السكريبت...', running: '🚗 يحجز مواعيد...', finished: '✅ انتهى' };
+  const sesPhaseText = { idle: '⚪ جاهز', deploying: '📤 يرفع البوت...', running: '🧠 البوت الذكي شغال...', finished: '✅ انتهى' };
   const sesPhaseColor = { idle: '#6b7280', deploying: '#facc15', running: '#f97316', finished: '#3b82f6' };
 
   const totalSesBookings = sesStatus.reduce((sum, s) => sum + (s.bookings || 0), 0);
@@ -608,15 +611,15 @@ export default function Home() {
             ⚔️ هجوم زوار
           </button>
           <button
-            onClick={() => setMode('sesallameh')}
+            onClick={() => setMode('smart')}
             style={{
-              ...st.btn(mode === 'sesallameh' ? '#f97316' : '#374151'),
+              ...st.btn(mode === 'smart' ? '#f97316' : '#374151'),
               padding:'12px',
               fontSize:'15px',
-              border: mode === 'sesallameh' ? '2px solid #f97316' : '2px solid #374151'
+              border: mode === 'smart' ? '2px solid #f97316' : '2px solid #374151'
             }}
           >
-            🚗 حجز سلامة
+            🧠 بوت ذكي
           </button>
         </div>
 
@@ -769,22 +772,26 @@ export default function Home() {
           </>
         )}
 
-        {/* ===== SESALLAMEH MODE ===== */}
-        {mode === 'sesallameh' && (
+        {/* ===== SMART BOT MODE ===== */}
+        {mode === 'smart' && (
           <>
             {/* Phase indicator */}
             <div style={{ textAlign:'center', marginBottom:'16px', padding:'12px', backgroundColor:'#1a0a00', borderRadius:'8px', border:`1px solid ${sesPhaseColor[sesPhase]}` }}>
               <span style={{ fontSize:'16px', color: sesPhaseColor[sesPhase], fontWeight:'bold' }}>{sesPhaseText[sesPhase]}</span>
-              {sesPhase === 'running' && <span style={{ fontSize:'12px', color:'#9ca3af', marginRight:'10px' }}> | 🖥️ {servers.length} سيرفرات | 🚗 {parseInt(sesInstances) * servers.length} متصفح</span>}
+              {sesPhase === 'running' && <span style={{ fontSize:'12px', color:'#9ca3af', marginRight:'10px' }}> | 🖥️ {servers.length} سيرفرات | 🧠 {parseInt(sesInstances) * servers.length} متصفح</span>}
             </div>
 
-            {/* Target info */}
+            {/* Target URL */}
             <div style={{ marginBottom:'16px', padding:'14px', backgroundColor:'#1a0a00', borderRadius:'8px', border:'1px solid #f97316' }}>
-              <div style={{ textAlign:'center', marginBottom:'8px' }}>
-                <span style={{ fontSize:'18px', color:'#f97316', fontWeight:'bold' }}>🚗 sesallameh.com</span>
+              <div style={{ textAlign:'center', marginBottom:'10px' }}>
+                <span style={{ fontSize:'18px', color:'#f97316', fontWeight:'bold' }}>🧠 بوت ذكي - أي موقع</span>
               </div>
-              <div style={{ fontSize:'12px', color:'#fb923c', textAlign:'center' }}>
-                حجز مواعيد فحص فني دوري ببيانات سعودية عشوائية
+              <div style={{ fontSize:'12px', color:'#fb923c', textAlign:'center', marginBottom:'12px' }}>
+                يكتشف الحقول تلقائياً ويعبيها ببيانات سعودية عشوائية على أي موقع
+              </div>
+              <div>
+                <label style={{...st.label, color:'#f97316'}}>🔗 رابط الموقع المستهدف</label>
+                <input type="text" value={smartUrl} onChange={(e) => setSmartUrl(e.target.value)} placeholder="https://example.com/booking" style={{...st.input, fontSize:'15px', padding:'12px', borderColor:'#f97316'}} disabled={sesPhase === 'running'} />
               </div>
             </div>
 
@@ -845,13 +852,13 @@ export default function Home() {
             <div style={{ display:'grid', gridTemplateColumns: sesPhase === 'running' ? '1fr 1fr' : '1fr', gap:'10px', marginBottom:'16px' }}>
               {sesPhase !== 'running' && (
                 <button onClick={handleStartSes} disabled={loading || sesPhase === 'deploying'} style={{...st.btn('#ea580c'), opacity: loading ? 0.5 : 1, padding:'18px', fontSize:'18px'}}>
-                  {sesPhase === 'deploying' ? '📤 يرفع السكريبت...' : '🚗 بدء الحجز'}
+                  {sesPhase === 'deploying' ? '📤 يرفع البوت...' : '🧠 بدء البوت الذكي'}
                 </button>
               )}
               {sesPhase === 'running' && (
                 <>
                   <div style={{ textAlign:'center', padding:'14px', backgroundColor:'#451a03', borderRadius:'8px', border:'1px solid #f97316' }}>
-                    <div style={{ fontSize:'18px', fontWeight:'bold', color:'#f97316' }}>🚗 يحجز مواعيد...</div>
+                    <div style={{ fontSize:'18px', fontWeight:'bold', color:'#f97316' }}>🧠 البوت شغال...</div>
                   </div>
                   <button onClick={handleStopSes} disabled={loading} style={{...st.btn('#dc2626'), opacity: loading ? 0.5 : 1, padding:'18px', fontSize:'16px'}}>
                     ⏹️ إيقاف
@@ -913,17 +920,17 @@ export default function Home() {
 
             {/* Info box */}
             <div style={{ marginTop:'14px', padding:'14px', backgroundColor:'#1a0a00', borderRadius:'8px', border:'1px solid #92400e' }}>
-              <div style={{ fontSize:'13px', color:'#f97316', marginBottom:'8px', fontWeight:'bold' }}>📋 ماذا يفعل البوت؟</div>
+              <div style={{ fontSize:'13px', color:'#f97316', marginBottom:'8px', fontWeight:'bold' }}>🧠 كيف يشتغل البوت الذكي؟</div>
               <div style={{ fontSize:'12px', color:'#fb923c', lineHeight:'1.8' }}>
-                1. يفتح sesallameh.com/new-appointment<br/>
-                2. يعبي الاسم (سعودي عشوائي)<br/>
-                3. يعبي رقم الهوية (10 أرقام عشوائية)<br/>
-                4. يعبي رقم الجوال (05xxxxxxxx)<br/>
-                5. يختار نوع المركبة ورقم اللوحة عشوائي<br/>
-                6. يختار المنطقة ومركز الفحص<br/>
-                7. يحدد تاريخ ووقت عشوائي<br/>
-                8. يضغط "التالي" وينتقل للصفحة اللي بعدها<br/>
-                9. يكرر العملية طول المدة المحددة
+                1. يفتح أي رابط تحطه بمتصفح Chrome حقيقي<br/>
+                2. يكتشف كل حقول الفورم تلقائياً (اسم، هوية، جوال، إيميل، إلخ)<br/>
+                3. يعبي كل حقل بالبيانات المناسبة (أسماء سعودية، أرقام هوية، جوالات 05xx)<br/>
+                4. يختار من القوائم المنسدلة عشوائياً<br/>
+                5. يفعّل الخيارات (checkboxes, radio buttons)<br/>
+                6. يضغط زر الإرسال/التالي تلقائياً<br/>
+                7. إذا في صفحة ثانية - يعبيها كمان<br/>
+                8. يكرر العملية ببيانات جديدة كل مرة<br/>
+                9. يشتغل عبر بروكسي سعودي كزائر حقيقي
               </div>
             </div>
           </>

