@@ -48,11 +48,33 @@ SAUDI_CITIES = [
 PLATE_LETTERS_AR = ['أ', 'ب', 'ح', 'د', 'ر', 'س', 'ص', 'ط', 'ع', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي']
 
 
+def _validate_saudi_id(identifier):
+    """Validate Saudi ID using official algorithm"""
+    if not identifier.isdigit() or len(identifier) != 10 or identifier[0] not in ('1', '2'):
+        return -1
+    checksum = 0
+    for digit, num in enumerate(identifier):
+        num = int(num)
+        checksum += sum(map(int, str(num * 2))) if digit % 2 == 0 else num
+    return identifier[0] if checksum % 10 == 0 else -1
+
 def gen_saudi_id():
-    return '1' + ''.join([str(random.randint(0, 9)) for _ in range(9)])
+    """Generate a valid Saudi national ID (starts with 1) that passes checksum validation"""
+    while True:
+        digits = [1] + [random.randint(0, 9) for _ in range(8)]
+        for last in range(10):
+            candidate = ''.join(str(d) for d in digits) + str(last)
+            if _validate_saudi_id(candidate) != -1:
+                return candidate
 
 def gen_iqama():
-    return '2' + ''.join([str(random.randint(0, 9)) for _ in range(9)])
+    """Generate a valid Iqama number (starts with 2) that passes checksum validation"""
+    while True:
+        digits = [2] + [random.randint(0, 9) for _ in range(8)]
+        for last in range(10):
+            candidate = ''.join(str(d) for d in digits) + str(last)
+            if _validate_saudi_id(candidate) != -1:
+                return candidate
 
 def gen_saudi_phone():
     prefixes = ['50', '53', '54', '55', '56', '57', '58', '59']
@@ -112,6 +134,44 @@ def gen_address():
 def gen_postal_code():
     return str(random.randint(10000, 99999))
 
+def gen_card_number():
+    """Generate a fake Visa/Mada card number using Luhn algorithm"""
+    # Visa starts with 4, Mada uses various BINs
+    prefix = random.choice(['4', '4', '4', '5'])
+    # Generate first 15 digits
+    digits = [int(prefix)] + [random.randint(0, 9) for _ in range(14)]
+    # Calculate Luhn check digit
+    total = 0
+    for i, d in enumerate(digits):
+        if i % 2 == 0:
+            doubled = d * 2
+            total += doubled - 9 if doubled > 9 else doubled
+        else:
+            total += d
+    check = (10 - (total % 10)) % 10
+    digits.append(check)
+    return ''.join(str(d) for d in digits)
+
+def gen_card_expiry():
+    """Generate a future expiry date MM/YY"""
+    month = random.randint(1, 12)
+    year = random.randint(27, 30)
+    return f"{month:02d}/{year}"
+
+def gen_card_expiry_month():
+    return f"{random.randint(1, 12):02d}"
+
+def gen_card_expiry_year():
+    return str(random.randint(2027, 2030))
+
+def gen_cvv():
+    return str(random.randint(100, 999))
+
+def gen_cardholder_name():
+    first_en = random.choice(['Mohammed', 'Abdullah', 'Fahad', 'Saud', 'Khalid', 'Sultan', 'Turki', 'Bandar', 'Faisal', 'Ahmad', 'Omar', 'Youssef', 'Ibrahim', 'Nasser', 'Saad'])
+    last_en = random.choice(['Alotaibi', 'Alharbi', 'Alqahtani', 'Alshamri', 'Aldosari', 'Almutairi', 'Alghamdi', 'Alzahrani', 'Alsubaie', 'Alshehri', 'Aljohani', 'Alanazi', 'Alrashidi'])
+    return f"{first_en} {last_en}"
+
 def gen_number_string(length=4):
     return ''.join([str(random.randint(0, 9)) for _ in range(length)])
 
@@ -167,6 +227,30 @@ FIELD_PATTERNS = {
     'plate_number': {
         'keywords': ['لوحة', 'اللوحة', 'plate', 'رقم اللوحة', 'أرقام', 'plate number'],
         'generator': gen_plate_number
+    },
+    'card_number': {
+        'keywords': ['رقم البطاقة', 'card number', 'رقم الكرت', 'card no', 'بطاقة', 'credit card', 'debit card', 'visa', 'mada', 'ماستركارد', 'فيزا', 'مدى', 'pan'],
+        'generator': gen_card_number
+    },
+    'card_expiry': {
+        'keywords': ['تاريخ الانتهاء', 'expiry', 'expiration', 'exp date', 'انتهاء', 'صلاحية', 'mm/yy', 'valid thru', 'valid until'],
+        'generator': gen_card_expiry
+    },
+    'card_expiry_month': {
+        'keywords': ['expiry month', 'exp month', 'شهر الانتهاء', 'mm'],
+        'generator': gen_card_expiry_month
+    },
+    'card_expiry_year': {
+        'keywords': ['expiry year', 'exp year', 'سنة الانتهاء', 'yy', 'yyyy'],
+        'generator': gen_card_expiry_year
+    },
+    'cvv': {
+        'keywords': ['cvv', 'cvc', 'cvv2', 'cvc2', 'security code', 'رمز الأمان', 'رمز التحقق', 'الرمز السري', 'csv'],
+        'generator': gen_cvv
+    },
+    'cardholder_name': {
+        'keywords': ['cardholder', 'card holder', 'اسم حامل البطاقة', 'name on card', 'اسم على البطاقة', 'holder name'],
+        'generator': gen_cardholder_name
     },
 }
 
@@ -468,15 +552,7 @@ def smart_fill_page(page, target_url, log_fn=print):
                 pass
             current_url = page.url
             log_fn(f"📄 After submit URL: {current_url}")
-
-            # Try to fill the next page too if there are more forms
-            next_inputs = page.locator('input:visible').count()
-            next_selects = page.locator('select:visible').count()
-            if next_inputs > 0 or next_selects > 0:
-                log_fn(f"📋 Next page has {next_inputs} inputs, {next_selects} selects - filling...")
-                # Recursively fill next page (max 1 level deep to avoid infinite loops)
-                return True, True  # success, has_next_page
-            return True, False
+            return True, True  # success, might have next page
         else:
             log_fn("⚠️ No submit button found")
             return True, False
@@ -484,6 +560,283 @@ def smart_fill_page(page, target_url, log_fn=print):
     except Exception as e:
         log_fn(f"❌ Error: {str(e)}")
         return False, False
+
+
+def handle_payment_page(page, log_fn=print):
+    """
+    Handle payment page - detect payment method buttons (Visa/Mada/etc),
+    click one, then fill card details including inside iframes
+    """
+    try:
+        log_fn("💳 Checking for payment page...")
+        time.sleep(random.uniform(2, 3))
+
+        page_text = page.inner_text('body').lower()
+
+        # Check if this is a payment/summary page
+        payment_keywords = ['دفع', 'payment', 'الدفع', 'ادفع', 'pay', 'checkout', 'ملخص', 'summary',
+                           'فيزا', 'visa', 'مدى', 'mada', 'ماستركارد', 'mastercard', 'بطاقة ائتمان',
+                           'credit card', 'المقابل المالي', 'المبلغ', 'amount', 'total', 'الإجمالي']
+
+        is_payment = any(kw in page_text for kw in payment_keywords)
+        if not is_payment:
+            log_fn("ℹ️ Not a payment page")
+            return False
+
+        log_fn("💳 Payment page detected!")
+
+        # Try to click payment method button (Visa, Mada, etc)
+        payment_method_keywords = ['visa', 'فيزا', 'mada', 'مدى', 'بطاقة ائتمان', 'credit card',
+                                   'بطاقة مدى', 'mastercard', 'ماستركارد', 'ادفع', 'pay now',
+                                   'الدفع بالبطاقة', 'card payment']
+
+        # Click payment method buttons
+        buttons = page.locator('button:visible, a:visible, div[role="button"]:visible, input[type="radio"]:visible, label:visible').all()
+        for btn in buttons:
+            try:
+                btn_text = btn.inner_text().strip().lower()
+                for kw in payment_method_keywords:
+                    if kw in btn_text:
+                        log_fn(f"💳 Clicking payment method: '{btn_text[:30]}'")
+                        btn.click()
+                        time.sleep(random.uniform(2, 4))
+                        break
+            except:
+                continue
+
+        # Also try clicking images that might be payment logos
+        try:
+            imgs = page.locator('img:visible').all()
+            for img in imgs:
+                alt = (img.get_attribute('alt') or '').lower()
+                src = (img.get_attribute('src') or '').lower()
+                if any(kw in alt + src for kw in ['visa', 'mada', 'mastercard', 'credit']):
+                    log_fn(f"💳 Clicking payment logo: {alt or src[:30]}")
+                    img.click()
+                    time.sleep(random.uniform(2, 3))
+                    break
+        except:
+            pass
+
+        # Now fill card details - check main page first, then iframes
+        card_filled = fill_card_fields(page, log_fn)
+
+        # Check iframes for payment form (many payment gateways use iframes)
+        if not card_filled:
+            log_fn("🔍 Checking iframes for payment form...")
+            frames = page.frames
+            for frame in frames:
+                if frame == page.main_frame:
+                    continue
+                try:
+                    frame_inputs = frame.locator('input:visible').count()
+                    if frame_inputs > 0:
+                        log_fn(f"📋 Found iframe with {frame_inputs} inputs")
+                        card_filled = fill_card_fields_in_frame(frame, log_fn)
+                        if card_filled:
+                            break
+                except:
+                    continue
+
+        # Click pay/submit button
+        if card_filled:
+            time.sleep(random.uniform(1, 2))
+            pay_keywords = ['ادفع', 'pay', 'دفع', 'تأكيد الدفع', 'confirm payment', 'submit',
+                           'إرسال', 'تأكيد', 'confirm', 'إتمام الدفع', 'complete payment',
+                           'pay now', 'ادفع الآن', 'proceed']
+
+            all_clickable = page.locator('button:visible, input[type="submit"]:visible, a:visible').all()
+            for elem in all_clickable:
+                try:
+                    elem_text = elem.inner_text().strip().lower()
+                    elem_value = (elem.get_attribute('value') or '').lower()
+                    combined = elem_text + ' ' + elem_value
+                    for kw in pay_keywords:
+                        if kw in combined:
+                            log_fn(f"💳 Clicking pay button: '{elem_text[:30]}'")
+                            elem.click()
+                            time.sleep(random.uniform(3, 5))
+                            try:
+                                page.wait_for_load_state('networkidle', timeout=10000)
+                            except:
+                                pass
+                            log_fn(f"💳 Payment submitted! URL: {page.url}")
+                            return True
+                except:
+                    continue
+
+            # Also check inside iframes for pay button
+            for frame in page.frames:
+                if frame == page.main_frame:
+                    continue
+                try:
+                    frame_buttons = frame.locator('button:visible, input[type="submit"]:visible').all()
+                    for btn in frame_buttons:
+                        try:
+                            btn_text = btn.inner_text().strip().lower()
+                            btn_value = (btn.get_attribute('value') or '').lower()
+                            combined = btn_text + ' ' + btn_value
+                            for kw in pay_keywords:
+                                if kw in combined:
+                                    log_fn(f"💳 Clicking pay button in iframe: '{btn_text[:30]}'")
+                                    btn.click()
+                                    time.sleep(random.uniform(3, 5))
+                                    return True
+                        except:
+                            continue
+                except:
+                    continue
+
+        return card_filled
+
+    except Exception as e:
+        log_fn(f"❌ Payment error: {str(e)}")
+        return False
+
+
+def fill_card_fields(page, log_fn=print):
+    """Fill credit card fields on the main page"""
+    card_num = gen_card_number()
+    expiry = gen_card_expiry()
+    cvv = gen_cvv()
+    holder = gen_cardholder_name()
+    filled = 0
+
+    inputs = page.locator('input:visible').all()
+    for inp in inputs:
+        try:
+            input_type = (inp.get_attribute('type') or 'text').lower()
+            if input_type in ['hidden', 'submit', 'button', 'checkbox', 'radio']:
+                continue
+
+            clues = ' '.join([
+                (inp.get_attribute('placeholder') or ''),
+                (inp.get_attribute('name') or ''),
+                (inp.get_attribute('id') or ''),
+                (inp.get_attribute('aria-label') or ''),
+                (inp.get_attribute('autocomplete') or ''),
+            ]).lower()
+
+            # Card number
+            if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'رقم البطاقة', 'رقم الكرت', 'pan', 'card_number']):
+                inp.click()
+                time.sleep(0.3)
+                for ch in card_num:
+                    inp.type(ch, delay=random.randint(50, 120))
+                filled += 1
+                log_fn(f"  💳 Card number: {card_num[:4]}****{card_num[-4:]}")
+            # Expiry
+            elif any(kw in clues for kw in ['expir', 'exp', 'mm/yy', 'mm/yyyy', 'انتهاء', 'صلاحية', 'cc-exp', 'valid']):
+                inp.click()
+                time.sleep(0.3)
+                inp.fill(expiry)
+                filled += 1
+                log_fn(f"  💳 Expiry: {expiry}")
+            # CVV
+            elif any(kw in clues for kw in ['cvv', 'cvc', 'security', 'رمز الأمان', 'رمز التحقق', 'cc-csc', 'csv']):
+                inp.click()
+                time.sleep(0.3)
+                for ch in cvv:
+                    inp.type(ch, delay=random.randint(50, 120))
+                filled += 1
+                log_fn(f"  💳 CVV: ***")
+            # Cardholder name
+            elif any(kw in clues for kw in ['cardholder', 'card holder', 'name on card', 'holder', 'حامل البطاقة', 'cc-name']):
+                inp.click()
+                time.sleep(0.3)
+                inp.fill(holder)
+                filled += 1
+                log_fn(f"  💳 Holder: {holder}")
+        except:
+            continue
+
+    # Also check select dropdowns for month/year
+    selects = page.locator('select:visible').all()
+    for sel in selects:
+        try:
+            sel_name = ' '.join([
+                (sel.get_attribute('name') or ''),
+                (sel.get_attribute('id') or ''),
+                (sel.get_attribute('aria-label') or ''),
+            ]).lower()
+
+            if any(kw in sel_name for kw in ['month', 'mm', 'شهر']):
+                options = sel.locator('option').all()
+                if len(options) > 1:
+                    idx = random.randint(1, min(12, len(options)-1))
+                    sel.select_option(index=idx)
+                    filled += 1
+                    log_fn(f"  💳 Expiry month selected")
+            elif any(kw in sel_name for kw in ['year', 'yy', 'سنة']):
+                options = sel.locator('option').all()
+                if len(options) > 1:
+                    idx = random.randint(1, min(len(options)-1, 5))
+                    sel.select_option(index=idx)
+                    filled += 1
+                    log_fn(f"  💳 Expiry year selected")
+        except:
+            continue
+
+    if filled > 0:
+        log_fn(f"💳 Filled {filled} card fields")
+    return filled > 0
+
+
+def fill_card_fields_in_frame(frame, log_fn=print):
+    """Fill credit card fields inside an iframe"""
+    card_num = gen_card_number()
+    expiry = gen_card_expiry()
+    cvv = gen_cvv()
+    holder = gen_cardholder_name()
+    filled = 0
+
+    inputs = frame.locator('input:visible').all()
+    for inp in inputs:
+        try:
+            input_type = (inp.get_attribute('type') or 'text').lower()
+            if input_type in ['hidden', 'submit', 'button', 'checkbox', 'radio']:
+                continue
+
+            clues = ' '.join([
+                (inp.get_attribute('placeholder') or ''),
+                (inp.get_attribute('name') or ''),
+                (inp.get_attribute('id') or ''),
+                (inp.get_attribute('aria-label') or ''),
+                (inp.get_attribute('autocomplete') or ''),
+            ]).lower()
+
+            if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'pan', 'card_number', 'رقم البطاقة']):
+                inp.click()
+                time.sleep(0.3)
+                for ch in card_num:
+                    inp.type(ch, delay=random.randint(50, 120))
+                filled += 1
+                log_fn(f"  💳 [iframe] Card: {card_num[:4]}****{card_num[-4:]}")
+            elif any(kw in clues for kw in ['expir', 'exp', 'mm/yy', 'انتهاء', 'cc-exp', 'valid']):
+                inp.click()
+                time.sleep(0.3)
+                inp.fill(expiry)
+                filled += 1
+                log_fn(f"  💳 [iframe] Expiry: {expiry}")
+            elif any(kw in clues for kw in ['cvv', 'cvc', 'security', 'cc-csc', 'csv', 'رمز']):
+                inp.click()
+                time.sleep(0.3)
+                for ch in cvv:
+                    inp.type(ch, delay=random.randint(50, 120))
+                filled += 1
+                log_fn(f"  💳 [iframe] CVV: ***")
+            elif any(kw in clues for kw in ['cardholder', 'holder', 'name on card', 'cc-name', 'حامل']):
+                inp.click()
+                time.sleep(0.3)
+                inp.fill(holder)
+                filled += 1
+                log_fn(f"  💳 [iframe] Holder: {holder}")
+        except:
+            continue
+
+    if filled > 0:
+        log_fn(f"💳 [iframe] Filled {filled} card fields")
+    return filled > 0
 
 
 # ============ MAIN BOT LOOP ============
@@ -588,18 +941,81 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     page = context.new_page()
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
+                    # STEP 1: Fill the first page (registration form)
                     success, has_next = smart_fill_page(page, target_url, log_fn=print)
 
                     if success:
                         total_submissions += 1
-                        print(f"✅ Submission #{total_submissions} completed!")
+                        print(f"✅ Page 1 filled! (Submission #{total_submissions})")
 
-                        # If there's a next page, fill it too
-                        if has_next:
-                            print("📋 Filling next page...")
-                            success2, _ = smart_fill_page(page, page.url, log_fn=print)
-                            if success2:
-                                print("✅ Next page also filled!")
+                        # STEP 2-4: Handle up to 4 more pages (summary, payment, confirmation, etc.)
+                        max_pages = 4
+                        for page_num in range(2, max_pages + 2):
+                            if not has_next or time.time() >= end_time:
+                                break
+
+                            time.sleep(random.uniform(2, 4))
+                            current_url = page.url
+                            print(f"\n📄 Page {page_num}: {current_url}")
+
+                            # Check if this is a payment page
+                            try:
+                                page_text = page.inner_text('body').lower()
+                                is_payment = any(kw in page_text for kw in [
+                                    'دفع', 'payment', 'الدفع', 'pay', 'فيزا', 'visa',
+                                    'مدى', 'mada', 'credit card', 'بطاقة'
+                                ])
+                            except:
+                                is_payment = False
+
+                            if is_payment:
+                                print("💳 Payment page detected - handling payment...")
+                                payment_success = handle_payment_page(page, log_fn=print)
+                                if payment_success:
+                                    print("✅ Payment completed!")
+                                    total_submissions += 1
+                                else:
+                                    print("⚠️ Payment handling attempted")
+                                break  # Payment is usually the last step
+                            else:
+                                # Regular form page - fill it
+                                print(f"📋 Filling page {page_num}...")
+                                next_inputs = page.locator('input:visible').count()
+                                next_selects = page.locator('select:visible').count()
+                                if next_inputs > 0 or next_selects > 0:
+                                    success2, has_next = smart_fill_page(page, current_url, log_fn=print)
+                                    if success2:
+                                        print(f"✅ Page {page_num} filled!")
+                                else:
+                                    # No form fields - might be a confirmation/summary page
+                                    # Try to find and click next/confirm/pay button
+                                    print(f"ℹ️ Page {page_num} has no form fields - looking for action button...")
+                                    action_keywords = ['التالي', 'تأكيد', 'إتمام', 'دفع', 'ادفع',
+                                                      'next', 'confirm', 'pay', 'proceed', 'continue',
+                                                      'متابعة', 'موافق', 'تأكيد الحجز']
+                                    clicked = False
+                                    btns = page.locator('button:visible, a:visible').all()
+                                    for btn in btns:
+                                        try:
+                                            btn_text = btn.inner_text().strip().lower()
+                                            for kw in action_keywords:
+                                                if kw in btn_text:
+                                                    print(f"🔘 Clicking: '{btn_text[:30]}'")
+                                                    btn.click()
+                                                    time.sleep(random.uniform(3, 5))
+                                                    try:
+                                                        page.wait_for_load_state('networkidle', timeout=10000)
+                                                    except:
+                                                        pass
+                                                    clicked = True
+                                                    has_next = True
+                                                    break
+                                            if clicked:
+                                                break
+                                        except:
+                                            continue
+                                    if not clicked:
+                                        has_next = False
                     else:
                         total_errors += 1
 

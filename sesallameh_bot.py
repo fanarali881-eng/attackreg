@@ -62,9 +62,24 @@ TIMES = [
 ]
 
 
+def _validate_saudi_id(identifier):
+    """Validate Saudi ID using official algorithm"""
+    if not identifier.isdigit() or len(identifier) != 10 or identifier[0] not in ('1', '2'):
+        return -1
+    checksum = 0
+    for digit, num in enumerate(identifier):
+        num = int(num)
+        checksum += sum(map(int, str(num * 2))) if digit % 2 == 0 else num
+    return identifier[0] if checksum % 10 == 0 else -1
+
 def gen_saudi_id():
-    """Generate a valid-looking Saudi national ID (starts with 1, 10 digits)"""
-    return '1' + ''.join([str(random.randint(0, 9)) for _ in range(9)])
+    """Generate a valid Saudi national ID (starts with 1) that passes checksum validation"""
+    while True:
+        digits = [1] + [random.randint(0, 9) for _ in range(8)]
+        for last in range(10):
+            candidate = ''.join(str(d) for d in digits) + str(last)
+            if _validate_saudi_id(candidate) != -1:
+                return candidate
 
 
 def gen_saudi_phone():
