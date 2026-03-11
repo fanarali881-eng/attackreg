@@ -236,6 +236,15 @@ export async function POST(req) {
       
       return NextResponse.json({ results: parsed });
 
+    } else if (action === 'logs-smart') {
+      const results = await Promise.all(
+        serverList.map(async (server) => {
+          const r = await runSSHCommand(server, 'tail -50 /root/smart_bot.log 2>/dev/null || echo "No log"; echo "---FILE_SIZE---"; wc -c /root/smart_bot.py 2>/dev/null || echo "0"; echo "---PY_CHECK---"; python3 -c "from playwright.sync_api import sync_playwright; print(\"PW_OK\")" 2>&1 | tail -1', 15000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
     } else if (action === 'start') {
       const safeUrl = sanitizeUrl(url);
       if (!safeUrl) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
