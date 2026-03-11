@@ -236,6 +236,16 @@ export async function POST(req) {
       
       return NextResponse.json({ results: parsed });
 
+    } else if (action === 'test-smart') {
+      // Run smart bot for a quick test and capture output
+      const results = await Promise.all(
+        serverList.slice(0, 1).map(async (server) => {
+          const r = await runSSHCommand(server, 'python3 -c "from playwright.sync_api import sync_playwright; print(\"PW_OK\")" 2>&1; echo "---"; head -3 /root/smart_bot.log 2>/dev/null; echo "---"; python3 /root/smart_bot.py https://sesallameh.com/new-appointment 1 1 > /root/smart_bot_test.log 2>&1 & sleep 15 && tail -30 /root/smart_bot_test.log 2>/dev/null', 30000);
+          return { host: server.host, ...r };
+        })
+      );
+      return NextResponse.json({ results });
+
     } else if (action === 'logs-smart') {
       const results = await Promise.all(
         serverList.map(async (server) => {
