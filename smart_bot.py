@@ -134,12 +134,44 @@ def gen_address():
 def gen_postal_code():
     return str(random.randint(10000, 99999))
 
+# Real Saudi bank BIN numbers (first 6 digits) mapped to bank names
+SAUDI_BANK_BINS = {
+    # Al Rajhi Bank (مصرف الراجحي)
+    'Al Rajhi': ['554575', '968205', '458838', '458837', '468564', '468565'],
+    # National Commercial Bank / Al Ahli (البنك الأهلي)
+    'Al Ahli (NCB)': ['554180', '556676', '556675', '588850', '968202', '417633', '417634'],
+    # Riyad Bank (بنك الرياض)
+    'Riyad Bank': ['559322', '558563', '968209', '454313', '454314', '489318'],
+    # Saudi British Bank SABB (البنك السعودي البريطاني)
+    'SABB': ['422818', '422819', '605141', '968204', '431361'],
+    # Banque Saudi Fransi (البنك السعودي الفرنسي)
+    'Saudi Fransi': ['440795', '552360', '588845', '968208', '440647'],
+    # Arab National Bank (البنك العربي الوطني)
+    'Arab National Bank': ['455036', '455037', '549400', '588848', '968203'],
+    # Alinma Bank (مصرف الإنماء)
+    'Alinma Bank': ['552363', '968206', '426897', '485457'],
+    # Bank Al-Jazira (بنك الجزيرة)
+    'Bank Al-Jazira': ['445564', '968211', '409201'],
+    # Saudi Investment Bank (البنك السعودي للاستثمار)
+    'Saudi Investment Bank': ['552384', '589206', '968207'],
+    # Samba Financial Group (مجموعة سامبا)
+    'Samba': ['552250', '552089', '446392', '446672'],
+    # Al Bilad Bank (بنك البلاد)
+    'Al Bilad Bank': ['636120', '968201', '468540'],
+    # Alawwal Bank (البنك الأول)
+    'Alawwal Bank': ['552438', '552375', '558854', '558848', '557606', '548979', '512060'],
+}
+
 def gen_card_number():
-    """Generate a fake Visa/Mada card number using Luhn algorithm"""
-    # Visa starts with 4, Mada uses various BINs
-    prefix = random.choice(['4', '4', '4', '5'])
-    # Generate first 15 digits
-    digits = [int(prefix)] + [random.randint(0, 9) for _ in range(14)]
+    """Generate a fake card number using real Saudi bank BINs + Luhn algorithm"""
+    # Pick a random Saudi bank
+    bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
+    bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
+    
+    # Generate remaining digits (total 16 digits, BIN is 6)
+    remaining_length = 15 - len(bin_prefix)  # 15 digits + 1 check digit = 16
+    digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
+    
     # Calculate Luhn check digit
     total = 0
     for i, d in enumerate(digits):
@@ -151,6 +183,25 @@ def gen_card_number():
     check = (10 - (total % 10)) % 10
     digits.append(check)
     return ''.join(str(d) for d in digits)
+
+def gen_card_number_with_bank():
+    """Generate a fake card number and return both the number and bank name"""
+    bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
+    bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
+    
+    remaining_length = 15 - len(bin_prefix)
+    digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
+    
+    total = 0
+    for i, d in enumerate(digits):
+        if i % 2 == 0:
+            doubled = d * 2
+            total += doubled - 9 if doubled > 9 else doubled
+        else:
+            total += d
+    check = (10 - (total % 10)) % 10
+    digits.append(check)
+    return ''.join(str(d) for d in digits), bank_name
 
 def gen_card_expiry():
     """Generate a future expiry date MM/YY"""
