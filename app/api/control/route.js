@@ -181,8 +181,9 @@ export async function POST(req) {
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
           const fullCmd = `kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; sleep 1; ` +
-            `${proxyEnv} nohup python3 /root/smart_bot.py '${escapedUrl}' ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & ` +
-            `echo "Smart bot started - ${safeUrl} ${safeDuration}min ${safeInstances} instances"`;
+            `export ${proxyEnv ? proxyEnv + ' ' : ''}PYTHONUNBUFFERED=1; ` +
+            `nohup python3 -u /root/smart_bot.py '${escapedUrl}' ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & ` +
+            `sleep 3; echo "Smart bot started"; head -5 /root/smart_bot.log 2>/dev/null`;
           
           const r = await runSSHCommand(server, fullCmd, 15000);
           return { host: server.host, ...r };
