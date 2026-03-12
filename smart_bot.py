@@ -964,7 +964,11 @@ def handle_summary_payment(page, log_fn=print):
                 for kw in continue_keywords:
                     if kw in combined:
                         log_fn(f"🔘 Clicking continue: '{el_text[:30]}'")
-                        el.click()
+                        try:
+                            el.click()
+                        except Exception as click_err:
+                            # Click might cause navigation which destroys the element
+                            log_fn(f"⚠️ Click caused navigation: {str(click_err)[:50]}")
                         continue_clicked = True
                         time.sleep(random.uniform(3, 6))
                         try:
@@ -976,6 +980,37 @@ def handle_summary_payment(page, log_fn=print):
                     break
             except:
                 continue
+        
+        # FALLBACK: Try using JavaScript to click the button
+        if not continue_clicked:
+            try:
+                js_clicked = page.evaluate('''
+                    () => {
+                        const buttons = document.querySelectorAll('button, a, [role="button"]');
+                        const keywords = ['متابعة الدفع', 'استمرار', 'متابعة', 'continue', 'proceed'];
+                        for (const btn of buttons) {
+                            const text = (btn.innerText || '').trim().toLowerCase();
+                            if (text.includes('إلغاء') || text.includes('cancel') || text.includes('رجوع')) continue;
+                            for (const kw of keywords) {
+                                if (text.includes(kw)) {
+                                    btn.click();
+                                    return text.substring(0, 30);
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                ''')
+                if js_clicked:
+                    log_fn(f"🔘 JS clicked continue: '{js_clicked}'")
+                    continue_clicked = True
+                    time.sleep(random.uniform(3, 6))
+                    try:
+                        page.wait_for_load_state('networkidle', timeout=20000)
+                    except:
+                        pass
+            except Exception as e:
+                log_fn(f"⚠️ JS continue click failed: {str(e)[:50]}")
         
         if continue_clicked:
             log_fn(f"✅ Continue clicked! New URL: {page.url}")
