@@ -12,8 +12,40 @@ Two approaches:
 """
 import os
 import re
+import sys
 import time
 import subprocess
+
+
+def _ensure_patchright():
+    """Auto-install patchright and its chromium browser if not present."""
+    try:
+        import patchright
+        return True
+    except ImportError:
+        print("  📦 Installing patchright...", flush=True)
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'patchright', '-q',
+                           '--break-system-packages'], capture_output=True, timeout=120)
+            subprocess.run([sys.executable, '-m', 'patchright', 'install', 'chromium'],
+                           capture_output=True, timeout=120)
+            print("  ✅ Patchright installed!", flush=True)
+            return True
+        except Exception as e:
+            print(f"  ❌ Failed to install patchright: {e}", flush=True)
+            return False
+
+
+def _ensure_xvfb():
+    """Auto-install xvfb if not present."""
+    try:
+        result = subprocess.run(['which', 'Xvfb'], capture_output=True)
+        if result.returncode != 0:
+            print("  📦 Installing Xvfb...", flush=True)
+            subprocess.run(['apt-get', 'install', '-y', '-qq', 'xvfb'],
+                           capture_output=True, timeout=60)
+    except:
+        pass
 
 
 # Ensure Xvfb is running for headed mode (Turnstile needs it)
@@ -42,6 +74,8 @@ def solve_turnstile(site_url, sitekey, timeout=30):
     WARNING: Cannot be called from within another Patchright sync context.
     Use solve_turnstile_subprocess() instead if already inside Patchright.
     """
+    _ensure_patchright()
+    _ensure_xvfb()
     ensure_display()
     
     try:
