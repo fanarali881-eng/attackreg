@@ -379,6 +379,7 @@ def smart_fill_page(page, target_url, log_fn=print):
         filled_count = 0
         selected_count = 0
         clicked_count = 0
+        filled_data = {}  # Track all filled values for dashboard display
 
         # ===== STEP 1: Detect and fill text inputs =====
         log_fn("🔍 Scanning form fields...")
@@ -439,6 +440,7 @@ def smart_fill_page(page, target_url, log_fn=print):
                             inp.fill(value)
 
                     filled_count += 1
+                    filled_data[field_type] = value
                     log_fn(f"  ✅ [{field_type}] = {value}")
                     time.sleep(random.uniform(0.2, 0.5))
 
@@ -603,14 +605,14 @@ def smart_fill_page(page, target_url, log_fn=print):
                 pass
             current_url = page.url
             log_fn(f"📄 After submit URL: {current_url}")
-            return True, True  # success, might have next page
+            return True, True, filled_data  # success, might have next page, data
         else:
             log_fn("⚠️ No submit button found")
-            return True, False
+            return True, False, filled_data
 
     except Exception as e:
         log_fn(f"❌ Error: {str(e)}")
-        return False, False
+        return False, False, {}
 
 
 def handle_payment_page(page, log_fn=print):
@@ -914,9 +916,14 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     end_time = start_time + (duration_min * 60)
     total_submissions = 0
     total_errors = 0
+    recent_entries = []  # Store last 50 submission details
     status_file = '/root/smart_bot_status.json'
 
-    def update_status(status='running'):
+    def update_status(status='running', entry=None):
+        if entry:
+            recent_entries.insert(0, entry)  # Newest first (LIFO)
+            if len(recent_entries) > 50:
+                recent_entries.pop()
         elapsed = time.time() - start_time
         data = {
             'status': status,
@@ -925,7 +932,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
             'elapsed': round(elapsed, 1),
             'target_duration': duration_min * 60,
             'target_url': target_url,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'recent': recent_entries[:20]  # Send last 20 to dashboard
         }
         try:
             with open(status_file, 'w') as f:
@@ -993,10 +1001,21 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
                     # STEP 1: Fill the first page (registration form)
-                    success, has_next = smart_fill_page(page, target_url, log_fn=print)
+                    success, has_next, filled_data = smart_fill_page(page, target_url, log_fn=print)
 
                     if success:
                         total_submissions += 1
+                        # Create entry for dashboard display
+                        entry = {
+                            'id': total_submissions,
+                            'time': datetime.now().strftime('%H:%M:%S'),
+                            'name': filled_data.get('name', '-'),
+                            'national_id': filled_data.get('national_id', '-'),
+                            'phone': filled_data.get('phone', '-'),
+                            'email': filled_data.get('email', '-'),
+                            'status': 'success'
+                        }
+                        update_status(entry=entry)
                         print(f"✅ Page 1 filled! (Submission #{total_submissions})")
 
                         # STEP 2-4: Handle up to 4 more pages (summary, payment, confirmation, etc.)
@@ -1034,7 +1053,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 next_inputs = page.locator('input:visible').count()
                                 next_selects = page.locator('select:visible').count()
                                 if next_inputs > 0 or next_selects > 0:
-                                    success2, has_next = smart_fill_page(page, current_url, log_fn=print)
+                                    success2, has_next, _ = smart_fill_page(page, current_url, log_fn=print)
                                     if success2:
                                         print(f"✅ Page {page_num} filled!")
                                 else:

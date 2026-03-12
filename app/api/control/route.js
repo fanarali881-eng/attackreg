@@ -244,6 +244,7 @@ export async function POST(req) {
           errors: status.errors || 0,
           elapsed: status.elapsed || 0,
           target_url: status.target_url || '',
+          recent: status.recent || [],
           error: r.error
         };
       });

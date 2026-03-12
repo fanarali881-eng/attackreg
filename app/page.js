@@ -93,6 +93,7 @@ export default function Home() {
   const [sesDuration, setSesDuration] = useState('5');
   const [sesPhase, setSesPhase] = useState('idle'); // idle, deploying, running, finished
   const [sesStatus, setSesStatus] = useState([]);
+  const [sesRecent, setSesRecent] = useState([]);
   const [sesMonitoring, setSesMonitoring] = useState(false);
   const sesIntervalRef = useRef(null);
   const sesCountdownRef = useRef(null);
@@ -256,6 +257,28 @@ export default function Home() {
       const data = await res.json();
       if (data.results) {
         setSesStatus(data.results);
+        // Collect all recent entries from all servers
+        const allRecent = [];
+        data.results.forEach(sv => {
+          if (sv.recent && sv.recent.length > 0) {
+            sv.recent.forEach(entry => {
+              allRecent.push({ ...entry, server: sv.host });
+            });
+          }
+        });
+        // Sort by id descending and keep latest 30
+        allRecent.sort((a, b) => (b.id || 0) - (a.id || 0));
+        if (allRecent.length > 0) setSesRecent(allRecent.slice(0, 30));
+        
+        // Log new entries
+        const prevCount = sesRecent.length;
+        if (allRecent.length > prevCount && prevCount > 0) {
+          const newEntries = allRecent.slice(0, allRecent.length - prevCount);
+          newEntries.forEach(e => {
+            addLog(`📋 تسجيل #${e.id} | ${e.name} | ${e.national_id} | ${e.phone} | ${e.server}`);
+          });
+        }
+        
         const running = data.results.filter(s => s.status === 'running');
         const stopped = data.results.filter(s => s.status === 'stopped');
         if (running.length > 0) setSesPhase('running');
@@ -264,7 +287,7 @@ export default function Home() {
           stopSesMonitoring();
           const totalBookings = data.results.reduce((sum, s) => sum + (s.bookings || 0), 0);
           const totalErrors = data.results.reduce((sum, s) => sum + (s.errors || 0), 0);
-          addLog(`✅ انتهى حجز سلامة | ${totalBookings} حجز ناجح | ${totalErrors} خطأ`);
+          addLog(`✅ انتهى البوت الذكي | ${totalBookings} تسجيل ناجح | ${totalErrors} خطأ`);
         }
       }
     } catch (err) {}
@@ -915,6 +938,41 @@ export default function Home() {
                     </div>
                   </div>
                 ))}
+
+                {/* Recent Entries Table */}
+                {sesRecent.length > 0 && (
+                  <div style={{ marginTop:'12px', border:'1px solid #f97316', borderRadius:'8px', overflow:'hidden' }}>
+                    <div style={{ padding:'10px 14px', backgroundColor:'#431407', borderBottom:'1px solid #f97316' }}>
+                      <span style={{ fontSize:'14px', color:'#fb923c', fontWeight:'bold' }}>📋 آخر التسجيلات ({sesRecent.length})</span>
+                    </div>
+                    <div style={{ maxHeight:'300px', overflowY:'auto' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px', fontFamily:ff }}>
+                        <thead>
+                          <tr style={{ backgroundColor:'#1a0a00' }}>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>#</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الوقت</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الاسم</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الهوية</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الجوال</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>السيرفر</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sesRecent.map((entry, idx) => (
+                            <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#0a0500' : '#1a0a00', borderBottom:'1px solid #1f1005' }}>
+                              <td style={{ padding:'6px', color:'#22c55e', textAlign:'right' }}>{entry.id}</td>
+                              <td style={{ padding:'6px', color:'#9ca3af', textAlign:'right' }}>{entry.time}</td>
+                              <td style={{ padding:'6px', color:'#fff', textAlign:'right', fontWeight:'bold' }}>{entry.name}</td>
+                              <td style={{ padding:'6px', color:'#06b6d4', textAlign:'right', direction:'ltr' }}>{entry.national_id}</td>
+                              <td style={{ padding:'6px', color:'#facc15', textAlign:'right', direction:'ltr' }}>{entry.phone}</td>
+                              <td style={{ padding:'6px', color:'#6b7280', textAlign:'right', fontSize:'10px' }}>{entry.server?.split('.').pop()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
