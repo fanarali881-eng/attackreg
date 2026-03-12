@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Smart Universal Form Bot - Detects and fills ANY booking/registration form
+Smart Universal Form Bot v22 - Detects and fills ANY booking/registration form
 Uses Playwright (real Chrome browser) + intelligent form detection
 Generates random Saudi data for all field types
+FIXES: Better page navigation, smarter payment detection, proxy retry logic
 """
 
 import random
@@ -100,7 +101,6 @@ def gen_email(name=None):
     domains = ['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com']
     if name:
         clean = name.replace(' ', '').lower()
-        # transliterate basic arabic
         clean = re.sub(r'[^\x00-\x7F]+', '', clean) or 'user'
     else:
         clean = 'user'
@@ -136,43 +136,26 @@ def gen_postal_code():
 
 # Real Saudi bank BIN numbers (first 6 digits) mapped to bank names
 SAUDI_BANK_BINS = {
-    # Al Rajhi Bank (مصرف الراجحي)
     'Al Rajhi': ['554575', '968205', '458838', '458837', '468564', '468565'],
-    # National Commercial Bank / Al Ahli (البنك الأهلي)
     'Al Ahli (NCB)': ['554180', '556676', '556675', '588850', '968202', '417633', '417634'],
-    # Riyad Bank (بنك الرياض)
     'Riyad Bank': ['559322', '558563', '968209', '454313', '454314', '489318'],
-    # Saudi British Bank SABB (البنك السعودي البريطاني)
     'SABB': ['422818', '422819', '605141', '968204', '431361'],
-    # Banque Saudi Fransi (البنك السعودي الفرنسي)
     'Saudi Fransi': ['440795', '552360', '588845', '968208', '440647'],
-    # Arab National Bank (البنك العربي الوطني)
     'Arab National Bank': ['455036', '455037', '549400', '588848', '968203'],
-    # Alinma Bank (مصرف الإنماء)
     'Alinma Bank': ['552363', '968206', '426897', '485457'],
-    # Bank Al-Jazira (بنك الجزيرة)
     'Bank Al-Jazira': ['445564', '968211', '409201'],
-    # Saudi Investment Bank (البنك السعودي للاستثمار)
     'Saudi Investment Bank': ['552384', '589206', '968207'],
-    # Samba Financial Group (مجموعة سامبا)
     'Samba': ['552250', '552089', '446392', '446672'],
-    # Al Bilad Bank (بنك البلاد)
     'Al Bilad Bank': ['636120', '968201', '468540'],
-    # Alawwal Bank (البنك الأول)
     'Alawwal Bank': ['552438', '552375', '558854', '558848', '557606', '548979', '512060'],
 }
 
 def gen_card_number():
     """Generate a fake card number using real Saudi bank BINs + Luhn algorithm"""
-    # Pick a random Saudi bank
     bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
     bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
-    
-    # Generate remaining digits (total 16 digits, BIN is 6)
-    remaining_length = 15 - len(bin_prefix)  # 15 digits + 1 check digit = 16
+    remaining_length = 15 - len(bin_prefix)
     digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
-    
-    # Calculate Luhn check digit
     total = 0
     for i, d in enumerate(digits):
         if i % 2 == 0:
@@ -185,13 +168,10 @@ def gen_card_number():
     return ''.join(str(d) for d in digits)
 
 def gen_card_number_with_bank():
-    """Generate a fake card number and return both the number and bank name"""
     bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
     bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
-    
     remaining_length = 15 - len(bin_prefix)
     digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
-    
     total = 0
     for i, d in enumerate(digits):
         if i % 2 == 0:
@@ -204,7 +184,6 @@ def gen_card_number_with_bank():
     return ''.join(str(d) for d in digits), bank_name
 
 def gen_card_expiry():
-    """Generate a future expiry date MM/YY"""
     month = random.randint(1, 12)
     year = random.randint(27, 30)
     return f"{month:02d}/{year}"
@@ -229,7 +208,6 @@ def gen_number_string(length=4):
 
 # ============ SMART FIELD DETECTION ============
 
-# Keywords that help identify what type of data a field expects
 FIELD_PATTERNS = {
     'name': {
         'keywords': ['اسم', 'الاسم', 'name', 'الإسم', 'اسمك', 'الاسم الكامل', 'full name', 'your name', 'اسم المستخدم'],
@@ -264,7 +242,7 @@ FIELD_PATTERNS = {
         'generator': gen_date_birth
     },
     'city': {
-        'keywords': ['مدينة', 'المدينة', 'city', 'البلد', 'المنطقة'],
+        'keywords': ['مدينة', 'المدينة', 'city', 'town'],
         'generator': gen_city
     },
     'address': {
@@ -280,7 +258,7 @@ FIELD_PATTERNS = {
         'generator': gen_plate_number
     },
     'card_number': {
-        'keywords': ['رقم البطاقة', 'card number', 'رقم الكرت', 'card no', 'بطاقة', 'credit card', 'debit card', 'visa', 'mada', 'ماستركارد', 'فيزا', 'مدى', 'pan'],
+        'keywords': ['رقم البطاقة', 'card number', 'رقم الكرت', 'card no', 'credit card', 'debit card', 'visa', 'mada', 'ماستركارد', 'فيزا', 'مدى', 'pan'],
         'generator': gen_card_number
     },
     'card_expiry': {
@@ -308,7 +286,6 @@ FIELD_PATTERNS = {
 
 def detect_field_type(element_info):
     """Detect what type of data a form field expects based on its attributes"""
-    # Combine all text clues: placeholder, label, name, id, aria-label
     clues = ' '.join([
         element_info.get('placeholder', ''),
         element_info.get('label', ''),
@@ -318,7 +295,6 @@ def detect_field_type(element_info):
         element_info.get('nearby_text', ''),
     ]).lower()
 
-    # Check input type first
     input_type = element_info.get('type', 'text').lower()
     if input_type == 'email':
         return 'email'
@@ -327,20 +303,18 @@ def detect_field_type(element_info):
     if input_type == 'date':
         return 'date'
     if input_type == 'number':
-        # Could be phone, ID, plate number, etc.
         for field_type, patterns in FIELD_PATTERNS.items():
             for kw in patterns['keywords']:
                 if kw in clues:
                     return field_type
         return 'generic_number'
 
-    # Match against keyword patterns
     best_match = None
     best_score = 0
     for field_type, patterns in FIELD_PATTERNS.items():
         for kw in patterns['keywords']:
             if kw in clues:
-                score = len(kw)  # Longer match = more specific
+                score = len(kw)
                 if score > best_score:
                     best_score = score
                     best_match = field_type
@@ -355,441 +329,523 @@ def generate_value_for_field(field_type):
     elif field_type == 'generic_number':
         return gen_number_string(random.randint(4, 8))
     elif field_type == 'generic_text':
-        # Random Arabic text
         return random.choice([gen_name(), gen_city(), gen_address()])
     return ''
 
 
-# ============ PLAYWRIGHT SMART FORM FILLER ============
+# ============ SMART PAGE ANALYSIS ============
 
-def smart_fill_page(page, target_url, log_fn=print):
+def analyze_page_content(page, log_fn=print):
     """
-    Smart form filler - detects all form fields on any page and fills them
-    with appropriate random Saudi data
+    Analyze the current page to determine what type it is:
+    - 'form': Has form fields to fill
+    - 'payment': Has payment-specific fields (card number inputs, payment iframes)
+    - 'summary': Has summary/confirmation content with action buttons
+    - 'success': Booking confirmed / success page
+    - 'error': Error page or geo-blocked
+    - 'unknown': Can't determine
     """
     try:
-        log_fn(f"🌐 Opening {target_url}...")
-        page.goto(target_url, wait_until='networkidle', timeout=45000)
-        time.sleep(random.uniform(2, 4))
-
-        # Simulate human behavior - scroll down slowly
-        page.mouse.move(random.randint(100, 500), random.randint(100, 300))
-        time.sleep(random.uniform(0.5, 1))
-
-        filled_count = 0
-        selected_count = 0
-        clicked_count = 0
-        filled_data = {}  # Track all filled values for dashboard display
-
-        # ===== STEP 1: Detect and fill text inputs =====
-        log_fn("🔍 Scanning form fields...")
-
-        inputs = page.locator('input:visible').all()
-        for inp in inputs:
+        page_text = page.inner_text('body').lower()
+    except:
+        return 'unknown', {}
+    
+    info = {
+        'visible_inputs': 0,
+        'visible_selects': 0,
+        'has_card_fields': False,
+        'has_payment_iframe': False,
+        'has_form_fields': False,
+        'page_text_snippet': page_text[:500],
+    }
+    
+    # Count visible form elements
+    try:
+        info['visible_inputs'] = page.locator('input:visible').count()
+        info['visible_selects'] = page.locator('select:visible').count()
+    except:
+        pass
+    
+    # Check for geo-blocking
+    geo_block_keywords = ['غير متاح', 'not available', 'غير متاحة', 'blocked', 'restricted']
+    if any(kw in page_text for kw in geo_block_keywords):
+        log_fn("🚫 Page appears geo-blocked!")
+        return 'error', info
+    
+    # Check for success/confirmation
+    success_keywords = ['تم الحجز', 'تم بنجاح', 'successfully', 'booking confirmed', 'تأكيد الحجز',
+                       'شكراً', 'thank you', 'تم التسجيل', 'registration complete', 'رقم الحجز',
+                       'booking number', 'reference number', 'رقم المرجع']
+    if any(kw in page_text for kw in success_keywords):
+        log_fn("🎉 Success/confirmation page detected!")
+        return 'success', info
+    
+    # Check for ACTUAL payment fields (not just payment-related words in footer)
+    # Look for card number input fields specifically
+    try:
+        card_input_clues = ['card', 'cardnumber', 'cc-number', 'pan', 'رقم البطاقة', 'رقم الكرت']
+        all_inputs = page.locator('input:visible').all()
+        for inp in all_inputs:
             try:
-                input_type = (inp.get_attribute('type') or 'text').lower()
-                if input_type in ['hidden', 'submit', 'button', 'image', 'file', 'checkbox', 'radio']:
-                    continue
-
-                # Gather clues about this field
-                element_info = {
-                    'type': input_type,
-                    'placeholder': inp.get_attribute('placeholder') or '',
-                    'name': inp.get_attribute('name') or '',
-                    'id': inp.get_attribute('id') or '',
-                    'aria_label': inp.get_attribute('aria-label') or '',
-                    'nearby_text': '',
-                }
-
-                # Try to find associated label
-                field_id = inp.get_attribute('id')
-                if field_id:
-                    try:
-                        label = page.locator(f'label[for="{field_id}"]')
-                        if label.count() > 0:
-                            element_info['label'] = label.first.inner_text()
-                    except:
-                        pass
-
-                # Try to get nearby text (parent or sibling)
-                try:
-                    parent_text = inp.evaluate('el => el.parentElement ? el.parentElement.innerText : ""')
-                    element_info['nearby_text'] = parent_text[:200] if parent_text else ''
-                except:
-                    pass
-
-                # Detect field type
-                field_type = detect_field_type(element_info)
-                value = generate_value_for_field(field_type)
-
-                if value:
-                    # Human-like typing
-                    inp.click()
-                    time.sleep(random.uniform(0.2, 0.5))
-                    inp.fill('')
-                    time.sleep(random.uniform(0.1, 0.3))
-
-                    if input_type == 'date':
-                        inp.fill(value)
-                    else:
-                        # Type character by character for more human-like behavior
-                        if len(value) <= 20:
-                            for char in value:
-                                inp.type(char, delay=random.randint(30, 100))
-                        else:
-                            inp.fill(value)
-
-                    filled_count += 1
-                    filled_data[field_type] = value
-                    log_fn(f"  ✅ [{field_type}] = {value}")
-                    time.sleep(random.uniform(0.2, 0.5))
-
-            except Exception as e:
-                log_fn(f"  ⚠️ Skip input: {str(e)[:50]}")
-                continue
-
-        # ===== STEP 2: Handle textareas =====
-        textareas = page.locator('textarea:visible').all()
-        for ta in textareas:
-            try:
-                ta.click()
-                time.sleep(random.uniform(0.2, 0.5))
-                text = random.choice([
-                    'أرغب في حجز موعد',
-                    'طلب حجز موعد جديد',
-                    'حجز موعد فحص',
-                    gen_address(),
-                ])
-                ta.fill(text)
-                filled_count += 1
-                log_fn(f"  ✅ [textarea] = {text[:30]}...")
-            except:
-                continue
-
-        # ===== STEP 3: Handle select dropdowns (SMART) =====
-        # Process selects multiple times because some depend on previous selections
-        for select_pass in range(3):
-            selects = page.locator('select:visible').all()
-            for sel in selects:
-                try:
-                    # Get select attributes for smart detection
-                    sel_name = (sel.get_attribute('name') or '').lower()
-                    sel_id = (sel.get_attribute('id') or '').lower()
-                    sel_label = ''
-                    try:
-                        sid = sel.get_attribute('id')
-                        if sid:
-                            lbl = page.locator(f'label[for="{sid}"]')
-                            if lbl.count() > 0:
-                                sel_label = lbl.first.inner_text().lower()
-                    except:
-                        pass
-                    try:
-                        parent_text = sel.evaluate('el => el.parentElement ? el.parentElement.innerText : ""')
-                        sel_nearby = (parent_text or '').lower()[:200]
-                    except:
-                        sel_nearby = ''
-                    
-                    sel_clues = f"{sel_name} {sel_id} {sel_label} {sel_nearby}"
-                    
-                    options = sel.locator('option').all()
-                    if len(options) <= 1:
-                        continue
-                    
-                    # Check if already selected (not on placeholder)
-                    try:
-                        current_val = sel.input_value()
-                        if current_val and current_val != '' and select_pass > 0:
-                            continue  # Already filled in previous pass
-                    except:
-                        pass
-                    
-                    # Skip first option if it's a placeholder
-                    start_idx = 0
-                    try:
-                        first_text = options[0].inner_text().strip()
-                        if any(kw in first_text.lower() for kw in ['اختر', 'اختار', 'select', '--', '- -', 'choose', 'الكل', 'حدد']):
-                            start_idx = 1
-                    except:
-                        start_idx = 1
-                    
-                    if start_idx >= len(options):
-                        continue
-                    
-                    # SMART SELECTION: detect what the dropdown is for
-                    chosen_idx = None
-                    
-                    # Nationality dropdown - ALWAYS choose Saudi
-                    is_nationality = any(kw in sel_clues for kw in ['جنسية', 'nationality', 'الجنسية', 'بلد', 'country', 'دولة'])
-                    if is_nationality:
-                        for i in range(start_idx, len(options)):
-                            try:
-                                opt_text = options[i].inner_text().strip()
-                                if any(kw in opt_text for kw in ['السعودية', 'سعودي', 'Saudi', 'saudi', 'المملكة']):
-                                    chosen_idx = i
-                                    break
-                            except:
-                                continue
-                    
-                    # Vehicle status - choose "has license"
-                    is_vehicle_status = any(kw in sel_clues for kw in ['حالة المركبة', 'vehicle status', 'رخصة سير'])
-                    if is_vehicle_status:
-                        for i in range(start_idx, len(options)):
-                            try:
-                                opt_text = options[i].inner_text().strip()
-                                if 'رخصة' in opt_text or 'تحمل' in opt_text:
-                                    chosen_idx = i
-                                    break
-                            except:
-                                continue
-                    
-                    # If no smart match, pick random from ALL valid options
-                    if chosen_idx is None:
-                        chosen_idx = random.randint(start_idx, len(options) - 1)
-                    
-                    sel.select_option(index=chosen_idx)
-                    selected_count += 1
-                    try:
-                        selected_text = options[chosen_idx].inner_text().strip()
-                        log_fn(f"  ✅ [select] = {selected_text[:30]}")
-                        filled_data[f'select_{sel_name or sel_id or str(selected_count)}'] = selected_text
-                    except:
-                        log_fn(f"  ✅ [select] index={chosen_idx}")
-                    time.sleep(random.uniform(0.5, 1.5))
-                    
-                except Exception as e:
-                    log_fn(f"  ⚠️ Skip select: {str(e)[:50]}")
-                    continue
-            
-            # Wait for dependent dropdowns to load after each pass
-            if select_pass < 2:
-                time.sleep(random.uniform(1, 2))
-
-        # ===== STEP 4: Handle radio buttons =====
-        radio_groups = {}
-        radios = page.locator('input[type="radio"]:visible').all()
-        for radio in radios:
-            try:
-                name = radio.get_attribute('name') or 'unnamed'
-                if name not in radio_groups:
-                    radio_groups[name] = []
-                radio_groups[name].append(radio)
-            except:
-                continue
-
-        for name, group in radio_groups.items():
-            try:
-                choice = random.choice(group)
-                choice.click()
-                clicked_count += 1
-                log_fn(f"  ✅ [radio:{name}] clicked")
-                time.sleep(random.uniform(0.3, 0.7))
-            except:
-                continue
-
-        # ===== STEP 5: Handle checkboxes (check them) =====
-        checkboxes = page.locator('input[type="checkbox"]:visible').all()
-        for cb in checkboxes:
-            try:
-                if not cb.is_checked():
-                    cb.click()
-                    clicked_count += 1
-                    log_fn(f"  ✅ [checkbox] checked")
-                    time.sleep(random.uniform(0.2, 0.5))
-            except:
-                continue
-
-        # ===== STEP 5.5: Handle selection/toggle buttons (not submit) =====
-        # Some forms use buttons as selection options (e.g., "تحمل رخصة سير" / "تحمل بطاقة جمركية")
-        selection_keywords = [
-            'تحمل رخصة سير', 'تحمل بطاقة جمركية', 'رخصة سير', 'بطاقة جمركية',
-            'نعم', 'لا', 'ذكر', 'أنثى', 'فرد', 'شركة', 'مؤسسة',
-            'شخصي', 'تجاري', 'حكومي', 'عسكري',
-        ]
-        
-        # Skip keywords that are submit buttons
-        skip_keywords = ['التالي', 'تالي', 'إرسال', 'ارسال', 'حجز', 'تأكيد', 'submit', 'next', 'إتمام', 'تسجيل']
-        
-        all_buttons = page.locator('button:visible, [role="button"]:visible, .btn:visible, [class*="option"]:visible, [class*="select"]:visible, [class*="choice"]:visible, [class*="toggle"]:visible').all()
-        for btn in all_buttons:
-            try:
-                btn_text = btn.inner_text().strip()
-                if not btn_text:
-                    continue
-                # Skip submit/next buttons
-                if any(sk in btn_text.lower() for sk in skip_keywords):
-                    continue
-                for kw in selection_keywords:
-                    if kw in btn_text:
-                        # Prefer "تحمل رخصة سير" as it's the most common option
-                        if 'رخصة سير' in btn_text or 'نعم' in btn_text or 'ذكر' in btn_text or 'فرد' in btn_text or 'شخصي' in btn_text:
-                            btn.click()
-                            clicked_count += 1
-                            log_fn(f"  ✅ [selection_btn] = {btn_text}")
-                            time.sleep(random.uniform(0.5, 1))
-                            break
-            except:
-                continue
-        
-        # Also try clicking any div/span that looks like a selection option
-        try:
-            option_elements = page.locator('[class*="card"]:visible, [class*="option"]:visible, [class*="item"]:visible').all()
-            for el in option_elements:
-                try:
-                    el_text = el.inner_text().strip()
-                    if 'رخصة سير' in el_text:
-                        el.click()
-                        clicked_count += 1
-                        log_fn(f"  ✅ [selection_card] = {el_text[:40]}")
-                        time.sleep(random.uniform(0.5, 1))
-                        break
-                except:
-                    continue
-        except:
-            pass
-
-        log_fn(f"📊 Filled: {filled_count} inputs | {selected_count} selects | {clicked_count} clicks")
-
-        # ===== STEP 6: Find and click submit/next button =====
-        time.sleep(random.uniform(1, 2))
-
-        submit_keywords = [
-            'التالي', 'تالي', 'إرسال', 'ارسال', 'حجز', 'تأكيد', 'تسجيل', 'إتمام', 'اتمام',
-            'submit', 'next', 'book', 'confirm', 'register', 'send', 'continue',
-            'حفظ', 'save', 'تقديم', 'موافق', 'ok', 'proceed', 'احجز', 'سجل',
-            'ابدأ', 'بدء', 'start', 'go', 'متابعة'
-        ]
-
-        submitted = False
-
-        # Try buttons first
-        buttons = page.locator('button:visible').all()
-        for btn in buttons:
-            try:
-                btn_text = btn.inner_text().strip().lower()
-                btn_type = (btn.get_attribute('type') or '').lower()
-
-                # Skip if it's clearly not a submit button
-                if any(skip in btn_text for skip in ['إلغاء', 'cancel', 'رجوع', 'back', 'مسح', 'clear']):
-                    continue
-
-                for kw in submit_keywords:
-                    if kw in btn_text or btn_type == 'submit':
-                        log_fn(f"🖱️ Clicking button: '{btn_text[:30]}'")
-                        btn.click()
-                        submitted = True
-                        break
-                if submitted:
+                inp_clues = ' '.join([
+                    (inp.get_attribute('placeholder') or ''),
+                    (inp.get_attribute('name') or ''),
+                    (inp.get_attribute('id') or ''),
+                    (inp.get_attribute('autocomplete') or ''),
+                    (inp.get_attribute('aria-label') or ''),
+                ]).lower()
+                if any(kw in inp_clues for kw in card_input_clues):
+                    info['has_card_fields'] = True
                     break
             except:
                 continue
-
-        # If no button found, try input[type=submit]
-        if not submitted:
+    except:
+        pass
+    
+    # Check for payment iframes (many payment gateways use iframes)
+    try:
+        frames = page.frames
+        for frame in frames:
+            if frame == page.main_frame:
+                continue
             try:
-                submit_input = page.locator('input[type="submit"]:visible').first
-                if submit_input:
-                    log_fn(f"🖱️ Clicking submit input")
-                    submit_input.click()
-                    submitted = True
-            except:
-                pass
-
-        # If still no submit, try any prominent button/link
-        if not submitted:
-            try:
-                # Try links that look like buttons
-                links = page.locator('a:visible').all()
-                for link in links:
-                    try:
-                        link_text = link.inner_text().strip().lower()
-                        for kw in submit_keywords:
-                            if kw in link_text:
-                                log_fn(f"🖱️ Clicking link: '{link_text[:30]}'")
-                                link.click()
-                                submitted = True
+                frame_url = frame.url.lower()
+                if any(kw in frame_url for kw in ['payment', 'pay', 'checkout', 'card', 'stripe', 'payfort', 'hyperpay', 'moyasar']):
+                    info['has_payment_iframe'] = True
+                    break
+                # Check if iframe has card inputs
+                frame_inputs = frame.locator('input:visible').count()
+                if frame_inputs > 0:
+                    for inp in frame.locator('input:visible').all():
+                        try:
+                            inp_clues = ' '.join([
+                                (inp.get_attribute('placeholder') or ''),
+                                (inp.get_attribute('name') or ''),
+                                (inp.get_attribute('id') or ''),
+                            ]).lower()
+                            if any(kw in inp_clues for kw in card_input_clues):
+                                info['has_payment_iframe'] = True
                                 break
-                        if submitted:
-                            break
-                    except:
+                        except:
+                            continue
+            except:
+                continue
+    except:
+        pass
+    
+    # If actual card fields found, it's a payment page
+    if info['has_card_fields'] or info['has_payment_iframe']:
+        log_fn("💳 Real payment page detected (has card input fields)")
+        return 'payment', info
+    
+    # Check for regular form fields (inputs that are NOT card-related)
+    regular_input_count = 0
+    try:
+        for inp in page.locator('input:visible').all():
+            try:
+                inp_type = (inp.get_attribute('type') or 'text').lower()
+                if inp_type not in ['hidden', 'submit', 'button', 'image', 'file']:
+                    regular_input_count += 1
+            except:
+                continue
+    except:
+        pass
+    
+    info['has_form_fields'] = regular_input_count > 0 or info['visible_selects'] > 0
+    
+    if info['has_form_fields']:
+        log_fn(f"📋 Form page detected ({regular_input_count} inputs, {info['visible_selects']} selects)")
+        return 'form', info
+    
+    # Check for summary/confirmation page with action buttons
+    summary_keywords = ['ملخص', 'summary', 'تأكيد', 'confirm', 'مراجعة', 'review',
+                       'التفاصيل', 'details', 'المبلغ', 'amount', 'الإجمالي', 'total',
+                       'المقابل المالي']
+    has_action_buttons = False
+    try:
+        buttons = page.locator('button:visible, a.btn:visible, input[type="submit"]:visible').all()
+        action_keywords = ['التالي', 'تأكيد', 'إتمام', 'دفع', 'ادفع', 'next', 'confirm', 'pay',
+                          'proceed', 'continue', 'متابعة', 'موافق', 'تأكيد الحجز', 'إتمام الحجز']
+        for btn in buttons:
+            try:
+                btn_text = btn.inner_text().strip().lower()
+                if any(kw in btn_text for kw in action_keywords):
+                    has_action_buttons = True
+                    break
+            except:
+                continue
+    except:
+        pass
+    
+    if has_action_buttons:
+        log_fn("📄 Summary/action page detected")
+        return 'summary', info
+    
+    return 'unknown', info
+
+
+# ============ PLAYWRIGHT SMART FORM FILLER ============
+
+def fill_form_on_page(page, log_fn=print):
+    """
+    Fill all form fields on the CURRENT page (without navigating to a new URL).
+    Returns: (filled_data dict, filled_count, submitted bool)
+    """
+    filled_count = 0
+    selected_count = 0
+    clicked_count = 0
+    filled_data = {}
+
+    # ===== STEP 1: Detect and fill text inputs =====
+    log_fn("🔍 Scanning form fields...")
+
+    inputs = page.locator('input:visible').all()
+    for inp in inputs:
+        try:
+            input_type = (inp.get_attribute('type') or 'text').lower()
+            if input_type in ['hidden', 'submit', 'button', 'image', 'file', 'checkbox', 'radio']:
+                continue
+
+            element_info = {
+                'type': input_type,
+                'placeholder': inp.get_attribute('placeholder') or '',
+                'name': inp.get_attribute('name') or '',
+                'id': inp.get_attribute('id') or '',
+                'aria_label': inp.get_attribute('aria-label') or '',
+                'label': '',
+                'nearby_text': '',
+            }
+
+            field_id = inp.get_attribute('id')
+            if field_id:
+                try:
+                    label = page.locator(f'label[for="{field_id}"]')
+                    if label.count() > 0:
+                        element_info['label'] = label.first.inner_text()
+                except:
+                    pass
+
+            try:
+                parent_text = inp.evaluate('el => el.parentElement ? el.parentElement.innerText : ""')
+                element_info['nearby_text'] = parent_text[:200] if parent_text else ''
+            except:
+                pass
+
+            field_type = detect_field_type(element_info)
+            value = generate_value_for_field(field_type)
+
+            if value:
+                inp.click()
+                time.sleep(random.uniform(0.2, 0.5))
+                inp.fill('')
+                time.sleep(random.uniform(0.1, 0.3))
+
+                if input_type == 'date':
+                    inp.fill(value)
+                else:
+                    if len(value) <= 20:
+                        for char in value:
+                            inp.type(char, delay=random.randint(30, 100))
+                    else:
+                        inp.fill(value)
+
+                filled_count += 1
+                filled_data[field_type] = value
+                log_fn(f"  ✅ [{field_type}] = {value}")
+                time.sleep(random.uniform(0.2, 0.5))
+
+        except Exception as e:
+            log_fn(f"  ⚠️ Skip input: {str(e)[:50]}")
+            continue
+
+    # ===== STEP 2: Handle textareas =====
+    textareas = page.locator('textarea:visible').all()
+    for ta in textareas:
+        try:
+            ta.click()
+            time.sleep(random.uniform(0.2, 0.5))
+            text = random.choice([
+                'أرغب في حجز موعد',
+                'طلب حجز موعد جديد',
+                'حجز موعد فحص',
+                gen_address(),
+            ])
+            ta.fill(text)
+            filled_count += 1
+            log_fn(f"  ✅ [textarea] = {text[:30]}...")
+        except:
+            continue
+
+    # ===== STEP 3: Handle select dropdowns (SMART - 3 passes for dependent selects) =====
+    for select_pass in range(3):
+        selects = page.locator('select:visible').all()
+        for sel in selects:
+            try:
+                sel_name = (sel.get_attribute('name') or '').lower()
+                sel_id = (sel.get_attribute('id') or '').lower()
+                sel_label = ''
+                try:
+                    sid = sel.get_attribute('id')
+                    if sid:
+                        lbl = page.locator(f'label[for="{sid}"]')
+                        if lbl.count() > 0:
+                            sel_label = lbl.first.inner_text().lower()
+                except:
+                    pass
+                try:
+                    parent_text = sel.evaluate('el => el.parentElement ? el.parentElement.innerText : ""')
+                    sel_nearby = (parent_text or '').lower()[:200]
+                except:
+                    sel_nearby = ''
+                
+                sel_clues = f"{sel_name} {sel_id} {sel_label} {sel_nearby}"
+                
+                options = sel.locator('option').all()
+                if len(options) <= 1:
+                    continue
+                
+                try:
+                    current_val = sel.input_value()
+                    if current_val and current_val != '' and select_pass > 0:
                         continue
-            except:
-                pass
+                except:
+                    pass
+                
+                start_idx = 0
+                try:
+                    first_text = options[0].inner_text().strip()
+                    if any(kw in first_text.lower() for kw in ['اختر', 'اختار', 'select', '--', '- -', 'choose', 'الكل', 'حدد']):
+                        start_idx = 1
+                except:
+                    start_idx = 1
+                
+                if start_idx >= len(options):
+                    continue
+                
+                chosen_idx = None
+                
+                # Nationality/country dropdown - ALWAYS choose Saudi
+                is_nationality = any(kw in sel_clues for kw in ['جنسية', 'nationality', 'الجنسية', 'بلد', 'country', 'دولة'])
+                if is_nationality:
+                    for i in range(start_idx, len(options)):
+                        try:
+                            opt_text = options[i].inner_text().strip()
+                            if any(kw in opt_text for kw in ['السعودية', 'سعودي', 'Saudi', 'saudi', 'المملكة']):
+                                chosen_idx = i
+                                break
+                        except:
+                            continue
+                
+                # Vehicle status
+                is_vehicle_status = any(kw in sel_clues for kw in ['حالة المركبة', 'vehicle status', 'رخصة سير'])
+                if is_vehicle_status:
+                    for i in range(start_idx, len(options)):
+                        try:
+                            opt_text = options[i].inner_text().strip()
+                            if 'رخصة' in opt_text or 'تحمل' in opt_text:
+                                chosen_idx = i
+                                break
+                        except:
+                            continue
+                
+                if chosen_idx is None:
+                    chosen_idx = random.randint(start_idx, len(options) - 1)
+                
+                sel.select_option(index=chosen_idx)
+                selected_count += 1
+                try:
+                    selected_text = options[chosen_idx].inner_text().strip()
+                    log_fn(f"  ✅ [select] = {selected_text[:30]}")
+                    filled_data[f'select_{sel_name or sel_id or str(selected_count)}'] = selected_text
+                except:
+                    log_fn(f"  ✅ [select] index={chosen_idx}")
+                time.sleep(random.uniform(0.5, 1.5))
+                
+            except Exception as e:
+                log_fn(f"  ⚠️ Skip select: {str(e)[:50]}")
+                continue
+        
+        if select_pass < 2:
+            time.sleep(random.uniform(1, 2))
 
-        if submitted:
-            time.sleep(random.uniform(3, 5))
-            try:
-                page.wait_for_load_state('networkidle', timeout=15000)
-            except:
-                pass
-            current_url = page.url
-            log_fn(f"📄 After submit URL: {current_url}")
-            
-            # Check for validation errors on the page
-            try:
-                error_selectors = [
-                    '.error', '.error-message', '.alert-danger', '.invalid-feedback',
-                    '.field-error', '.form-error', '[class*="error"]', '[class*="invalid"]',
-                    '.text-danger', '.text-red', '.validation-error'
-                ]
-                errors_found = []
-                for selector in error_selectors:
-                    try:
-                        error_els = page.locator(selector + ':visible').all()
-                        for el in error_els:
-                            try:
-                                err_text = el.inner_text().strip()
-                                if err_text and len(err_text) > 2:
-                                    errors_found.append(err_text[:100])
-                            except:
-                                pass
-                    except:
-                        pass
-                if errors_found:
-                    log_fn(f"⚠️ Validation errors found: {'; '.join(errors_found[:5])}")
-                    filled_data['validation_errors'] = errors_found[:5]
-            except:
-                pass
-            
-            return True, True, filled_data  # success, might have next page, data
-        else:
-            log_fn("⚠️ No submit button found")
-            return True, False, filled_data
+    # ===== STEP 4: Handle radio buttons =====
+    radio_groups = {}
+    radios = page.locator('input[type="radio"]:visible').all()
+    for radio in radios:
+        try:
+            name = radio.get_attribute('name') or 'unnamed'
+            if name not in radio_groups:
+                radio_groups[name] = []
+            radio_groups[name].append(radio)
+        except:
+            continue
 
-    except Exception as e:
-        log_fn(f"❌ Error: {str(e)}")
-        return False, False, {}
+    for name, group in radio_groups.items():
+        try:
+            choice = random.choice(group)
+            choice.click()
+            clicked_count += 1
+            log_fn(f"  ✅ [radio:{name}] clicked")
+            time.sleep(random.uniform(0.3, 0.7))
+        except:
+            continue
+
+    # ===== STEP 5: Handle checkboxes =====
+    checkboxes = page.locator('input[type="checkbox"]:visible').all()
+    for cb in checkboxes:
+        try:
+            if not cb.is_checked():
+                cb.click()
+                clicked_count += 1
+                log_fn(f"  ✅ [checkbox] checked")
+                time.sleep(random.uniform(0.2, 0.5))
+        except:
+            continue
+
+    # ===== STEP 5.5: Handle selection/toggle buttons =====
+    selection_keywords = [
+        'تحمل رخصة سير', 'تحمل بطاقة جمركية', 'رخصة سير', 'بطاقة جمركية',
+        'نعم', 'لا', 'ذكر', 'أنثى', 'فرد', 'شركة', 'مؤسسة',
+        'شخصي', 'تجاري', 'حكومي', 'عسكري',
+    ]
+    
+    skip_keywords = ['التالي', 'تالي', 'إرسال', 'ارسال', 'حجز', 'تأكيد', 'submit', 'next', 'إتمام', 'تسجيل']
+    
+    all_buttons = page.locator('button:visible, [role="button"]:visible, .btn:visible, [class*="option"]:visible, [class*="select"]:visible, [class*="choice"]:visible, [class*="toggle"]:visible').all()
+    for btn in all_buttons:
+        try:
+            btn_text = btn.inner_text().strip()
+            if not btn_text:
+                continue
+            if any(sk in btn_text.lower() for sk in skip_keywords):
+                continue
+            for kw in selection_keywords:
+                if kw in btn_text:
+                    if 'رخصة سير' in btn_text or 'نعم' in btn_text or 'ذكر' in btn_text or 'فرد' in btn_text or 'شخصي' in btn_text:
+                        btn.click()
+                        clicked_count += 1
+                        log_fn(f"  ✅ [selection_btn] = {btn_text}")
+                        time.sleep(random.uniform(0.5, 1))
+                        break
+        except:
+            continue
+    
+    # Also try clicking div/span that looks like selection option
+    try:
+        option_elements = page.locator('[class*="card"]:visible, [class*="option"]:visible, [class*="item"]:visible').all()
+        for el in option_elements:
+            try:
+                el_text = el.inner_text().strip()
+                if 'رخصة سير' in el_text:
+                    el.click()
+                    clicked_count += 1
+                    log_fn(f"  ✅ [selection_card] = {el_text[:40]}")
+                    time.sleep(random.uniform(0.5, 1))
+                    break
+            except:
+                continue
+    except:
+        pass
+
+    log_fn(f"📊 Filled: {filled_count} inputs | {selected_count} selects | {clicked_count} clicks")
+    
+    return filled_data, filled_count + selected_count + clicked_count
+
+
+def click_submit_button(page, log_fn=print):
+    """Find and click the submit/next button on the current page. Returns True if clicked."""
+    time.sleep(random.uniform(1, 2))
+
+    submit_keywords = [
+        'التالي', 'تالي', 'إرسال', 'ارسال', 'حجز', 'تأكيد', 'تسجيل', 'إتمام', 'اتمام',
+        'submit', 'next', 'book', 'confirm', 'register', 'send', 'continue',
+        'حفظ', 'save', 'تقديم', 'موافق', 'ok', 'proceed', 'احجز', 'سجل',
+        'ابدأ', 'بدء', 'start', 'go', 'متابعة'
+    ]
+
+    # Try buttons first
+    buttons = page.locator('button:visible').all()
+    for btn in buttons:
+        try:
+            btn_text = btn.inner_text().strip().lower()
+            btn_type = (btn.get_attribute('type') or '').lower()
+
+            if any(skip in btn_text for skip in ['إلغاء', 'cancel', 'رجوع', 'back', 'مسح', 'clear']):
+                continue
+
+            for kw in submit_keywords:
+                if kw in btn_text or btn_type == 'submit':
+                    log_fn(f"🖱️ Clicking button: '{btn_text[:30]}'")
+                    btn.click()
+                    return True
+        except:
+            continue
+
+    # Try input[type=submit]
+    try:
+        submit_input = page.locator('input[type="submit"]:visible').first
+        if submit_input:
+            log_fn(f"🖱️ Clicking submit input")
+            submit_input.click()
+            return True
+    except:
+        pass
+
+    # Try links that look like buttons
+    try:
+        links = page.locator('a:visible').all()
+        for link in links:
+            try:
+                link_text = link.inner_text().strip().lower()
+                for kw in submit_keywords:
+                    if kw in link_text:
+                        log_fn(f"🖱️ Clicking link: '{link_text[:30]}'")
+                        link.click()
+                        return True
+            except:
+                continue
+    except:
+        pass
+
+    log_fn("⚠️ No submit button found")
+    return False
+
+
+def click_action_button(page, log_fn=print):
+    """Click action/confirm/pay button on summary pages. Returns True if clicked."""
+    action_keywords = ['التالي', 'تأكيد', 'إتمام', 'دفع', 'ادفع', 'next', 'confirm', 'pay',
+                      'proceed', 'continue', 'متابعة', 'موافق', 'تأكيد الحجز', 'إتمام الحجز',
+                      'الدفع', 'ادفع الآن', 'pay now', 'complete', 'إكمال']
+    
+    buttons = page.locator('button:visible, a:visible, input[type="submit"]:visible').all()
+    for btn in buttons:
+        try:
+            btn_text = btn.inner_text().strip().lower()
+            if any(skip in btn_text for skip in ['إلغاء', 'cancel', 'رجوع', 'back']):
+                continue
+            for kw in action_keywords:
+                if kw in btn_text:
+                    log_fn(f"🔘 Clicking action: '{btn_text[:30]}'")
+                    btn.click()
+                    return True
+        except:
+            continue
+    
+    log_fn("⚠️ No action button found on summary page")
+    return False
 
 
 def handle_payment_page(page, log_fn=print):
-    """
-    Handle payment page - detect payment method buttons (Visa/Mada/etc),
-    click one, then fill card details including inside iframes
-    """
+    """Handle payment page - click payment method, fill card details, submit."""
     try:
-        log_fn("💳 Checking for payment page...")
+        log_fn("💳 Handling payment...")
         time.sleep(random.uniform(2, 3))
-
-        page_text = page.inner_text('body').lower()
-
-        # Check if this is a payment/summary page
-        payment_keywords = ['دفع', 'payment', 'الدفع', 'ادفع', 'pay', 'checkout', 'ملخص', 'summary',
-                           'فيزا', 'visa', 'مدى', 'mada', 'ماستركارد', 'mastercard', 'بطاقة ائتمان',
-                           'credit card', 'المقابل المالي', 'المبلغ', 'amount', 'total', 'الإجمالي']
-
-        is_payment = any(kw in page_text for kw in payment_keywords)
-        if not is_payment:
-            log_fn("ℹ️ Not a payment page")
-            return False
-
-        log_fn("💳 Payment page detected!")
 
         # Try to click payment method button (Visa, Mada, etc)
         payment_method_keywords = ['visa', 'فيزا', 'mada', 'مدى', 'بطاقة ائتمان', 'credit card',
                                    'بطاقة مدى', 'mastercard', 'ماستركارد', 'ادفع', 'pay now',
                                    'الدفع بالبطاقة', 'card payment']
 
-        # Click payment method buttons
         buttons = page.locator('button:visible, a:visible, div[role="button"]:visible, input[type="radio"]:visible, label:visible').all()
         for btn in buttons:
             try:
@@ -803,7 +859,7 @@ def handle_payment_page(page, log_fn=print):
             except:
                 continue
 
-        # Also try clicking images that might be payment logos
+        # Also try clicking payment logo images
         try:
             imgs = page.locator('img:visible').all()
             for img in imgs:
@@ -817,10 +873,9 @@ def handle_payment_page(page, log_fn=print):
         except:
             pass
 
-        # Now fill card details - check main page first, then iframes
+        # Fill card details - check main page first, then iframes
         card_filled = fill_card_fields(page, log_fn)
 
-        # Check iframes for payment form (many payment gateways use iframes)
         if not card_filled:
             log_fn("🔍 Checking iframes for payment form...")
             frames = page.frames
@@ -864,7 +919,7 @@ def handle_payment_page(page, log_fn=print):
                 except:
                     continue
 
-            # Also check inside iframes for pay button
+            # Check inside iframes for pay button
             for frame in page.frames:
                 if frame == page.main_frame:
                     continue
@@ -886,6 +941,7 @@ def handle_payment_page(page, log_fn=print):
                 except:
                     continue
 
+        log_fn("⚠️ Payment handling attempted" + (" (card filled)" if card_filled else " (no card fields found)"))
         return card_filled
 
     except Exception as e:
@@ -916,7 +972,6 @@ def fill_card_fields(page, log_fn=print):
                 (inp.get_attribute('autocomplete') or ''),
             ]).lower()
 
-            # Card number
             if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'رقم البطاقة', 'رقم الكرت', 'pan', 'card_number']):
                 inp.click()
                 time.sleep(0.3)
@@ -924,14 +979,12 @@ def fill_card_fields(page, log_fn=print):
                     inp.type(ch, delay=random.randint(50, 120))
                 filled += 1
                 log_fn(f"  💳 Card number: {card_num[:4]}****{card_num[-4:]}")
-            # Expiry
             elif any(kw in clues for kw in ['expir', 'exp', 'mm/yy', 'mm/yyyy', 'انتهاء', 'صلاحية', 'cc-exp', 'valid']):
                 inp.click()
                 time.sleep(0.3)
                 inp.fill(expiry)
                 filled += 1
                 log_fn(f"  💳 Expiry: {expiry}")
-            # CVV
             elif any(kw in clues for kw in ['cvv', 'cvc', 'security', 'رمز الأمان', 'رمز التحقق', 'cc-csc', 'csv']):
                 inp.click()
                 time.sleep(0.3)
@@ -939,7 +992,6 @@ def fill_card_fields(page, log_fn=print):
                     inp.type(ch, delay=random.randint(50, 120))
                 filled += 1
                 log_fn(f"  💳 CVV: ***")
-            # Cardholder name
             elif any(kw in clues for kw in ['cardholder', 'card holder', 'name on card', 'holder', 'حامل البطاقة', 'cc-name']):
                 inp.click()
                 time.sleep(0.3)
@@ -949,7 +1001,7 @@ def fill_card_fields(page, log_fn=print):
         except:
             continue
 
-    # Also check select dropdowns for month/year
+    # Check select dropdowns for month/year
     selects = page.locator('select:visible').all()
     for sel in selects:
         try:
@@ -1057,17 +1109,19 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
             'password': proxy_pass
         }
         print(f"🌐 Using proxy: {proxy_host}:{proxy_port} ({proxy_user})")
+    else:
+        print("🌐 No proxy configured - using direct connection")
 
     start_time = time.time()
     end_time = start_time + (duration_min * 60)
     total_submissions = 0
     total_errors = 0
-    recent_entries = []  # Store last 50 submission details
+    recent_entries = []
     status_file = '/root/smart_bot_status.json'
 
     def update_status(status='running', entry=None):
         if entry:
-            recent_entries.insert(0, entry)  # Newest first (LIFO)
+            recent_entries.insert(0, entry)
             if len(recent_entries) > 50:
                 recent_entries.pop()
         elapsed = time.time() - start_time
@@ -1079,7 +1133,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
             'target_duration': duration_min * 60,
             'target_url': target_url,
             'timestamp': time.time(),
-            'recent': recent_entries[:20]  # Send last 20 to dashboard
+            'recent': recent_entries[:20]
         }
         try:
             with open(status_file, 'w') as f:
@@ -1087,7 +1141,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"🚀 Smart Bot starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"🚀 Smart Bot v22 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1129,7 +1183,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     Object.defineProperty(navigator, 'languages', { get: () => ['ar-SA', 'ar', 'en-US', 'en'] });
                     Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
                     window.chrome = { runtime: {} };
-                    // Override permissions
                     const originalQuery = window.navigator.permissions.query;
                     window.navigator.permissions.query = (parameters) => (
                         parameters.name === 'notifications' ?
@@ -1146,94 +1199,154 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     page = context.new_page()
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
-                    # STEP 1: Fill the first page (registration form)
-                    success, has_next, filled_data = smart_fill_page(page, target_url, log_fn=print)
+                    try:
+                        # STEP 1: Open the target URL
+                        print(f"🌐 Opening {target_url}...")
+                        page.goto(target_url, wait_until='networkidle', timeout=60000)
+                        time.sleep(random.uniform(2, 4))
 
-                    if success:
-                        total_submissions += 1
-                        # Create entry for dashboard display
-                        entry = {
-                            'id': total_submissions,
-                            'time': datetime.now().strftime('%H:%M:%S'),
-                            'name': filled_data.get('name', '-'),
-                            'national_id': filled_data.get('national_id', '-'),
-                            'phone': filled_data.get('phone', '-'),
-                            'email': filled_data.get('email', '-'),
-                            'status': 'success'
-                        }
-                        update_status(entry=entry)
-                        print(f"✅ Page 1 filled! (Submission #{total_submissions})")
+                        # Simulate human behavior
+                        page.mouse.move(random.randint(100, 500), random.randint(100, 300))
+                        time.sleep(random.uniform(0.5, 1))
 
-                        # STEP 2-4: Handle up to 4 more pages (summary, payment, confirmation, etc.)
-                        max_pages = 4
-                        for page_num in range(2, max_pages + 2):
-                            if not has_next or time.time() >= end_time:
+                        # STEP 2: Analyze the page
+                        page_type, page_info = analyze_page_content(page, log_fn=print)
+                        
+                        if page_type == 'error':
+                            print("🚫 Page blocked or error - skipping")
+                            total_errors += 1
+                            continue
+
+                        # STEP 3: Handle up to 5 pages (form → summary → payment → confirmation)
+                        max_pages = 5
+                        for page_num in range(1, max_pages + 1):
+                            if time.time() >= end_time:
                                 break
 
-                            time.sleep(random.uniform(2, 4))
-                            current_url = page.url
-                            print(f"\n📄 Page {page_num}: {current_url}")
+                            if page_num > 1:
+                                # Re-analyze page after navigation
+                                time.sleep(random.uniform(2, 4))
+                                page_type, page_info = analyze_page_content(page, log_fn=print)
+                                print(f"\n📄 Page {page_num}: {page.url} (type: {page_type})")
 
-                            # Check if this is a payment page
-                            try:
-                                page_text = page.inner_text('body').lower()
-                                is_payment = any(kw in page_text for kw in [
-                                    'دفع', 'payment', 'الدفع', 'pay', 'فيزا', 'visa',
-                                    'مدى', 'mada', 'credit card', 'بطاقة'
-                                ])
-                            except:
-                                is_payment = False
+                            if page_type == 'form':
+                                # Fill the form
+                                filled_data, total_filled = fill_form_on_page(page, log_fn=print)
+                                
+                                if total_filled > 0:
+                                    # Click submit/next
+                                    submitted = click_submit_button(page, log_fn=print)
+                                    
+                                    if submitted:
+                                        time.sleep(random.uniform(3, 5))
+                                        try:
+                                            page.wait_for_load_state('networkidle', timeout=15000)
+                                        except:
+                                            pass
+                                        
+                                        # Check for validation errors
+                                        try:
+                                            error_selectors = ['.error', '.error-message', '.alert-danger', '.invalid-feedback',
+                                                             '.field-error', '.form-error', '[class*="error"]', '[class*="invalid"]',
+                                                             '.text-danger', '.text-red', '.validation-error']
+                                            errors_found = []
+                                            for selector in error_selectors:
+                                                try:
+                                                    error_els = page.locator(selector + ':visible').all()
+                                                    for el in error_els:
+                                                        try:
+                                                            err_text = el.inner_text().strip()
+                                                            if err_text and len(err_text) > 2:
+                                                                errors_found.append(err_text[:100])
+                                                        except:
+                                                            pass
+                                                except:
+                                                    pass
+                                            if errors_found:
+                                                print(f"⚠️ Validation errors: {'; '.join(errors_found[:3])}")
+                                        except:
+                                            pass
+                                        
+                                        if page_num == 1:
+                                            total_submissions += 1
+                                            entry = {
+                                                'id': total_submissions,
+                                                'time': datetime.now().strftime('%H:%M:%S'),
+                                                'name': filled_data.get('name', '-'),
+                                                'national_id': filled_data.get('national_id', '-'),
+                                                'phone': filled_data.get('phone', '-'),
+                                                'email': filled_data.get('email', '-'),
+                                                'status': 'page1_done'
+                                            }
+                                            update_status(entry=entry)
+                                            print(f"✅ Page 1 filled! (Submission #{total_submissions})")
+                                        else:
+                                            print(f"✅ Page {page_num} filled!")
+                                        
+                                        # Continue to next page
+                                        continue
+                                    else:
+                                        print(f"⚠️ Could not submit page {page_num}")
+                                        break
+                                else:
+                                    print(f"⚠️ No fields filled on page {page_num}")
+                                    break
 
-                            if is_payment:
-                                print("💳 Payment page detected - handling payment...")
+                            elif page_type == 'payment':
                                 payment_success = handle_payment_page(page, log_fn=print)
                                 if payment_success:
                                     print("✅ Payment completed!")
-                                    total_submissions += 1
+                                    # Update the last entry status
+                                    if recent_entries:
+                                        recent_entries[0]['status'] = 'payment_done'
+                                        update_status()
                                 else:
-                                    print("⚠️ Payment handling attempted")
+                                    print("⚠️ Payment attempted but no card fields found")
                                 break  # Payment is usually the last step
-                            else:
-                                # Regular form page - fill it
-                                print(f"📋 Filling page {page_num}...")
-                                next_inputs = page.locator('input:visible').count()
-                                next_selects = page.locator('select:visible').count()
-                                if next_inputs > 0 or next_selects > 0:
-                                    success2, has_next, _ = smart_fill_page(page, current_url, log_fn=print)
-                                    if success2:
-                                        print(f"✅ Page {page_num} filled!")
+
+                            elif page_type == 'summary':
+                                print("📄 Summary page - clicking action button...")
+                                clicked = click_action_button(page, log_fn=print)
+                                if clicked:
+                                    time.sleep(random.uniform(3, 5))
+                                    try:
+                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                    except:
+                                        pass
+                                    print(f"✅ Summary page handled, moving to next...")
+                                    # Update status
+                                    if recent_entries:
+                                        recent_entries[0]['status'] = 'summary_done'
+                                        update_status()
+                                    continue
                                 else:
-                                    # No form fields - might be a confirmation/summary page
-                                    # Try to find and click next/confirm/pay button
-                                    print(f"ℹ️ Page {page_num} has no form fields - looking for action button...")
-                                    action_keywords = ['التالي', 'تأكيد', 'إتمام', 'دفع', 'ادفع',
-                                                      'next', 'confirm', 'pay', 'proceed', 'continue',
-                                                      'متابعة', 'موافق', 'تأكيد الحجز']
-                                    clicked = False
-                                    btns = page.locator('button:visible, a:visible').all()
-                                    for btn in btns:
-                                        try:
-                                            btn_text = btn.inner_text().strip().lower()
-                                            for kw in action_keywords:
-                                                if kw in btn_text:
-                                                    print(f"🔘 Clicking: '{btn_text[:30]}'")
-                                                    btn.click()
-                                                    time.sleep(random.uniform(3, 5))
-                                                    try:
-                                                        page.wait_for_load_state('networkidle', timeout=10000)
-                                                    except:
-                                                        pass
-                                                    clicked = True
-                                                    has_next = True
-                                                    break
-                                            if clicked:
-                                                break
-                                        except:
-                                            continue
-                                    if not clicked:
-                                        has_next = False
-                    else:
+                                    break
+
+                            elif page_type == 'success':
+                                print("🎉 Booking confirmed!")
+                                if recent_entries:
+                                    recent_entries[0]['status'] = 'confirmed'
+                                    update_status()
+                                break
+
+                            else:
+                                # Unknown page - try to find any action button
+                                print(f"❓ Unknown page type - trying to find action button...")
+                                clicked = click_action_button(page, log_fn=print)
+                                if clicked:
+                                    time.sleep(random.uniform(3, 5))
+                                    try:
+                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                    except:
+                                        pass
+                                    continue
+                                else:
+                                    print("⚠️ No action possible on this page")
+                                    break
+
+                    except Exception as e:
                         total_errors += 1
+                        print(f"❌ Instance error: {str(e)[:100]}")
 
                     update_status()
 
@@ -1249,7 +1362,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
             except Exception as e:
                 total_errors += 1
-                print(f"❌ Browser error: {str(e)}")
+                print(f"❌ Browser error: {str(e)[:100]}")
                 update_status()
                 time.sleep(3)
 
