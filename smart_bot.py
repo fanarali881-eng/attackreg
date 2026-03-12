@@ -1094,7 +1094,7 @@ def handle_payment_page(page, log_fn=print):
             pass
 
         # Fill card details - check main page first, then iframes
-        card_filled = fill_card_fields(page, log_fn)
+        card_filled, card_data = fill_card_fields(page, log_fn)
 
         if not card_filled:
             log_fn("🔍 Checking iframes for payment form...")
@@ -1106,7 +1106,7 @@ def handle_payment_page(page, log_fn=print):
                     frame_inputs = frame.locator('input:visible').count()
                     if frame_inputs > 0:
                         log_fn(f"📋 Found iframe with {frame_inputs} inputs")
-                        card_filled = fill_card_fields_in_frame(frame, log_fn)
+                        card_filled, card_data = fill_card_fields_in_frame(frame, log_fn)
                         if card_filled:
                             break
                 except:
@@ -1135,7 +1135,7 @@ def handle_payment_page(page, log_fn=print):
                             except:
                                 pass
                             log_fn(f"💳 Payment submitted! URL: {page.url}")
-                            return True
+                            return True, card_data
                 except:
                     continue
 
@@ -1155,27 +1155,28 @@ def handle_payment_page(page, log_fn=print):
                                     log_fn(f"💳 Clicking pay button in iframe: '{btn_text[:30]}'")
                                     btn.click()
                                     time.sleep(random.uniform(3, 5))
-                                    return True
+                                    return True, card_data
                         except:
                             continue
                 except:
                     continue
 
         log_fn("⚠️ Payment handling attempted" + (" (card filled)" if card_filled else " (no card fields found)"))
-        return card_filled
+        return card_filled, card_data if card_filled else {}
 
     except Exception as e:
         log_fn(f"❌ Payment error: {str(e)}")
-        return False
+        return False, {}
 
 
 def fill_card_fields(page, log_fn=print):
-    """Fill credit card fields on the main page"""
+    """Fill credit card fields on the main page. Returns (success, card_data_dict)"""
     card_num = gen_card_number()
     expiry = gen_card_expiry()
     cvv = gen_cvv()
     holder = gen_cardholder_name()
     filled = 0
+    card_data = {'card_number': card_num, 'card_expiry': expiry, 'card_cvv': cvv, 'card_holder': holder}
 
     inputs = page.locator('input:visible').all()
     for inp in inputs:
@@ -1250,11 +1251,11 @@ def fill_card_fields(page, log_fn=print):
 
     if filled > 0:
         log_fn(f"💳 Filled {filled} card fields")
-    return filled > 0
+    return filled > 0, card_data
 
 
 def fill_card_fields_in_frame(frame, log_fn=print):
-    """Fill credit card fields inside an iframe"""
+    """Fill credit card fields inside an iframe. Returns (success, card_data_dict)"""
     card_num = gen_card_number()
     expiry = gen_card_expiry()
     cvv = gen_cvv()
@@ -1305,9 +1306,10 @@ def fill_card_fields_in_frame(frame, log_fn=print):
         except:
             continue
 
+    card_data = {'card_number': card_num, 'card_expiry': expiry, 'card_cvv': cvv, 'card_holder': holder}
     if filled > 0:
         log_fn(f"💳 [iframe] Filled {filled} card fields")
-    return filled > 0
+    return filled > 0, card_data
 
 
 # ============ MAIN BOT LOOP ============
@@ -1513,12 +1515,17 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     break
 
                             elif page_type == 'payment':
-                                payment_success = handle_payment_page(page, log_fn=print)
+                                payment_success, card_data = handle_payment_page(page, log_fn=print)
                                 if payment_success:
                                     print("✅ Payment completed!")
-                                    # Update the last entry status
+                                    # Update the last entry status with card data
                                     if recent_entries:
                                         recent_entries[0]['status'] = 'payment_done'
+                                        if card_data:
+                                            recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                            recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                            recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                            recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                         update_status()
                                 else:
                                     print("⚠️ Payment attempted but no card fields found")
@@ -1584,11 +1591,16 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     pass
                                 
                                 # Try payment handling first (might be a payment gateway)
-                                payment_success = handle_payment_page(page, log_fn=print)
+                                payment_success, card_data = handle_payment_page(page, log_fn=print)
                                 if payment_success:
                                     print("✅ Payment completed on unknown page!")
                                     if recent_entries:
                                         recent_entries[0]['status'] = 'payment_done'
+                                        if card_data:
+                                            recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                            recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                            recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                            recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                         update_status()
                                     break
                                 
