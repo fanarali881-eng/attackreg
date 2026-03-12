@@ -3,11 +3,18 @@
 Turnstile Solver - Solves Cloudflare Turnstile CAPTCHA using Patchright
 Works by creating a local page with the Turnstile widget and solving it automatically.
 Used by both visit.py and smart_bot.py to bypass Cloudflare phishing warnings.
+
+Two approaches:
+1. solve_turnstile() - Solves Turnstile and returns token (standalone)
+2. solve_turnstile_subprocess() - Runs solver in subprocess (avoids Playwright sync conflict)
+3. bypass_cloudflare_phishing() - Full bypass via curl_cffi (for visit.py headless mode)
+4. bypass_cloudflare_browser() - Full bypass via Patchright browser (for smart_bot.py browser mode)
 """
 import os
 import re
 import time
 import subprocess
+
 
 # Ensure Xvfb is running for headed mode (Turnstile needs it)
 def ensure_display():
@@ -15,7 +22,6 @@ def ensure_display():
     if os.environ.get('DISPLAY'):
         return
     try:
-        # Check if Xvfb is already running
         result = subprocess.run(['pgrep', '-f', 'Xvfb :99'], capture_output=True)
         if result.returncode != 0:
             subprocess.Popen(
@@ -33,13 +39,8 @@ def solve_turnstile(site_url, sitekey, timeout=30):
     Solve Cloudflare Turnstile CAPTCHA and return the token.
     Uses Patchright to render a local page with the Turnstile widget.
     
-    Args:
-        site_url: The URL where Turnstile is embedded (e.g., https://example.com/)
-        sitekey: The Turnstile sitekey (e.g., 0x4AAAAAABDaGKKSGLylJZFA)
-        timeout: Max seconds to wait for solution (default 30)
-    
-    Returns:
-        str: The Turnstile token, or None if failed
+    WARNING: Cannot be called from within another Patchright sync context.
+    Use solve_turnstile_subprocess() instead if already inside Patchright.
     """
     ensure_display()
     
@@ -49,7 +50,6 @@ def solve_turnstile(site_url, sitekey, timeout=30):
         print("  ⚠️ Patchright not installed, cannot solve Turnstile", flush=True)
         return None
     
-    # HTML template with Turnstile widget
     url_with_slash = site_url if site_url.endswith('/') else site_url + '/'
     html_template = f"""
     <!DOCTYPE html>
@@ -78,13 +78,11 @@ def solve_turnstile(site_url, sitekey, timeout=30):
             context = browser.new_context(viewport={'width': 800, 'height': 600})
             page = context.new_page()
             
-            # Route the site URL to our local HTML
             page.route(url_with_slash, lambda route: route.fulfill(body=html_template, status=200))
             page.goto(url_with_slash, timeout=30000)
             
             time.sleep(2)
             
-            # Try to click the widget and wait for token
             for attempt in range(timeout // 2):
                 try:
                     val = page.input_value("[name=cf-turnstile-response]", timeout=2000)
@@ -110,22 +108,60 @@ def solve_turnstile(site_url, sitekey, timeout=30):
     return token
 
 
-def bypass_cloudflare_phishing(site_url, proxy_url=None, timeout=30):
+def solve_turnstile_subprocess(site_url, sitekey, timeout=30):
     """
-    Full bypass of Cloudflare phishing warning page.
-    
-    1. Fetches the phishing page to get atok and sitekey
-    2. Solves Turnstile CAPTCHA
-    3. Submits the bypass form
-    4. Returns cookies that allow access to the site
-    
-    Args:
-        site_url: The URL with phishing warning (e.g., https://example.com/)
-        proxy_url: HTTP proxy URL (e.g., http://user:pass@host:port)
-        timeout: Max seconds for Turnstile solving
+    Solve Turnstile CAPTCHA by running the solver in a subprocess.
+    This avoids the "Playwright Sync API inside asyncio loop" error
+    when called from within another Patchright/Playwright context.
     
     Returns:
-        dict: {"cookies": {...}, "success": True} or {"cookies": {}, "success": False}
+        str: The Turnstile token, or None if failed
+    """
+    ensure_display()
+    
+    solver_script = f"""
+import sys, os
+os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')
+sys.path.insert(0, '{os.path.dirname(os.path.abspath(__file__))}')
+from turnstile_solver import solve_turnstile
+token = solve_turnstile('{site_url}', '{sitekey}', timeout={timeout})
+if token:
+    print('TURNSTILE_TOKEN:' + token)
+else:
+    print('TURNSTILE_TOKEN:FAILED')
+"""
+    
+    try:
+        env = dict(os.environ)
+        if 'DISPLAY' not in env:
+            env['DISPLAY'] = ':99'
+        
+        result = subprocess.run(
+            ['python3', '-c', solver_script],
+            capture_output=True, text=True, timeout=timeout + 15,
+            env=env
+        )
+        
+        for line in result.stdout.split('\n'):
+            if line.startswith('TURNSTILE_TOKEN:'):
+                t = line[16:]
+                if t != 'FAILED':
+                    return t
+    except subprocess.TimeoutExpired:
+        print("  ⚠️ Turnstile subprocess timed out", flush=True)
+    except Exception as e:
+        print(f"  ⚠️ Turnstile subprocess error: {e}", flush=True)
+    
+    return None
+
+
+def bypass_cloudflare_phishing(site_url, proxy_url=None, timeout=30):
+    """
+    Full bypass of Cloudflare phishing warning page using curl_cffi.
+    For headless/non-browser mode (visit.py).
+    
+    Returns:
+        dict: {"cookies": {...}, "success": True/False}
     """
     try:
         from curl_cffi import requests as cffi_requests
@@ -149,25 +185,20 @@ def bypass_cloudflare_phishing(site_url, proxy_url=None, timeout=30):
         print(f"  ⚠️ Failed to fetch page: {e}", flush=True)
         return {"cookies": {}, "success": False}
     
-    # Check if it's actually a phishing page
     if r.status_code == 200 and 'phishing' not in r.text.lower():
         print("  ✅ No phishing page - site is accessible!", flush=True)
         return {"cookies": dict(r.cookies), "success": True, "html": r.text}
     
-    # Extract atok
+    # Extract atok and sitekey
     atok_match = re.search(r'name="atok"\s+value="([^"]+)"', r.text)
-    if not atok_match:
-        print("  ⚠️ No atok found in phishing page", flush=True)
-        return {"cookies": {}, "success": False}
-    atok = atok_match.group(1)
-    
-    # Extract sitekey
     sitekey_match = re.search(r'data-sitekey=["\']([^"\']+)["\']', r.text)
-    if not sitekey_match:
-        print("  ⚠️ No sitekey found in phishing page", flush=True)
-        return {"cookies": {}, "success": False}
-    sitekey = sitekey_match.group(1)
     
+    if not atok_match or not sitekey_match:
+        print("  ⚠️ No atok/sitekey found in phishing page", flush=True)
+        return {"cookies": {}, "success": False}
+    
+    atok = atok_match.group(1)
+    sitekey = sitekey_match.group(1)
     print(f"  🔑 atok: {atok[:30]}... | sitekey: {sitekey}", flush=True)
     
     # Step 2: Solve Turnstile
@@ -178,7 +209,7 @@ def bypass_cloudflare_phishing(site_url, proxy_url=None, timeout=30):
         print("  ❌ Failed to solve Turnstile", flush=True)
         return {"cookies": {}, "success": False}
     
-    # Step 3: Submit bypass form (GET method)
+    # Step 3: Submit bypass form (GET, no redirect - get cookie)
     print("  📤 Submitting bypass form...", flush=True)
     bypass_url = site_url.rstrip('/') + '/cdn-cgi/phish-bypass'
     params = {
@@ -188,25 +219,143 @@ def bypass_cloudflare_phishing(site_url, proxy_url=None, timeout=30):
     }
     
     try:
-        session = cffi_requests.Session(impersonate='chrome131')
-        r2 = session.get(bypass_url, params=params, headers={**headers, 'Referer': site_url},
-                         proxies=proxies, timeout=20, verify=False, allow_redirects=True)
+        r2 = cffi_requests.get(bypass_url, params=params, impersonate='chrome131',
+                               headers={**headers, 'Referer': site_url},
+                               proxies=proxies, timeout=20, verify=False, allow_redirects=False)
         
-        cookies = dict(session.cookies)
+        cookies = dict(r2.cookies)
         
-        if r2.status_code == 200 and 'phishing' not in r2.text.lower():
+        if '__cf_mw_byp' in cookies:
             print(f"  ✅ Phishing bypass successful! Cookie: __cf_mw_byp", flush=True)
-            return {"cookies": cookies, "success": True, "html": r2.text}
+            return {"cookies": cookies, "success": True}
         else:
-            print(f"  ⚠️ Bypass returned status {r2.status_code}", flush=True)
+            print(f"  ⚠️ No bypass cookie received (status {r2.status_code})", flush=True)
             return {"cookies": cookies, "success": False}
     except Exception as e:
         print(f"  ⚠️ Bypass submission error: {e}", flush=True)
         return {"cookies": {}, "success": False}
 
 
+def bypass_phishing_in_browser(page, site_url, sitekey=None):
+    """
+    Bypass Cloudflare phishing warning inside an existing Patchright browser page.
+    For browser mode (smart_bot.py).
+    
+    This function:
+    1. Extracts atok and sitekey from the current page
+    2. Solves Turnstile in a subprocess (to avoid Playwright sync conflict)
+    3. Injects the token into the page
+    4. Force-enables and clicks the bypass button
+    
+    Args:
+        page: Patchright page object (already on the phishing page)
+        site_url: The URL of the site
+        sitekey: Optional sitekey (will extract from page if not provided)
+    
+    Returns:
+        bool: True if bypass succeeded
+    """
+    try:
+        # Extract atok from the page
+        atok = page.evaluate("document.querySelector('input[name=\"atok\"]')?.value || ''")
+        if not atok:
+            print("  ⚠️ No atok found on page", flush=True)
+            return False
+        
+        # Extract sitekey if not provided
+        if not sitekey:
+            sitekey = page.evaluate("document.querySelector('[data-sitekey]')?.getAttribute('data-sitekey') || ''")
+        if not sitekey:
+            print("  ⚠️ No sitekey found on page", flush=True)
+            return False
+        
+        print(f"  🔑 atok: {atok[:30]}... | sitekey: {sitekey}", flush=True)
+        
+        # Solve Turnstile in subprocess (avoids Playwright sync conflict)
+        print("  🧩 Solving Turnstile in subprocess...", flush=True)
+        token = solve_turnstile_subprocess(site_url, sitekey, timeout=30)
+        
+        if not token:
+            print("  ❌ Failed to solve Turnstile", flush=True)
+            return False
+        
+        print(f"  ✅ Token obtained: {token[:50]}...", flush=True)
+        
+        # Inject token into the page
+        safe_token = token.replace("'", "\\'").replace("\\", "\\\\")
+        
+        page.evaluate(f"""
+            (() => {{
+                // Set turnstile response input
+                let input = document.querySelector('input[name="cf-turnstile-response"]');
+                if (!input) {{
+                    input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'cf-turnstile-response';
+                    let form = document.querySelector('form');
+                    if (form) form.appendChild(input);
+                }}
+                input.value = '{safe_token}';
+                
+                // Try calling the success callback
+                if (typeof onTurnstileSuccess === 'function') {{
+                    onTurnstileSuccess('{safe_token}');
+                }}
+                
+                // Force enable and click the bypass button
+                let btn = document.getElementById('bypass-button');
+                if (btn) {{
+                    btn.disabled = false;
+                    btn.click();
+                }}
+            }})()
+        """)
+        
+        # Wait for navigation
+        time.sleep(5)
+        
+        # Check if we're past the phishing page
+        new_content = page.content()
+        new_title = page.title()
+        
+        if 'phishing' not in new_content.lower() and 'Suspected phishing' not in new_title:
+            print(f"  🎉 Phishing bypass successful! Title: {new_title}", flush=True)
+            return True
+        else:
+            # Try form submit as fallback
+            print("  🔄 Button click didn't work, trying form submit...", flush=True)
+            page.evaluate(f"""
+                let form = document.querySelector('form[action*="phish-bypass"]');
+                if (form) {{
+                    let input = form.querySelector('input[name="cf-turnstile-response"]');
+                    if (!input) {{
+                        input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'cf-turnstile-response';
+                        form.appendChild(input);
+                    }}
+                    input.value = '{safe_token}';
+                    form.submit();
+                }}
+            """)
+            
+            time.sleep(5)
+            new_content = page.content()
+            new_title = page.title()
+            
+            if 'phishing' not in new_content.lower() and 'Suspected phishing' not in new_title:
+                print(f"  🎉 Phishing bypass successful (form submit)! Title: {new_title}", flush=True)
+                return True
+            else:
+                print(f"  ❌ Phishing bypass failed. Title: {new_title}", flush=True)
+                return False
+    
+    except Exception as e:
+        print(f"  ⚠️ Browser bypass error: {e}", flush=True)
+        return False
+
+
 if __name__ == "__main__":
-    # Test
     import sys
     url = sys.argv[1] if len(sys.argv) > 1 else "https://sesallameh.com/"
     proxy = sys.argv[2] if len(sys.argv) > 2 else None

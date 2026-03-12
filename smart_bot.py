@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 # Try to import turnstile solver for Cloudflare phishing bypass
 try:
-    from turnstile_solver import bypass_cloudflare_phishing, solve_turnstile
+    from turnstile_solver import bypass_cloudflare_phishing, solve_turnstile, bypass_phishing_in_browser, solve_turnstile_subprocess
     HAS_TURNSTILE_SOLVER = True
 except ImportError:
     HAS_TURNSTILE_SOLVER = False
@@ -1459,41 +1459,36 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             if 'phishing' in page_text_check or 'ignore & proceed' in page_text_check or 'ignore and proceed' in page_text_check or 'cdn-cgi/phish' in current_url:
                                 print("⚠️ Cloudflare phishing warning detected - bypassing...")
                                 
-                                # Use Turnstile Solver (solves CAPTCHA on local page, then submits bypass form)
+                                # Use Turnstile Solver to bypass phishing in browser
                                 if HAS_TURNSTILE_SOLVER:
-                                    print("🧩 Using Turnstile Solver to bypass phishing page...")
-                                    proxy_url = None
-                                    if proxy_config:
-                                        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://', '')}"
+                                    print("🧩 Using Turnstile Solver to bypass phishing page (browser mode)...")
+                                    bypass_ok = bypass_phishing_in_browser(page, target_url)
                                     
-                                    bypass_result = bypass_cloudflare_phishing(target_url, proxy_url=proxy_url)
-                                    
-                                    if bypass_result.get('success'):
-                                        # Got bypass cookies - inject them into the browser context
-                                        for name, value in bypass_result['cookies'].items():
-                                            context.add_cookies([{
-                                                'name': name,
-                                                'value': value,
-                                                'domain': urlparse(target_url).netloc,
-                                                'path': '/'
-                                            }])
-                                        
-                                        # Reload page with bypass cookies
-                                        page.goto(target_url, wait_until='networkidle', timeout=60000)
+                                    if bypass_ok:
+                                        print(f"✅ Cloudflare phishing bypassed! Now at: {page.url}")
                                         time.sleep(random.uniform(2, 4))
-                                        print(f"✅ Cloudflare phishing bypassed via Turnstile Solver! Now at: {page.url}")
                                     else:
-                                        print("⚠️ Turnstile Solver failed - trying manual bypass...")
-                                        # Fallback: try force-submit the form
-                                        try:
-                                            page.evaluate("""
-                                                var btn = document.getElementById('bypass-button') || document.querySelector('button[type="submit"]');
-                                                if (btn) { btn.disabled = false; btn.click(); }
-                                                else { var form = document.querySelector('form[action*="phish-bypass"]'); if (form) form.submit(); }
-                                            """)
-                                            time.sleep(random.uniform(3, 5))
-                                        except:
-                                            print("⚠️ Could not bypass Cloudflare warning")
+                                        print("⚠️ Browser Turnstile bypass failed - trying curl_cffi fallback...")
+                                        # Fallback: try curl_cffi approach (gets cookie, injects into browser)
+                                        proxy_url = None
+                                        if proxy_config:
+                                            proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://', '')}"
+                                        
+                                        bypass_result = bypass_cloudflare_phishing(target_url, proxy_url=proxy_url)
+                                        
+                                        if bypass_result.get('success') and bypass_result.get('cookies'):
+                                            for name, value in bypass_result['cookies'].items():
+                                                context.add_cookies([{
+                                                    'name': name,
+                                                    'value': value,
+                                                    'domain': urlparse(target_url).netloc,
+                                                    'path': '/'
+                                                }])
+                                            page.goto(target_url, wait_until='networkidle', timeout=60000)
+                                            time.sleep(random.uniform(2, 4))
+                                            print(f"✅ Cloudflare phishing bypassed via curl_cffi! Now at: {page.url}")
+                                        else:
+                                            print("⚠️ All bypass methods failed")
                                 else:
                                     # No Turnstile Solver - try force-submit
                                     print("⚠️ Turnstile Solver not available - trying force bypass...")
