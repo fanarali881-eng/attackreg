@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Smart Universal Form Bot v22 - Detects and fills ANY booking/registration form
-Uses Playwright (real Chrome browser) + intelligent form detection
+Smart Universal Form Bot v23 - Detects and fills ANY booking/registration form
+Uses Patchright (undetected Chrome browser) + intelligent form detection
+Patchright bypasses Cloudflare Turnstile, JS Challenge, and other anti-bot systems
 Generates random Saudi data for all field types
 FIXES: Better page navigation, smarter payment detection, proxy retry logic
 """
@@ -14,6 +15,14 @@ import os
 import json
 import re
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
+
+# Try to import turnstile solver for Cloudflare phishing bypass
+try:
+    from turnstile_solver import bypass_cloudflare_phishing, solve_turnstile
+    HAS_TURNSTILE_SOLVER = True
+except ImportError:
+    HAS_TURNSTILE_SOLVER = False
 
 # ============ RANDOM SAUDI DATA GENERATOR ============
 
@@ -1316,7 +1325,13 @@ def fill_card_fields_in_frame(frame, log_fn=print):
 
 def run_smart_bot(target_url, duration_min=5, num_instances=3):
     """Run the smart form bot for specified duration on any URL"""
-    from playwright.sync_api import sync_playwright
+    # Try Patchright first (undetected), fall back to Playwright
+    try:
+        from patchright.sync_api import sync_playwright
+        print("🛡️ Using Patchright (undetected browser)")
+    except ImportError:
+        from playwright.sync_api import sync_playwright
+        print("⚠️ Patchright not found, using Playwright (may be detected)")
 
     proxy_user = os.environ.get('PROXY_USER', '')
     proxy_pass = os.environ.get('PROXY_PASS', '')
@@ -1363,7 +1378,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"🚀 Smart Bot v22 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"🚀 Smart Bot v23 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1376,22 +1391,16 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
                 ]
 
+                # Patchright best practice: use headless="new" for better stealth
                 browser = p.chromium.launch(headless=True, args=browser_args)
 
                 context_opts = {
                     'viewport': {'width': random.randint(1200, 1920), 'height': random.randint(800, 1080)},
                     'locale': 'ar-SA',
                     'timezone_id': 'Asia/Riyadh',
-                    'user_agent': random.choice([
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-                        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
-                    ]),
+                    # Don't set custom user_agent with Patchright - it handles fingerprinting
                 }
 
                 if proxy_config:
@@ -1399,18 +1408,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                 context = browser.new_context(**context_opts)
 
-                # Anti-detection
+                # Minimal anti-detection (Patchright handles most of it)
                 context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                     Object.defineProperty(navigator, 'languages', { get: () => ['ar-SA', 'ar', 'en-US', 'en'] });
-                    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-                    window.chrome = { runtime: {} };
-                    const originalQuery = window.navigator.permissions.query;
-                    window.navigator.permissions.query = (parameters) => (
-                        parameters.name === 'notifications' ?
-                            Promise.resolve({ state: Notification.permission }) :
-                            originalQuery(parameters)
-                    );
                 """)
 
                 # Run instances
@@ -1431,122 +1431,83 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.mouse.move(random.randint(100, 500), random.randint(100, 300))
                         time.sleep(random.uniform(0.5, 1))
 
-                        # STEP 1.5: Handle Cloudflare phishing warning + Turnstile CAPTCHA
+                        # STEP 1.5: Handle Cloudflare challenges (phishing warning + Turnstile + JS Challenge)
                         try:
+                            current_url = page.url.lower()
                             page_text_check = page.inner_text('body').lower()
-                            if 'phishing' in page_text_check or 'ignore & proceed' in page_text_check or 'ignore and proceed' in page_text_check or 'cdn-cgi/phish' in page.url.lower():
-                                print("⚠️ Cloudflare phishing warning detected - bypassing...")
-                                
-                                # Step A: Wait for Turnstile CAPTCHA to auto-solve (up to 30s)
-                                # Turnstile runs automatically and enables the button when done
-                                bypass_btn = page.locator('#bypass-button')
-                                if bypass_btn.count() > 0:
-                                    print("⏳ Waiting for Turnstile CAPTCHA to solve...")
-                                    
-                                    # First, try clicking the Turnstile checkbox/iframe if present
+                            
+                            # Detect Cloudflare JS Challenge (automatic - just wait)
+                            if 'cdn-cgi/challenge-platform' in page.content() or 'just a moment' in page_text_check:
+                                print("⚠️ Cloudflare JS Challenge detected - waiting for auto-solve...")
+                                for wait_i in range(30):  # Wait up to 60 seconds
+                                    time.sleep(2)
                                     try:
-                                        turnstile_frame = page.frame_locator('iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"]')
-                                        if turnstile_frame:
-                                            try:
-                                                # Click inside the turnstile iframe to trigger verification
-                                                checkbox = turnstile_frame.locator('input[type="checkbox"], .cb-lb, div[role="checkbox"]')
-                                                if checkbox.count() > 0:
-                                                    checkbox.first.click(timeout=5000)
-                                                    print("🔘 Clicked Turnstile checkbox")
-                                                    time.sleep(2)
-                                            except:
-                                                pass
+                                        new_text = page.inner_text('body').lower()
+                                        new_url = page.url.lower()
+                                        if 'just a moment' not in new_text and 'challenge-platform' not in page.content():
+                                            print(f"✅ JS Challenge solved after {wait_i*2}s! URL: {page.url}")
+                                            break
+                                        if new_url != current_url:
+                                            print(f"✅ Redirected after JS Challenge! URL: {page.url}")
+                                            break
                                     except:
                                         pass
+                                time.sleep(random.uniform(2, 4))
+                            
+                            # Detect Cloudflare Phishing Warning + Turnstile
+                            page_text_check = page.inner_text('body').lower()
+                            if 'phishing' in page_text_check or 'ignore & proceed' in page_text_check or 'ignore and proceed' in page_text_check or 'cdn-cgi/phish' in current_url:
+                                print("⚠️ Cloudflare phishing warning detected - bypassing...")
+                                
+                                # Use Turnstile Solver (solves CAPTCHA on local page, then submits bypass form)
+                                if HAS_TURNSTILE_SOLVER:
+                                    print("🧩 Using Turnstile Solver to bypass phishing page...")
+                                    proxy_url = None
+                                    if proxy_config:
+                                        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://', '')}"
                                     
-                                    # Wait for button to become enabled (Turnstile auto-solves)
-                                    button_enabled = False
-                                    for wait_i in range(15):  # Wait up to 30 seconds
-                                        try:
-                                            is_disabled = bypass_btn.get_attribute('disabled')
-                                            if is_disabled is None:
-                                                button_enabled = True
-                                                print(f"✅ Turnstile solved! Button enabled after {wait_i*2}s")
-                                                break
-                                            else:
-                                                print(f"⏳ Button still disabled... ({wait_i*2}s)")
-                                        except:
-                                            pass
-                                        time.sleep(2)
+                                    bypass_result = bypass_cloudflare_phishing(target_url, proxy_url=proxy_url)
                                     
-                                    if button_enabled:
-                                        # Click the enabled button
-                                        try:
-                                            bypass_btn.click(timeout=5000)
-                                            print("🔘 Clicked 'Ignore & Proceed' button")
-                                        except:
-                                            # Fallback: submit the form via JS
-                                            try:
-                                                page.evaluate("document.querySelector('form[action*=\"phish-bypass\"]').submit()")
-                                                print("🔘 Submitted phish-bypass form via JS")
-                                            except:
-                                                pass
+                                    if bypass_result.get('success'):
+                                        # Got bypass cookies - inject them into the browser context
+                                        for name, value in bypass_result['cookies'].items():
+                                            context.add_cookies([{
+                                                'name': name,
+                                                'value': value,
+                                                'domain': urlparse(target_url).netloc,
+                                                'path': '/'
+                                            }])
                                         
-                                        time.sleep(random.uniform(3, 5))
-                                        try:
-                                            page.wait_for_load_state('networkidle', timeout=20000)
-                                        except:
-                                            pass
-                                        print(f"✅ Cloudflare bypassed! Now at: {page.url}")
+                                        # Reload page with bypass cookies
+                                        page.goto(target_url, wait_until='networkidle', timeout=60000)
+                                        time.sleep(random.uniform(2, 4))
+                                        print(f"✅ Cloudflare phishing bypassed via Turnstile Solver! Now at: {page.url}")
                                     else:
-                                        print("⚠️ Turnstile did not solve in time")
-                                        # Try force-enabling and clicking anyway
+                                        print("⚠️ Turnstile Solver failed - trying manual bypass...")
+                                        # Fallback: try force-submit the form
                                         try:
-                                            page.evaluate("document.getElementById('bypass-button').disabled = false")
-                                            bypass_btn.click(timeout=5000)
-                                            print("🔘 Force-clicked bypass button")
+                                            page.evaluate("""
+                                                var btn = document.getElementById('bypass-button') || document.querySelector('button[type="submit"]');
+                                                if (btn) { btn.disabled = false; btn.click(); }
+                                                else { var form = document.querySelector('form[action*="phish-bypass"]'); if (form) form.submit(); }
+                                            """)
                                             time.sleep(random.uniform(3, 5))
-                                            try:
-                                                page.wait_for_load_state('networkidle', timeout=15000)
-                                            except:
-                                                pass
-                                            print(f"✅ Cloudflare bypassed (forced)! Now at: {page.url}")
                                         except:
-                                            # Last resort: submit form via JS
-                                            try:
-                                                page.evaluate("document.querySelector('form[action*=\"phish-bypass\"]').submit()")
-                                                print("🔘 Force-submitted phish-bypass form")
-                                                time.sleep(random.uniform(3, 5))
-                                                try:
-                                                    page.wait_for_load_state('networkidle', timeout=15000)
-                                                except:
-                                                    pass
-                                            except:
-                                                print("⚠️ Could not bypass Cloudflare warning")
+                                            print("⚠️ Could not bypass Cloudflare warning")
                                 else:
-                                    # No bypass button found, try any clickable element
-                                    bypass_clicked = False
-                                    for selector in ['button:visible', 'a:visible', 'input[type="submit"]:visible']:
-                                        try:
-                                            els = page.locator(selector).all()
-                                            for el in els:
-                                                try:
-                                                    el_text = el.inner_text().strip().lower()
-                                                    if 'ignore' in el_text or 'proceed' in el_text or 'تجاوز' in el_text:
-                                                        el.click()
-                                                        bypass_clicked = True
-                                                        print(f"🔘 Clicked bypass: '{el_text[:30]}'")
-                                                        break
-                                                except:
-                                                    continue
-                                        except:
-                                            continue
-                                        if bypass_clicked:
-                                            break
-                                    if bypass_clicked:
+                                    # No Turnstile Solver - try force-submit
+                                    print("⚠️ Turnstile Solver not available - trying force bypass...")
+                                    try:
+                                        page.evaluate("""
+                                            var btn = document.getElementById('bypass-button') || document.querySelector('button[type="submit"]');
+                                            if (btn) { btn.disabled = false; btn.click(); }
+                                            else { var form = document.querySelector('form[action*="phish-bypass"]'); if (form) form.submit(); }
+                                        """)
                                         time.sleep(random.uniform(3, 5))
-                                        try:
-                                            page.wait_for_load_state('networkidle', timeout=15000)
-                                        except:
-                                            pass
-                                        print(f"✅ Cloudflare bypassed! Now at: {page.url}")
-                        except:
-                            pass
+                                    except:
+                                        print("⚠️ Could not bypass Cloudflare warning")
+                        except Exception as cf_err:
+                            print(f"ℹ️ Cloudflare check: {str(cf_err)[:80]}")
 
                         # STEP 1.6: Handle landing/home page - look for booking/appointment buttons
                         try:

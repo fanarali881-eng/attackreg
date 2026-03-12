@@ -13,16 +13,15 @@ const DEFAULT_SERVERS = [
   { host: '206.189.21.125', username: 'root' }
 ];
 
-// v13 Setup: install curl_cffi + python-socketio + websocket-client + requests + playwright + FlareSolverr
-const SETUP_COMMAND = `export DEBIAN_FRONTEND=noninteractive && \\
-apt-get update -qq && apt-get install -y -qq libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1 2>/dev/null; \\
-pip3 install curl_cffi 'python-socketio[client]' websocket-client requests playwright --break-system-packages -q 2>/dev/null; \\
-pip3 install curl_cffi 'python-socketio[client]' websocket-client requests playwright -q 2>/dev/null; \\
-python3 -m playwright install chromium 2>/dev/null; \\
-(which docker > /dev/null 2>&1 || (curl -fsSL https://get.docker.com | sh)) && \\
-docker pull ghcr.io/flaresolverr/flaresolverr:latest 2>/dev/null && \\
-for i in $(seq 1 20); do n=flaresolverr$i; p=$((8190+i)); docker rm -f $n 2>/dev/null; docker run -d --name $n --restart=always -p $p:8191 -e LOG_LEVEL=info --memory=256m ghcr.io/flaresolverr/flaresolverr:latest; done 2>/dev/null; \\
-echo SETUP_COMPLETE_V13`;
+// v15 Setup: install patchright (undetected) + playwright (fallback) + Xvfb + deps
+const SETUP_COMMAND = `export DEBIAN_FRONTEND=noninteractive && \
+apt-get update -qq && apt-get install -y -qq libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1 xvfb 2>/dev/null; \
+pip3 install patchright curl_cffi 'python-socketio[client]' websocket-client requests playwright --break-system-packages -q 2>/dev/null; \
+pip3 install patchright curl_cffi 'python-socketio[client]' websocket-client requests playwright -q 2>/dev/null; \
+python3 -m patchright install chromium 2>/dev/null; \
+python3 -m playwright install chromium 2>/dev/null; \
+(pgrep -f 'Xvfb :99' || nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /dev/null 2>&1 &); \
+echo SETUP_COMPLETE_V15`;
 
 function sanitizeUrl(url) {
   if (!url || typeof url !== 'string') return null;
@@ -113,13 +112,14 @@ export async function POST(req) {
       return NextResponse.json({ results });
 
     } else if (action === 'deploy') {
-      // Download all 3 script files directly on each server from GitHub
+      // Download all 3 script files + turnstile solver directly on each server from GitHub
       const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attack/main';
+      const ghBaseReg = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
       const files = ['visit.py', 'browser_engine.py', 'detection_engine.py'];
       const downloadCmds = files.map(f => 
         `wget -q -O /root/${f} '${ghBase}/${f}'`
       ).join(' && ');
-      const deployCmd = `${downloadCmds} && wc -c /root/visit.py /root/browser_engine.py /root/detection_engine.py && echo "Script v13 deployed (3 files)"`;
+      const deployCmd = `${downloadCmds} && wget -q -O /root/turnstile_solver.py '${ghBaseReg}/turnstile_solver.py' && wc -c /root/visit.py /root/browser_engine.py /root/detection_engine.py /root/turnstile_solver.py && echo "Script v14 deployed (4 files + Turnstile solver)"`;
       
       const results = await Promise.all(
         serverList.map(async (server) => {
@@ -130,9 +130,9 @@ export async function POST(req) {
       return NextResponse.json({ results });
 
     } else if (action === 'deploy-sesallameh' || action === 'deploy-smart') {
-      // Deploy the smart/sesallameh booking bot script to all servers
+      // Deploy the smart/sesallameh booking bot script + turnstile solver to all servers
       const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
-      const deployCmd = `wget -q -O /root/sesallameh_bot.py '${ghBase}/sesallameh_bot.py' && wget -q -O /root/smart_bot.py '${ghBase}/smart_bot.py' && wc -c /root/sesallameh_bot.py /root/smart_bot.py && echo "Smart bot deployed"`;
+      const deployCmd = `wget -q -O /root/sesallameh_bot.py '${ghBase}/sesallameh_bot.py' && wget -q -O /root/smart_bot.py '${ghBase}/smart_bot.py' && wget -q -O /root/turnstile_solver.py '${ghBase}/turnstile_solver.py' && wc -c /root/sesallameh_bot.py /root/smart_bot.py /root/turnstile_solver.py && echo "Smart bot + Turnstile solver deployed"`;
       
       const results = await Promise.all(
         serverList.map(async (server) => {
@@ -180,8 +180,8 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          // Build env var string for inline use
-          let envStr = 'PYTHONUNBUFFERED=1';
+          // Build env var string for inline use (DISPLAY=:99 for Turnstile solver Xvfb)
+          let envStr = 'PYTHONUNBUFFERED=1 DISPLAY=:99';
           if (proxies && proxies.length > 0) {
             let p = proxies[0];
             // Parse proxy URL string like http://user:pass@host:port
@@ -206,6 +206,9 @@ export async function POST(req) {
             envStr += ` PROXY_HOST=${pHost.replace(/[^a-zA-Z0-9_.-]/g, '')}`;
             envStr += ` PROXY_PORT=${pPort.toString().replace(/[^0-9]/g, '')}`;
           }
+          
+          // Step 0: Ensure Xvfb is running for Turnstile solver
+          await runSSHCommand(server, 'pgrep -f "Xvfb :99" || nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /dev/null 2>&1 &', 5000);
           
           // Step 1: Kill old processes
           await runSSHCommand(server, 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; rm -f /root/smart_bot.log', 5000);
@@ -307,8 +310,9 @@ export async function POST(req) {
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
           const fullCmd = `killall -9 python3 2>/dev/null; sleep 1; ` +
+            `(pgrep -f 'Xvfb :99' || nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /dev/null 2>&1 &); sleep 1; ` +
             `for i in $(seq 1 20); do docker start flaresolverr$i 2>/dev/null; done; ` +
-            `${proxyEnv} WAVE_SIZE=${safeWaveSize} STAY_TIME=${safeStayTime} ` +
+            `DISPLAY=:99 ${proxyEnv} WAVE_SIZE=${safeWaveSize} STAY_TIME=${safeStayTime} ` +
             (socketUrl ? `SOCKET_URL='${socketUrl.replace(/'/g, '')}' ` : '') +
             (captchaApiKey ? `CAPTCHA_API_KEY='${captchaApiKey.replace(/'/g, '')}' ` : '') +
             (captchaService ? `CAPTCHA_SERVICE='${captchaService.replace(/'/g, '')}' ` : '') +
