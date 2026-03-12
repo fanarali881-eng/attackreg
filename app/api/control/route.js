@@ -180,24 +180,25 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          // Build launcher script lines
-          let proxyExports = '';
+          // Build env var string for inline use
+          let envStr = 'PYTHONUNBUFFERED=1';
           if (proxies && proxies.length > 0) {
             const p = proxies[0];
-            const pu = (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            const pp = (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            const ph = (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '');
-            const pport = (p.port || '31112').replace(/[^0-9]/g, '');
-            proxyExports = `export PROXY_USER=${pu}\nexport PROXY_PASS=${pp}\nexport PROXY_HOST=${ph}\nexport PROXY_PORT=${pport}\n`;
+            envStr += ' PROXY_USER=' + (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
+            envStr += ' PROXY_PASS=' + (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
+            envStr += ' PROXY_HOST=' + (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '');
+            envStr += ' PROXY_PORT=' + (p.port || '31112').replace(/[^0-9]/g, '');
           }
           
-          // Step 1: Kill old process and create the launcher script using echo -e
-          const setupCmd = `kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; rm -f /root/smart_bot.log; echo -e '#!/bin/bash\nexport PYTHONUNBUFFERED=1\n${proxyExports}python3 -u /root/smart_bot.py ${safeUrl} ${safeDuration} ${safeInstances}' > /root/run_smart.sh && chmod +x /root/run_smart.sh && wc -l /root/run_smart.sh`;
-          await runSSHCommand(server, setupCmd, 10000);
+          // Step 1: Kill old processes
+          await runSSHCommand(server, 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; rm -f /root/smart_bot.log', 5000);
           
-          // Step 2: Launch the bot in background using screen
-          const launchCmd = 'screen -dmS smartbot bash -c "bash /root/run_smart.sh > /root/smart_bot.log 2>&1"; sleep 2; screen -ls | grep smartbot && echo BOT_STARTED || echo BOT_FAILED';
-          const r = await runSSHCommand(server, launchCmd, 10000);
+          // Step 2: Launch directly with screen - no script file needed
+          const launchCmd = `screen -dmS smartbot bash -c "${envStr} python3 -u /root/smart_bot.py ${safeUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1"`;
+          await runSSHCommand(server, launchCmd, 5000);
+          
+          // Step 3: Verify it started
+          const r = await runSSHCommand(server, 'sleep 2; screen -ls 2>&1; pgrep -f smart_bot.py > /dev/null && echo BOT_STARTED || echo BOT_FAILED', 10000);
           return { host: server.host, ...r };
         })
       );
