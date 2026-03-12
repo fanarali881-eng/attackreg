@@ -70,7 +70,7 @@ async function runSSHCommand(server, command, timeout = 8000) {
           return done({ status: 'error', error: err.message });
         }
         stream.on('data', (data) => { output += data.toString(); });
-        stream.stderr.on('data', () => {});
+        stream.stderr.on('data', (data) => { output += data.toString(); });
         stream.on('close', () => {
           clearTimeout(timer);
           done({ status: 'success', output: output.trim() || 'Done' });
@@ -180,19 +180,23 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          // Create a launcher script on the server
-          let envLines = 'export PYTHONUNBUFFERED=1\n';
+          let proxyEnvStr = '';
           if (proxies && proxies.length > 0) {
             const p = proxies[0];
-            envLines += `export PROXY_USER=${(p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '')}\n`;
-            envLines += `export PROXY_PASS=${(p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '')}\n`;
-            envLines += `export PROXY_HOST=${(p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '')}\n`;
-            envLines += `export PROXY_PORT=${(p.port || '31112').replace(/[^0-9]/g, '')}\n`;
+            const pu = (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
+            const pp = (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
+            const ph = (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '');
+            const pport = (p.port || '31112').replace(/[^0-9]/g, '');
+            proxyEnvStr = `PROXY_USER=${pu} PROXY_PASS=${pp} PROXY_HOST=${ph} PROXY_PORT=${pport}`;
           }
-          const fullCmd = `kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; sleep 1; ` +
-            `printf '#!/bin/bash\n${envLines}python3 -u /root/smart_bot.py "${escapedUrl}" ${safeDuration} ${safeInstances}\n' > /root/run_smart.sh && chmod +x /root/run_smart.sh && ` +
-            `nohup /root/run_smart.sh > /root/smart_bot.log 2>&1 & ` +
-            `sleep 2 && pgrep -f smart_bot.py > /dev/null && echo 'BOT_RUNNING' || echo 'BOT_FAILED'; cat /root/smart_bot.log 2>/dev/null | head -10`;
+          const fullCmd = [
+            'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null',
+            'rm -f /root/smart_bot.log /root/smart_bot_status.json',
+            `${proxyEnvStr} PYTHONUNBUFFERED=1 nohup python3 -u /root/smart_bot.py ${escapedUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 &`,
+            'sleep 5',
+            'pgrep -f smart_bot.py > /dev/null && echo BOT_RUNNING || echo BOT_FAILED',
+            'cat /root/smart_bot.log 2>/dev/null | tail -15'
+          ].join('; ');
           
           const r = await runSSHCommand(server, fullCmd, 15000);
           return { host: server.host, ...r };
