@@ -457,10 +457,19 @@ def analyze_page_content(page, log_fn=print):
         log_fn(f"📋 Form page detected ({regular_input_count} inputs, {info['visible_selects']} selects)")
         return 'form', info
     
+    # Check if URL suggests payment gateway
+    try:
+        current_url = page.url.lower()
+        if any(kw in current_url for kw in ['payment', 'pay', 'checkout', 'moyasar', 'hyperpay', 'payfort', 'stripe', 'tap']):
+            log_fn(f"💳 Payment gateway URL detected: {page.url}")
+            return 'payment', info
+    except:
+        pass
+    
     # Check for summary/confirmation page with action buttons
     summary_keywords = ['ملخص', 'summary', 'تأكيد', 'confirm', 'مراجعة', 'review',
                        'التفاصيل', 'details', 'المبلغ', 'amount', 'الإجمالي', 'total',
-                       'المقابل المالي']
+                       'المقابل المالي', 'متابعة الدفع', 'summary-payment']
     has_action_buttons = False
     try:
         buttons = page.locator('button:visible, a.btn:visible, input[type="submit"]:visible').all()
@@ -1308,18 +1317,44 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 print("📄 Summary page - clicking action button...")
                                 clicked = click_action_button(page, log_fn=print)
                                 if clicked:
-                                    time.sleep(random.uniform(3, 5))
+                                    time.sleep(random.uniform(4, 7))
                                     try:
-                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                        page.wait_for_load_state('networkidle', timeout=20000)
                                     except:
                                         pass
-                                    print(f"✅ Summary page handled, moving to next...")
+                                    print(f"✅ Summary page handled, new URL: {page.url}")
                                     # Update status
                                     if recent_entries:
                                         recent_entries[0]['status'] = 'summary_done'
                                         update_status()
+                                    
+                                    # After clicking payment button, try to handle payment directly
+                                    # The page might have redirected to a payment gateway
+                                    time.sleep(random.uniform(2, 3))
+                                    new_url = page.url.lower()
+                                    print(f"📍 Current URL after action: {page.url}")
+                                    
+                                    # Check if we're on a payment gateway
+                                    if any(kw in new_url for kw in ['payment', 'pay', 'checkout', 'moyasar', 'hyperpay', 'payfort', 'stripe', 'tap']):
+                                        print("💳 Redirected to payment gateway!")
+                                        payment_success = handle_payment_page(page, log_fn=print)
+                                        if payment_success:
+                                            print("✅ Payment completed!")
+                                            if recent_entries:
+                                                recent_entries[0]['status'] = 'payment_done'
+                                                update_status()
+                                        break
+                                    
                                     continue
                                 else:
+                                    # No action button - try payment handling as fallback
+                                    print("⚠️ No action button - trying payment handling...")
+                                    payment_success = handle_payment_page(page, log_fn=print)
+                                    if payment_success:
+                                        print("✅ Payment completed!")
+                                        if recent_entries:
+                                            recent_entries[0]['status'] = 'payment_done'
+                                            update_status()
                                     break
 
                             elif page_type == 'success':
@@ -1330,8 +1365,24 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 break
 
                             else:
-                                # Unknown page - try to find any action button
-                                print(f"❓ Unknown page type - trying to find action button...")
+                                # Unknown page - log page details and try actions
+                                print(f"❓ Unknown page type at {page.url}")
+                                try:
+                                    body_text = page.inner_text('body')[:300]
+                                    print(f"📝 Page content: {body_text[:200]}")
+                                except:
+                                    pass
+                                
+                                # Try payment handling first (might be a payment gateway)
+                                payment_success = handle_payment_page(page, log_fn=print)
+                                if payment_success:
+                                    print("✅ Payment completed on unknown page!")
+                                    if recent_entries:
+                                        recent_entries[0]['status'] = 'payment_done'
+                                        update_status()
+                                    break
+                                
+                                # Try to find any action button
                                 clicked = click_action_button(page, log_fn=print)
                                 if clicked:
                                     time.sleep(random.uniform(3, 5))
