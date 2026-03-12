@@ -180,18 +180,21 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          let proxyEnvStr = '';
+          // Build launcher script content
+          let scriptLines = ['#!/bin/bash', 'export PYTHONUNBUFFERED=1'];
           if (proxies && proxies.length > 0) {
             const p = proxies[0];
-            const pu = (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            const pp = (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            const ph = (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '');
-            const pport = (p.port || '31112').replace(/[^0-9]/g, '');
-            proxyEnvStr = `PROXY_USER=${pu} PROXY_PASS=${pp} PROXY_HOST=${ph} PROXY_PORT=${pport}`;
+            scriptLines.push('export PROXY_USER=' + (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, ''));
+            scriptLines.push('export PROXY_PASS=' + (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, ''));
+            scriptLines.push('export PROXY_HOST=' + (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, ''));
+            scriptLines.push('export PROXY_PORT=' + (p.port || '31112').replace(/[^0-9]/g, ''));
           }
-          const fullCmd = `kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; rm -f /root/smart_bot.log /root/smart_bot_status.json; ${proxyEnvStr} PYTHONUNBUFFERED=1 nohup python3 -u /root/smart_bot.py ${escapedUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & sleep 5; pgrep -f smart_bot.py > /dev/null && echo BOT_RUNNING || echo BOT_FAILED; cat /root/smart_bot.log 2>/dev/null | tail -15`;
+          scriptLines.push('python3 -u /root/smart_bot.py ' + escapedUrl + ' ' + safeDuration + ' ' + safeInstances);
+          const scriptContent = scriptLines.join('\n');
           
-          const r = await runSSHCommand(server, fullCmd, 15000);
+          const fullCmd = 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; rm -f /root/smart_bot.log /root/smart_bot_status.json; cat > /root/run_smart.sh << ENDOFSCRIPT\n' + scriptContent + '\nENDOFSCRIPT\nchmod +x /root/run_smart.sh; nohup bash /root/run_smart.sh > /root/smart_bot.log 2>&1 & echo STARTED';
+          
+          const r = await runSSHCommand(server, fullCmd, 10000);
           return { host: server.host, ...r };
         })
       );
