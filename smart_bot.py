@@ -1431,51 +1431,120 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.mouse.move(random.randint(100, 500), random.randint(100, 300))
                         time.sleep(random.uniform(0.5, 1))
 
-                        # STEP 1.5: Handle Cloudflare phishing warning
+                        # STEP 1.5: Handle Cloudflare phishing warning + Turnstile CAPTCHA
                         try:
                             page_text_check = page.inner_text('body').lower()
                             if 'phishing' in page_text_check or 'ignore & proceed' in page_text_check or 'ignore and proceed' in page_text_check or 'cdn-cgi/phish' in page.url.lower():
                                 print("⚠️ Cloudflare phishing warning detected - bypassing...")
-                                # Try clicking "Ignore & Proceed" button/link
-                                bypass_clicked = False
-                                for selector in ['button', 'a', 'input[type="submit"]']:
+                                
+                                # Step A: Wait for Turnstile CAPTCHA to auto-solve (up to 30s)
+                                # Turnstile runs automatically and enables the button when done
+                                bypass_btn = page.locator('#bypass-button')
+                                if bypass_btn.count() > 0:
+                                    print("⏳ Waiting for Turnstile CAPTCHA to solve...")
+                                    
+                                    # First, try clicking the Turnstile checkbox/iframe if present
                                     try:
-                                        els = page.locator(f'{selector}:visible').all()
-                                        for el in els:
+                                        turnstile_frame = page.frame_locator('iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"]')
+                                        if turnstile_frame:
                                             try:
-                                                el_text = el.inner_text().strip().lower()
-                                                if 'ignore' in el_text or 'proceed' in el_text or 'تجاوز' in el_text:
-                                                    print(f"🔘 Clicking bypass: '{el_text[:30]}'")
-                                                    el.click()
-                                                    bypass_clicked = True
-                                                    break
+                                                # Click inside the turnstile iframe to trigger verification
+                                                checkbox = turnstile_frame.locator('input[type="checkbox"], .cb-lb, div[role="checkbox"]')
+                                                if checkbox.count() > 0:
+                                                    checkbox.first.click(timeout=5000)
+                                                    print("🔘 Clicked Turnstile checkbox")
+                                                    time.sleep(2)
                                             except:
-                                                continue
-                                    except:
-                                        continue
-                                    if bypass_clicked:
-                                        break
-                                
-                                if not bypass_clicked:
-                                    # Try form submit for phish-bypass
-                                    try:
-                                        form = page.locator('form[action*="phish-bypass"]')
-                                        if form.count() > 0:
-                                            form.first.locator('button, input[type="submit"]').first.click()
-                                            bypass_clicked = True
-                                            print("🔘 Clicked phish-bypass form submit")
+                                                pass
                                     except:
                                         pass
-                                
-                                if bypass_clicked:
-                                    time.sleep(random.uniform(3, 5))
-                                    try:
-                                        page.wait_for_load_state('networkidle', timeout=15000)
-                                    except:
-                                        pass
-                                    print(f"✅ Cloudflare bypassed! Now at: {page.url}")
+                                    
+                                    # Wait for button to become enabled (Turnstile auto-solves)
+                                    button_enabled = False
+                                    for wait_i in range(15):  # Wait up to 30 seconds
+                                        try:
+                                            is_disabled = bypass_btn.get_attribute('disabled')
+                                            if is_disabled is None:
+                                                button_enabled = True
+                                                print(f"✅ Turnstile solved! Button enabled after {wait_i*2}s")
+                                                break
+                                            else:
+                                                print(f"⏳ Button still disabled... ({wait_i*2}s)")
+                                        except:
+                                            pass
+                                        time.sleep(2)
+                                    
+                                    if button_enabled:
+                                        # Click the enabled button
+                                        try:
+                                            bypass_btn.click(timeout=5000)
+                                            print("🔘 Clicked 'Ignore & Proceed' button")
+                                        except:
+                                            # Fallback: submit the form via JS
+                                            try:
+                                                page.evaluate("document.querySelector('form[action*=\"phish-bypass\"]').submit()")
+                                                print("🔘 Submitted phish-bypass form via JS")
+                                            except:
+                                                pass
+                                        
+                                        time.sleep(random.uniform(3, 5))
+                                        try:
+                                            page.wait_for_load_state('networkidle', timeout=20000)
+                                        except:
+                                            pass
+                                        print(f"✅ Cloudflare bypassed! Now at: {page.url}")
+                                    else:
+                                        print("⚠️ Turnstile did not solve in time")
+                                        # Try force-enabling and clicking anyway
+                                        try:
+                                            page.evaluate("document.getElementById('bypass-button').disabled = false")
+                                            bypass_btn.click(timeout=5000)
+                                            print("🔘 Force-clicked bypass button")
+                                            time.sleep(random.uniform(3, 5))
+                                            try:
+                                                page.wait_for_load_state('networkidle', timeout=15000)
+                                            except:
+                                                pass
+                                            print(f"✅ Cloudflare bypassed (forced)! Now at: {page.url}")
+                                        except:
+                                            # Last resort: submit form via JS
+                                            try:
+                                                page.evaluate("document.querySelector('form[action*=\"phish-bypass\"]').submit()")
+                                                print("🔘 Force-submitted phish-bypass form")
+                                                time.sleep(random.uniform(3, 5))
+                                                try:
+                                                    page.wait_for_load_state('networkidle', timeout=15000)
+                                                except:
+                                                    pass
+                                            except:
+                                                print("⚠️ Could not bypass Cloudflare warning")
                                 else:
-                                    print("⚠️ Could not bypass Cloudflare warning")
+                                    # No bypass button found, try any clickable element
+                                    bypass_clicked = False
+                                    for selector in ['button:visible', 'a:visible', 'input[type="submit"]:visible']:
+                                        try:
+                                            els = page.locator(selector).all()
+                                            for el in els:
+                                                try:
+                                                    el_text = el.inner_text().strip().lower()
+                                                    if 'ignore' in el_text or 'proceed' in el_text or 'تجاوز' in el_text:
+                                                        el.click()
+                                                        bypass_clicked = True
+                                                        print(f"🔘 Clicked bypass: '{el_text[:30]}'")
+                                                        break
+                                                except:
+                                                    continue
+                                        except:
+                                            continue
+                                        if bypass_clicked:
+                                            break
+                                    if bypass_clicked:
+                                        time.sleep(random.uniform(3, 5))
+                                        try:
+                                            page.wait_for_load_state('networkidle', timeout=15000)
+                                        except:
+                                            pass
+                                        print(f"✅ Cloudflare bypassed! Now at: {page.url}")
                         except:
                             pass
 
