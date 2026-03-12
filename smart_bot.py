@@ -863,9 +863,19 @@ def handle_summary_payment(page, log_fn=print):
             '[class*="method"]:visible', '[class*="option"]:visible',
         ]
         
-        visa_keywords = ['visa', 'فيزا', 'mastercard', 'ماستركارد', 'master card', 'ماستر كارد',
-                        'بطاقة ائتمان', 'credit card', 'mada', 'مدى']
+        # The sesallameh.com summary-payment page has:
+        # Option 1: "بطاقة ائتمان / مدى" with subtitle "Visa, Mastercard, مدى"
+        # Option 2: "Apple Pay"
+        # We need to click Option 1
         
+        # Primary keywords for the credit card option (high priority, exact match)
+        primary_keywords = ['بطاقة ائتمان', 'بطاقة ائتمان / مدى', 'credit card', 'credit/debit']
+        # Secondary keywords (lower priority)
+        secondary_keywords = ['visa', 'فيزا', 'mastercard', 'ماستركارد', 'mada', 'مدى']
+        # Skip these elements (banners, promotions, etc)
+        skip_keywords = ['سارع', 'عرض', 'يتبقى', 'انتهاء', 'offer', 'promo', 'banner', 'خصم', 'discount']
+        
+        # PASS 1: Look for primary keywords (exact payment method labels)
         for selector in payment_selectors:
             if payment_selected:
                 break
@@ -873,14 +883,19 @@ def handle_summary_payment(page, log_fn=print):
                 elements = page.locator(selector).all()
                 for el in elements:
                     try:
-                        el_text = el.inner_text().strip().lower()
-                        el_class = (el.get_attribute('class') or '').lower()
-                        el_id = (el.get_attribute('id') or '').lower()
-                        combined = f"{el_text} {el_class} {el_id}"
+                        el_text = el.inner_text().strip()
+                        el_text_lower = el_text.lower()
                         
-                        for kw in visa_keywords:
-                            if kw in combined:
-                                log_fn(f"💳 Selecting payment method: '{el_text[:40]}'")
+                        # Skip banners and promotions
+                        if any(sk in el_text_lower for sk in skip_keywords):
+                            continue
+                        # Skip very long text (likely a container, not a button)
+                        if len(el_text) > 100:
+                            continue
+                        
+                        for kw in primary_keywords:
+                            if kw in el_text_lower:
+                                log_fn(f"💳 Selecting payment method: '{el_text[:50]}'")
                                 el.click()
                                 payment_selected = True
                                 time.sleep(random.uniform(1, 2))
@@ -892,7 +907,38 @@ def handle_summary_payment(page, log_fn=print):
             except:
                 continue
         
-        # Also try clicking payment logo images
+        # PASS 2: If primary not found, try secondary keywords
+        if not payment_selected:
+            for selector in payment_selectors:
+                if payment_selected:
+                    break
+                try:
+                    elements = page.locator(selector).all()
+                    for el in elements:
+                        try:
+                            el_text = el.inner_text().strip()
+                            el_text_lower = el_text.lower()
+                            
+                            if any(sk in el_text_lower for sk in skip_keywords):
+                                continue
+                            if len(el_text) > 100:
+                                continue
+                            
+                            for kw in secondary_keywords:
+                                if kw in el_text_lower:
+                                    log_fn(f"💳 Selecting payment method (secondary): '{el_text[:50]}'")
+                                    el.click()
+                                    payment_selected = True
+                                    time.sleep(random.uniform(1, 2))
+                                    break
+                            if payment_selected:
+                                break
+                        except:
+                            continue
+                except:
+                    continue
+        
+        # PASS 3: Try clicking payment logo images
         if not payment_selected:
             try:
                 imgs = page.locator('img:visible').all()
@@ -900,9 +946,8 @@ def handle_summary_payment(page, log_fn=print):
                     try:
                         alt = (img.get_attribute('alt') or '').lower()
                         src = (img.get_attribute('src') or '').lower()
-                        parent_text = img.evaluate('el => el.parentElement ? el.parentElement.innerText : ""').lower()
-                        combined = f"{alt} {src} {parent_text}"
-                        if any(kw in combined for kw in visa_keywords):
+                        combined = f"{alt} {src}"
+                        if any(kw in combined for kw in ['visa', 'mada', 'mastercard', 'credit']):
                             log_fn(f"💳 Clicking payment logo: {alt or src[:30]}")
                             img.click()
                             payment_selected = True
