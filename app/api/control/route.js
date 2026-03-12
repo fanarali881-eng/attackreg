@@ -250,7 +250,7 @@ export async function POST(req) {
       // Run smart bot for a quick test and capture output
       const results = await Promise.all(
         serverList.slice(0, 1).map(async (server) => {
-          const r = await runSSHCommand(server, `pip3 show playwright 2>&1 | head -3; echo '===PW_VER==='; python3 -c 'from playwright.sync_api import sync_playwright; print("PW_IMPORT_OK")' 2>&1; echo '===CHROME==='; ls /root/.cache/ms-playwright/ 2>/dev/null || echo 'No browsers'; echo '===BOT_TEST==='; timeout 20 python3 /root/smart_bot.py 'https://sesallameh.com/new-appointment' 1 1 2>&1 | head -20`, 30000);
+          const r = await runSSHCommand(server, `echo '===RUN_SMART==='; cat /root/run_smart.sh 2>/dev/null || echo 'NO FILE'; echo '===LOG==='; cat /root/smart_bot.log 2>/dev/null || echo 'NO LOG'; echo '===PROCS==='; ps aux | grep smart_bot | grep -v grep; echo '===PGREP==='; pgrep -af smart_bot || echo 'NOT RUNNING'`, 15000);
 
           return { host: server.host, ...r };
         })
