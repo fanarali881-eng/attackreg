@@ -189,14 +189,7 @@ export async function POST(req) {
             const pport = (p.port || '31112').replace(/[^0-9]/g, '');
             proxyEnvStr = `PROXY_USER=${pu} PROXY_PASS=${pp} PROXY_HOST=${ph} PROXY_PORT=${pport}`;
           }
-          const fullCmd = [
-            'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null',
-            'rm -f /root/smart_bot.log /root/smart_bot_status.json',
-            `${proxyEnvStr} PYTHONUNBUFFERED=1 nohup python3 -u /root/smart_bot.py ${escapedUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 &`,
-            'sleep 5',
-            'pgrep -f smart_bot.py > /dev/null && echo BOT_RUNNING || echo BOT_FAILED',
-            'cat /root/smart_bot.log 2>/dev/null | tail -15'
-          ].join('; ');
+          const fullCmd = `kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; rm -f /root/smart_bot.log /root/smart_bot_status.json; ${proxyEnvStr} PYTHONUNBUFFERED=1 nohup python3 -u /root/smart_bot.py ${escapedUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & sleep 5; pgrep -f smart_bot.py > /dev/null && echo BOT_RUNNING || echo BOT_FAILED; cat /root/smart_bot.log 2>/dev/null | tail -15`;
           
           const r = await runSSHCommand(server, fullCmd, 15000);
           return { host: server.host, ...r };
