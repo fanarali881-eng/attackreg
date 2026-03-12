@@ -180,7 +180,7 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          // Build launcher script and encode as base64 to avoid escaping issues
+          // Build launcher script and encode as base64
           let scriptLines = '#!/bin/bash\nexport PYTHONUNBUFFERED=1\n';
           if (proxies && proxies.length > 0) {
             const p = proxies[0];
@@ -192,9 +192,13 @@ export async function POST(req) {
           scriptLines += 'python3 -u /root/smart_bot.py ' + safeUrl + ' ' + safeDuration + ' ' + safeInstances + '\n';
           const b64 = Buffer.from(scriptLines).toString('base64');
           
-          const fullCmd = 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; rm -f /root/smart_bot.log /root/smart_bot_status.json; echo ' + b64 + ' | base64 -d > /root/run_smart.sh && chmod +x /root/run_smart.sh && nohup bash /root/run_smart.sh > /root/smart_bot.log 2>&1 & echo STARTED';
+          // Step 1: Kill old process and create the launcher script
+          const setupCmd = 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; rm -f /root/smart_bot.log; echo ' + b64 + ' | base64 -d > /root/run_smart.sh && chmod +x /root/run_smart.sh && cat /root/run_smart.sh | head -1';
+          await runSSHCommand(server, setupCmd, 10000);
           
-          const r = await runSSHCommand(server, fullCmd, 10000);
+          // Step 2: Launch the bot in background using screen
+          const launchCmd = 'screen -dmS smartbot bash -c "bash /root/run_smart.sh > /root/smart_bot.log 2>&1"; sleep 2; screen -ls | grep smartbot && echo BOT_STARTED || echo BOT_FAILED';
+          const r = await runSSHCommand(server, launchCmd, 10000);
           return { host: server.host, ...r };
         })
       );
@@ -203,7 +207,7 @@ export async function POST(req) {
     } else if (action === 'stop-sesallameh' || action === 'stop-smart') {
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; echo "Bot stopped"', 15000);
+          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; echo "Bot stopped"', 15000);
           return { host: server.host, ...r };
         })
       );
