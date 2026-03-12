@@ -466,34 +466,104 @@ def smart_fill_page(page, target_url, log_fn=print):
             except:
                 continue
 
-        # ===== STEP 3: Handle select dropdowns =====
-        selects = page.locator('select:visible').all()
-        for sel in selects:
-            try:
-                options = sel.locator('option').all()
-                if len(options) > 1:
-                    # Skip first option if it's a placeholder (اختر, -- , select)
+        # ===== STEP 3: Handle select dropdowns (SMART) =====
+        # Process selects multiple times because some depend on previous selections
+        for select_pass in range(3):
+            selects = page.locator('select:visible').all()
+            for sel in selects:
+                try:
+                    # Get select attributes for smart detection
+                    sel_name = (sel.get_attribute('name') or '').lower()
+                    sel_id = (sel.get_attribute('id') or '').lower()
+                    sel_label = ''
+                    try:
+                        sid = sel.get_attribute('id')
+                        if sid:
+                            lbl = page.locator(f'label[for="{sid}"]')
+                            if lbl.count() > 0:
+                                sel_label = lbl.first.inner_text().lower()
+                    except:
+                        pass
+                    try:
+                        parent_text = sel.evaluate('el => el.parentElement ? el.parentElement.innerText : ""')
+                        sel_nearby = (parent_text or '').lower()[:200]
+                    except:
+                        sel_nearby = ''
+                    
+                    sel_clues = f"{sel_name} {sel_id} {sel_label} {sel_nearby}"
+                    
+                    options = sel.locator('option').all()
+                    if len(options) <= 1:
+                        continue
+                    
+                    # Check if already selected (not on placeholder)
+                    try:
+                        current_val = sel.input_value()
+                        if current_val and current_val != '' and select_pass > 0:
+                            continue  # Already filled in previous pass
+                    except:
+                        pass
+                    
+                    # Skip first option if it's a placeholder
                     start_idx = 0
                     try:
                         first_text = options[0].inner_text().strip()
-                        if any(kw in first_text.lower() for kw in ['اختر', 'اختار', 'select', '--', '- -', 'choose', 'الكل']):
+                        if any(kw in first_text.lower() for kw in ['اختر', 'اختار', 'select', '--', '- -', 'choose', 'الكل', 'حدد']):
                             start_idx = 1
                     except:
                         start_idx = 1
-
-                    if start_idx < len(options):
-                        idx = random.randint(start_idx, min(len(options) - 1, start_idx + 5))
-                        sel.select_option(index=idx)
-                        selected_count += 1
-                        try:
-                            selected_text = options[idx].inner_text().strip()
-                            log_fn(f"  ✅ [select] = {selected_text[:30]}")
-                        except:
-                            log_fn(f"  ✅ [select] index={idx}")
-                        time.sleep(random.uniform(0.5, 1.5))
-            except Exception as e:
-                log_fn(f"  ⚠️ Skip select: {str(e)[:50]}")
-                continue
+                    
+                    if start_idx >= len(options):
+                        continue
+                    
+                    # SMART SELECTION: detect what the dropdown is for
+                    chosen_idx = None
+                    
+                    # Nationality dropdown - ALWAYS choose Saudi
+                    is_nationality = any(kw in sel_clues for kw in ['جنسية', 'nationality', 'الجنسية', 'بلد', 'country', 'دولة'])
+                    if is_nationality:
+                        for i in range(start_idx, len(options)):
+                            try:
+                                opt_text = options[i].inner_text().strip()
+                                if any(kw in opt_text for kw in ['السعودية', 'سعودي', 'Saudi', 'saudi', 'المملكة']):
+                                    chosen_idx = i
+                                    break
+                            except:
+                                continue
+                    
+                    # Vehicle status - choose "has license"
+                    is_vehicle_status = any(kw in sel_clues for kw in ['حالة المركبة', 'vehicle status', 'رخصة سير'])
+                    if is_vehicle_status:
+                        for i in range(start_idx, len(options)):
+                            try:
+                                opt_text = options[i].inner_text().strip()
+                                if 'رخصة' in opt_text or 'تحمل' in opt_text:
+                                    chosen_idx = i
+                                    break
+                            except:
+                                continue
+                    
+                    # If no smart match, pick random from ALL valid options
+                    if chosen_idx is None:
+                        chosen_idx = random.randint(start_idx, len(options) - 1)
+                    
+                    sel.select_option(index=chosen_idx)
+                    selected_count += 1
+                    try:
+                        selected_text = options[chosen_idx].inner_text().strip()
+                        log_fn(f"  ✅ [select] = {selected_text[:30]}")
+                        filled_data[f'select_{sel_name or sel_id or str(selected_count)}'] = selected_text
+                    except:
+                        log_fn(f"  ✅ [select] index={chosen_idx}")
+                    time.sleep(random.uniform(0.5, 1.5))
+                    
+                except Exception as e:
+                    log_fn(f"  ⚠️ Skip select: {str(e)[:50]}")
+                    continue
+            
+            # Wait for dependent dropdowns to load after each pass
+            if select_pass < 2:
+                time.sleep(random.uniform(1, 2))
 
         # ===== STEP 4: Handle radio buttons =====
         radio_groups = {}
@@ -605,6 +675,33 @@ def smart_fill_page(page, target_url, log_fn=print):
                 pass
             current_url = page.url
             log_fn(f"📄 After submit URL: {current_url}")
+            
+            # Check for validation errors on the page
+            try:
+                error_selectors = [
+                    '.error', '.error-message', '.alert-danger', '.invalid-feedback',
+                    '.field-error', '.form-error', '[class*="error"]', '[class*="invalid"]',
+                    '.text-danger', '.text-red', '.validation-error'
+                ]
+                errors_found = []
+                for selector in error_selectors:
+                    try:
+                        error_els = page.locator(selector + ':visible').all()
+                        for el in error_els:
+                            try:
+                                err_text = el.inner_text().strip()
+                                if err_text and len(err_text) > 2:
+                                    errors_found.append(err_text[:100])
+                            except:
+                                pass
+                    except:
+                        pass
+                if errors_found:
+                    log_fn(f"⚠️ Validation errors found: {'; '.join(errors_found[:5])}")
+                    filled_data['validation_errors'] = errors_found[:5]
+            except:
+                pass
+            
             return True, True, filled_data  # success, might have next page, data
         else:
             log_fn("⚠️ No submit button found")
