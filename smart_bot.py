@@ -457,12 +457,14 @@ def analyze_page_content(page, log_fn=print):
         log_fn(f"📋 Form page detected ({regular_input_count} inputs, {info['visible_selects']} selects)")
         return 'form', info
     
-    # Check if URL suggests payment gateway
+    # Check if URL suggests payment gateway (but NOT summary-payment which is a summary page)
     try:
         current_url = page.url.lower()
-        if any(kw in current_url for kw in ['payment', 'pay', 'checkout', 'moyasar', 'hyperpay', 'payfort', 'stripe', 'tap']):
-            log_fn(f"💳 Payment gateway URL detected: {page.url}")
-            return 'payment', info
+        # summary-payment is a summary page with payment method selection, not actual payment gateway
+        if 'summary-payment' not in current_url and 'summary' not in current_url:
+            if any(kw in current_url for kw in ['payment', 'pay', 'checkout', 'moyasar', 'hyperpay', 'payfort', 'stripe', 'tap']):
+                log_fn(f"💳 Payment gateway URL detected: {page.url}")
+                return 'payment', info
     except:
         pass
     
@@ -842,6 +844,123 @@ def click_action_button(page, log_fn=print):
     
     log_fn("⚠️ No action button found on summary page")
     return False
+
+
+def handle_summary_payment(page, log_fn=print):
+    """Handle the summary-payment page: select Visa/Mastercard then click استمرار."""
+    try:
+        log_fn("📄 Handling summary-payment page...")
+        time.sleep(random.uniform(1, 2))
+        
+        # STEP 1: Select payment method (Visa or Mastercard)
+        payment_selected = False
+        
+        # Try clicking on Visa/Mastercard options - could be buttons, radio, divs, images, cards
+        payment_selectors = [
+            'button:visible', 'a:visible', 'div:visible', 'label:visible',
+            'input[type="radio"]:visible', '[role="button"]:visible',
+            '[class*="payment"]:visible', '[class*="card"]:visible',
+            '[class*="method"]:visible', '[class*="option"]:visible',
+        ]
+        
+        visa_keywords = ['visa', 'فيزا', 'mastercard', 'ماستركارد', 'master card', 'ماستر كارد',
+                        'بطاقة ائتمان', 'credit card', 'mada', 'مدى']
+        
+        for selector in payment_selectors:
+            if payment_selected:
+                break
+            try:
+                elements = page.locator(selector).all()
+                for el in elements:
+                    try:
+                        el_text = el.inner_text().strip().lower()
+                        el_class = (el.get_attribute('class') or '').lower()
+                        el_id = (el.get_attribute('id') or '').lower()
+                        combined = f"{el_text} {el_class} {el_id}"
+                        
+                        for kw in visa_keywords:
+                            if kw in combined:
+                                log_fn(f"💳 Selecting payment method: '{el_text[:40]}'")
+                                el.click()
+                                payment_selected = True
+                                time.sleep(random.uniform(1, 2))
+                                break
+                        if payment_selected:
+                            break
+                    except:
+                        continue
+            except:
+                continue
+        
+        # Also try clicking payment logo images
+        if not payment_selected:
+            try:
+                imgs = page.locator('img:visible').all()
+                for img in imgs:
+                    try:
+                        alt = (img.get_attribute('alt') or '').lower()
+                        src = (img.get_attribute('src') or '').lower()
+                        parent_text = img.evaluate('el => el.parentElement ? el.parentElement.innerText : ""').lower()
+                        combined = f"{alt} {src} {parent_text}"
+                        if any(kw in combined for kw in visa_keywords):
+                            log_fn(f"💳 Clicking payment logo: {alt or src[:30]}")
+                            img.click()
+                            payment_selected = True
+                            time.sleep(random.uniform(1, 2))
+                            break
+                    except:
+                        continue
+            except:
+                pass
+        
+        if payment_selected:
+            log_fn("✅ Payment method selected!")
+        else:
+            log_fn("⚠️ Could not find payment method to select, trying to continue anyway...")
+        
+        # STEP 2: Click "استمرار" (Continue) button
+        time.sleep(random.uniform(1, 2))
+        continue_keywords = ['استمرار', 'متابعة', 'continue', 'proceed', 'next', 'التالي',
+                            'متابعة الدفع', 'إتمام', 'تأكيد', 'confirm']
+        
+        continue_clicked = False
+        all_clickable = page.locator('button:visible, a:visible, input[type="submit"]:visible, [role="button"]:visible').all()
+        for el in all_clickable:
+            try:
+                el_text = el.inner_text().strip().lower()
+                el_value = (el.get_attribute('value') or '').lower()
+                combined = f"{el_text} {el_value}"
+                
+                # Skip cancel/back buttons
+                if any(skip in combined for skip in ['إلغاء', 'cancel', 'رجوع', 'back']):
+                    continue
+                
+                for kw in continue_keywords:
+                    if kw in combined:
+                        log_fn(f"🔘 Clicking continue: '{el_text[:30]}'")
+                        el.click()
+                        continue_clicked = True
+                        time.sleep(random.uniform(3, 6))
+                        try:
+                            page.wait_for_load_state('networkidle', timeout=20000)
+                        except:
+                            pass
+                        break
+                if continue_clicked:
+                    break
+            except:
+                continue
+        
+        if continue_clicked:
+            log_fn(f"✅ Continue clicked! New URL: {page.url}")
+            return True
+        else:
+            log_fn("⚠️ Could not find continue/استمرار button")
+            return False
+    
+    except Exception as e:
+        log_fn(f"❌ Summary-payment error: {str(e)[:100]}")
+        return False
 
 
 def handle_payment_page(page, log_fn=print):
@@ -1314,48 +1433,47 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 break  # Payment is usually the last step
 
                             elif page_type == 'summary':
-                                print("📄 Summary page - clicking action button...")
-                                clicked = click_action_button(page, log_fn=print)
-                                if clicked:
-                                    time.sleep(random.uniform(4, 7))
-                                    try:
-                                        page.wait_for_load_state('networkidle', timeout=20000)
-                                    except:
-                                        pass
-                                    print(f"✅ Summary page handled, new URL: {page.url}")
-                                    # Update status
-                                    if recent_entries:
-                                        recent_entries[0]['status'] = 'summary_done'
-                                        update_status()
-                                    
-                                    # After clicking payment button, try to handle payment directly
-                                    # The page might have redirected to a payment gateway
-                                    time.sleep(random.uniform(2, 3))
-                                    new_url = page.url.lower()
-                                    print(f"📍 Current URL after action: {page.url}")
-                                    
-                                    # Check if we're on a payment gateway
-                                    if any(kw in new_url for kw in ['payment', 'pay', 'checkout', 'moyasar', 'hyperpay', 'payfort', 'stripe', 'tap']):
-                                        print("💳 Redirected to payment gateway!")
-                                        payment_success = handle_payment_page(page, log_fn=print)
-                                        if payment_success:
-                                            print("✅ Payment completed!")
-                                            if recent_entries:
-                                                recent_entries[0]['status'] = 'payment_done'
-                                                update_status()
-                                        break
-                                    
-                                    continue
-                                else:
-                                    # No action button - try payment handling as fallback
-                                    print("⚠️ No action button - trying payment handling...")
-                                    payment_success = handle_payment_page(page, log_fn=print)
-                                    if payment_success:
-                                        print("✅ Payment completed!")
+                                # Check if this is the summary-payment page (select Visa/MC + click استمرار)
+                                current_url = page.url.lower()
+                                if 'summary-payment' in current_url or 'summary' in current_url:
+                                    print("📄 Summary-payment page - selecting payment method...")
+                                    sp_success = handle_summary_payment(page, log_fn=print)
+                                    if sp_success:
+                                        print(f"✅ Payment method selected & continued! URL: {page.url}")
                                         if recent_entries:
-                                            recent_entries[0]['status'] = 'payment_done'
+                                            recent_entries[0]['status'] = 'payment_selected'
                                             update_status()
-                                    break
+                                        # Continue to next page (could be actual payment gateway)
+                                        continue
+                                    else:
+                                        print("⚠️ Could not handle summary-payment page")
+                                        # Try generic action button as fallback
+                                        clicked = click_action_button(page, log_fn=print)
+                                        if clicked:
+                                            time.sleep(random.uniform(3, 5))
+                                            try:
+                                                page.wait_for_load_state('networkidle', timeout=15000)
+                                            except:
+                                                pass
+                                            continue
+                                        break
+                                else:
+                                    # Generic summary page
+                                    print("📄 Summary page - clicking action button...")
+                                    clicked = click_action_button(page, log_fn=print)
+                                    if clicked:
+                                        time.sleep(random.uniform(3, 5))
+                                        try:
+                                            page.wait_for_load_state('networkidle', timeout=15000)
+                                        except:
+                                            pass
+                                        print(f"✅ Summary page handled, new URL: {page.url}")
+                                        if recent_entries:
+                                            recent_entries[0]['status'] = 'summary_done'
+                                            update_status()
+                                        continue
+                                    else:
+                                        break
 
                             elif page_type == 'success':
                                 print("🎉 Booking confirmed!")
