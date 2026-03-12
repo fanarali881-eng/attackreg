@@ -8,9 +8,9 @@ const DEFAULT_SERVERS = [
   { host: '142.93.41.217', username: 'root' },
   { host: '167.99.94.250', username: 'root' },
   { host: '165.22.118.138', username: 'root' },
-  { host: '167.71.135.147', username: 'root' },
-  { host: '138.68.141.255', username: 'root' },
-  { host: '206.189.21.125', username: 'root' }
+  { host: '138.68.177.243', username: 'root' },
+  { host: '167.172.61.206', username: 'root' },
+  { host: '46.101.87.130', username: 'root' }
 ];
 
 // v15 Setup: install patchright (undetected) + playwright (fallback) + Xvfb + deps
