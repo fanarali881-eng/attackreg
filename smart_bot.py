@@ -599,6 +599,55 @@ def smart_fill_page(page, target_url, log_fn=print):
             except:
                 continue
 
+        # ===== STEP 5.5: Handle selection/toggle buttons (not submit) =====
+        # Some forms use buttons as selection options (e.g., "تحمل رخصة سير" / "تحمل بطاقة جمركية")
+        selection_keywords = [
+            'تحمل رخصة سير', 'تحمل بطاقة جمركية', 'رخصة سير', 'بطاقة جمركية',
+            'نعم', 'لا', 'ذكر', 'أنثى', 'فرد', 'شركة', 'مؤسسة',
+            'شخصي', 'تجاري', 'حكومي', 'عسكري',
+        ]
+        
+        # Skip keywords that are submit buttons
+        skip_keywords = ['التالي', 'تالي', 'إرسال', 'ارسال', 'حجز', 'تأكيد', 'submit', 'next', 'إتمام', 'تسجيل']
+        
+        all_buttons = page.locator('button:visible, [role="button"]:visible, .btn:visible, [class*="option"]:visible, [class*="select"]:visible, [class*="choice"]:visible, [class*="toggle"]:visible').all()
+        for btn in all_buttons:
+            try:
+                btn_text = btn.inner_text().strip()
+                if not btn_text:
+                    continue
+                # Skip submit/next buttons
+                if any(sk in btn_text.lower() for sk in skip_keywords):
+                    continue
+                for kw in selection_keywords:
+                    if kw in btn_text:
+                        # Prefer "تحمل رخصة سير" as it's the most common option
+                        if 'رخصة سير' in btn_text or 'نعم' in btn_text or 'ذكر' in btn_text or 'فرد' in btn_text or 'شخصي' in btn_text:
+                            btn.click()
+                            clicked_count += 1
+                            log_fn(f"  ✅ [selection_btn] = {btn_text}")
+                            time.sleep(random.uniform(0.5, 1))
+                            break
+            except:
+                continue
+        
+        # Also try clicking any div/span that looks like a selection option
+        try:
+            option_elements = page.locator('[class*="card"]:visible, [class*="option"]:visible, [class*="item"]:visible').all()
+            for el in option_elements:
+                try:
+                    el_text = el.inner_text().strip()
+                    if 'رخصة سير' in el_text:
+                        el.click()
+                        clicked_count += 1
+                        log_fn(f"  ✅ [selection_card] = {el_text[:40]}")
+                        time.sleep(random.uniform(0.5, 1))
+                        break
+                except:
+                    continue
+        except:
+            pass
+
         log_fn(f"📊 Filled: {filled_count} inputs | {selected_count} selects | {clicked_count} clicks")
 
         # ===== STEP 6: Find and click submit/next button =====
