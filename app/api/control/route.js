@@ -180,10 +180,19 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          const fullCmd = `kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; sleep 1; ` +
-            `export ${proxyEnv ? proxyEnv + ' ' : ''}PYTHONUNBUFFERED=1; ` +
-            `nohup python3 -u /root/smart_bot.py '${escapedUrl}' ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1 & ` +
-            `sleep 3; echo "Smart bot started"; head -5 /root/smart_bot.log 2>/dev/null`;
+          // Create a launcher script on the server
+          let envLines = 'export PYTHONUNBUFFERED=1\n';
+          if (proxies && proxies.length > 0) {
+            const p = proxies[0];
+            envLines += `export PROXY_USER=${(p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '')}\n`;
+            envLines += `export PROXY_PASS=${(p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '')}\n`;
+            envLines += `export PROXY_HOST=${(p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '')}\n`;
+            envLines += `export PROXY_PORT=${(p.port || '31112').replace(/[^0-9]/g, '')}\n`;
+          }
+          const fullCmd = `kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; sleep 1; ` +
+            `printf '#!/bin/bash\n${envLines}python3 -u /root/smart_bot.py "${escapedUrl}" ${safeDuration} ${safeInstances}\n' > /root/run_smart.sh && chmod +x /root/run_smart.sh && ` +
+            `nohup /root/run_smart.sh > /root/smart_bot.log 2>&1 & ` +
+            `sleep 2 && pgrep -f smart_bot.py > /dev/null && echo 'BOT_RUNNING' || echo 'BOT_FAILED'; cat /root/smart_bot.log 2>/dev/null | head -10`;
           
           const r = await runSSHCommand(server, fullCmd, 15000);
           return { host: server.host, ...r };
