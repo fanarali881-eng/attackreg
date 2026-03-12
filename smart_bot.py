@@ -847,176 +847,207 @@ def click_action_button(page, log_fn=print):
 
 
 def handle_summary_payment(page, log_fn=print):
-    """Handle the summary-payment page: select Visa/Mastercard then click استمرار."""
+    """Handle the summary-payment page: select بطاقة ائتمان/مدى then click متابعة الدفع."""
     try:
         log_fn("📄 Handling summary-payment page...")
         time.sleep(random.uniform(1, 2))
         
-        # STEP 1: Select payment method (Visa or Mastercard)
-        # The page has: "بطاقة ائتمان / مدى" (Visa, Mastercard, مدى) and "Apple Pay"
+        # ===== STEP 1: Select the first payment option (بطاقة ائتمان / مدى) =====
+        # The page has 2 options: credit card and Apple Pay
+        # We need to PROPERLY select the first one so the button activates
+        # Simple JS click doesn't work - need to dispatch full events for React/Vue
+        
         payment_selected = False
         
-        # Strategy: Try radio buttons first, then specific clickable elements
-        # Avoid clicking on containers/divs that contain multiple payment options
-        
-        # ATTEMPT 1: Radio buttons or inputs for payment method
+        # METHOD 1: Use Playwright to find and click the first payment option card/div
+        # Look for the element containing "بطاقة ائتمان" using Playwright text selector
         try:
-            radios = page.locator('input[type="radio"]:visible').all()
-            for radio in radios:
-                try:
-                    radio_id = radio.get_attribute('id') or ''
-                    radio_name = radio.get_attribute('name') or ''
-                    radio_value = radio.get_attribute('value') or ''
-                    # Try to get the label text
-                    label_text = ''
-                    if radio_id:
-                        try:
-                            lbl = page.locator(f'label[for="{radio_id}"]')
-                            if lbl.count() > 0:
-                                label_text = lbl.first.inner_text().strip().lower()
-                        except:
-                            pass
-                    combined = f"{radio_name} {radio_value} {label_text}".lower()
-                    if any(kw in combined for kw in ['بطاقة', 'card', 'credit', 'visa', 'mada', 'مدى', 'ائتمان']):
-                        log_fn(f"💳 Clicking radio for card payment: {combined[:50]}")
-                        radio.click()
-                        payment_selected = True
-                        time.sleep(random.uniform(1, 2))
-                        break
-                except:
-                    continue
+            # Try text-based locators first (Playwright handles events properly)
+            credit_option = page.locator('text=بطاقة ائتمان').first
+            if credit_option.is_visible():
+                log_fn("💳 Found 'بطاقة ائتمان' element, clicking...")
+                credit_option.click(force=True)
+                payment_selected = True
+                time.sleep(random.uniform(1, 2))
         except:
             pass
         
-        # ATTEMPT 2: Try using JavaScript to find and click the credit card option
+        # METHOD 2: Try clicking the parent container of the credit card text
         if not payment_selected:
             try:
-                # Use JS to find the element containing "بطاقة ائتمان" text
-                clicked = page.evaluate('''
+                result = page.evaluate('''
                     () => {
-                        // Find all clickable elements
-                        const allElements = document.querySelectorAll('div, button, label, a, span');
-                        for (const el of allElements) {
-                            const text = el.innerText || '';
-                            const textLower = text.toLowerCase().trim();
-                            // Look for the credit card option specifically
-                            if (textLower.includes('بطاقة ائتمان') && !textLower.includes('apple')) {
-                                // Make sure it's a reasonably sized element (not the whole page)
-                                const rect = el.getBoundingClientRect();
-                                if (rect.width > 50 && rect.width < 600 && rect.height > 20 && rect.height < 200) {
-                                    el.click();
-                                    return el.innerText.substring(0, 50);
+                        // Find the element with "بطاقة ائتمان" text
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            if (node.textContent.includes('بطاقة ائتمان')) {
+                                // Walk up to find a clickable parent (div, label, button)
+                                let target = node.parentElement;
+                                for (let i = 0; i < 5 && target; i++) {
+                                    const tag = target.tagName.toLowerCase();
+                                    const rect = target.getBoundingClientRect();
+                                    // Look for a card-like container (not too big, not too small)
+                                    if (rect.height > 30 && rect.height < 200 && rect.width > 100 && rect.width < 600) {
+                                        // Dispatch full mouse events for React/Vue compatibility
+                                        target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                                        target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                                        target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                                        // Also try clicking any hidden input/radio inside
+                                        const radio = target.querySelector('input[type="radio"]');
+                                        if (radio) {
+                                            radio.checked = true;
+                                            radio.dispatchEvent(new Event('change', {bubbles: true}));
+                                            radio.dispatchEvent(new Event('input', {bubbles: true}));
+                                        }
+                                        return 'clicked: ' + target.innerText.substring(0, 40);
+                                    }
+                                    target = target.parentElement;
                                 }
                             }
                         }
                         return null;
                     }
                 ''')
-                if clicked:
-                    log_fn(f"💳 JS clicked payment method: '{clicked}'")
+                if result:
+                    log_fn(f"💳 Payment method selected via events: {result}")
                     payment_selected = True
                     time.sleep(random.uniform(1, 2))
             except Exception as e:
-                log_fn(f"⚠️ JS click failed: {str(e)[:50]}")
+                log_fn(f"⚠️ Event dispatch failed: {str(e)[:50]}")
         
-        # ATTEMPT 3: Try clicking payment logo images
+        # METHOD 3: Try radio buttons directly
         if not payment_selected:
             try:
-                imgs = page.locator('img:visible').all()
-                for img in imgs:
-                    try:
-                        alt = (img.get_attribute('alt') or '').lower()
-                        src = (img.get_attribute('src') or '').lower()
-                        combined = f"{alt} {src}"
-                        if any(kw in combined for kw in ['visa', 'mada', 'mastercard', 'credit']):
-                            log_fn(f"💳 Clicking payment logo: {alt or src[:30]}")
-                            img.click()
-                            payment_selected = True
-                            time.sleep(random.uniform(1, 2))
-                            break
-                    except:
-                        continue
+                radios = page.locator('input[type="radio"]').all()
+                if len(radios) > 0:
+                    # Click the first radio (credit card option)
+                    log_fn(f"💳 Found {len(radios)} radio buttons, clicking first one...")
+                    radios[0].click(force=True)
+                    payment_selected = True
+                    time.sleep(random.uniform(1, 2))
+            except:
+                pass
+        
+        # METHOD 4: Click any element with data attribute or class related to payment
+        if not payment_selected:
+            try:
+                result = page.evaluate('''
+                    () => {
+                        // Try to find payment option by common patterns
+                        const selectors = [
+                            '[data-payment-method]', '[data-method]', '[data-type="card"]',
+                            '.payment-option', '.payment-method', '.method-card',
+                            '[class*="payment"][class*="option"]', '[class*="payment"][class*="method"]'
+                        ];
+                        for (const sel of selectors) {
+                            const els = document.querySelectorAll(sel);
+                            if (els.length > 0) {
+                                els[0].click();
+                                els[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                return 'clicked: ' + sel + ' -> ' + (els[0].innerText || '').substring(0, 30);
+                            }
+                        }
+                        return null;
+                    }
+                ''')
+                if result:
+                    log_fn(f"💳 Payment selected via selector: {result}")
+                    payment_selected = True
+                    time.sleep(random.uniform(1, 2))
             except:
                 pass
         
         if payment_selected:
             log_fn("✅ Payment method selected!")
         else:
-            log_fn("⚠️ Could not find payment method to select, trying to continue anyway...")
+            log_fn("⚠️ Could not select payment method")
         
-        # STEP 2: Click "استمرار" (Continue) button
+        # ===== STEP 2: Click "متابعة الدفع" button =====
         time.sleep(random.uniform(1, 2))
-        continue_keywords = ['استمرار', 'متابعة', 'continue', 'proceed', 'next', 'التالي',
-                            'متابعة الدفع', 'إتمام', 'تأكيد', 'confirm']
+        
+        # Check if button is disabled
+        try:
+            btn_state = page.evaluate('''
+                () => {
+                    const buttons = document.querySelectorAll('button, a, [role="button"]');
+                    for (const btn of buttons) {
+                        const text = (btn.innerText || '').trim();
+                        if (text.includes('متابعة الدفع')) {
+                            return {
+                                text: text.substring(0, 30),
+                                disabled: btn.disabled || btn.getAttribute('disabled') !== null,
+                                className: btn.className.substring(0, 100),
+                                tagName: btn.tagName
+                            };
+                        }
+                    }
+                    return null;
+                }
+            ''')
+            if btn_state:
+                log_fn(f"🔘 Button state: disabled={btn_state.get('disabled')}, tag={btn_state.get('tagName')}, class={btn_state.get('className', '')[:50]}")
+        except:
+            pass
         
         continue_clicked = False
-        all_clickable = page.locator('button:visible, a:visible, input[type="submit"]:visible, [role="button"]:visible').all()
-        for el in all_clickable:
-            try:
-                el_text = el.inner_text().strip().lower()
-                el_value = (el.get_attribute('value') or '').lower()
-                combined = f"{el_text} {el_value}"
-                
-                # Skip cancel/back buttons
-                if any(skip in combined for skip in ['إلغاء', 'cancel', 'رجوع', 'back']):
-                    continue
-                
-                for kw in continue_keywords:
-                    if kw in combined:
-                        log_fn(f"🔘 Clicking continue: '{el_text[:30]}'")
-                        try:
-                            el.click()
-                        except Exception as click_err:
-                            # Click might cause navigation which destroys the element
-                            log_fn(f"⚠️ Click caused navigation: {str(click_err)[:50]}")
-                        continue_clicked = True
-                        time.sleep(random.uniform(3, 6))
-                        try:
-                            page.wait_for_load_state('networkidle', timeout=20000)
-                        except:
-                            pass
-                        break
-                if continue_clicked:
-                    break
-            except:
-                continue
         
-        # FALLBACK: Try using JavaScript to click the button
+        # Try Playwright click with short timeout (5s instead of 30s default)
+        try:
+            btn = page.locator('text=متابعة الدفع').first
+            if btn.is_visible():
+                log_fn("🔘 Clicking 'متابعة الدفع' with Playwright...")
+                try:
+                    btn.click(timeout=5000)
+                    continue_clicked = True
+                except:
+                    # Try force click
+                    try:
+                        btn.click(force=True, timeout=5000)
+                        continue_clicked = True
+                    except:
+                        pass
+        except:
+            pass
+        
+        # Fallback: JS click with full event dispatch
         if not continue_clicked:
             try:
-                js_clicked = page.evaluate('''
+                js_result = page.evaluate('''
                     () => {
                         const buttons = document.querySelectorAll('button, a, [role="button"]');
-                        const keywords = ['متابعة الدفع', 'استمرار', 'متابعة', 'continue', 'proceed'];
                         for (const btn of buttons) {
-                            const text = (btn.innerText || '').trim().toLowerCase();
-                            if (text.includes('إلغاء') || text.includes('cancel') || text.includes('رجوع')) continue;
-                            for (const kw of keywords) {
-                                if (text.includes(kw)) {
-                                    btn.click();
-                                    return text.substring(0, 30);
-                                }
+                            const text = (btn.innerText || '').trim();
+                            if (text.includes('متابعة الدفع')) {
+                                // Remove disabled if present
+                                btn.disabled = false;
+                                btn.removeAttribute('disabled');
+                                // Dispatch full events
+                                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                                btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                                return text.substring(0, 30);
                             }
                         }
                         return null;
                     }
                 ''')
-                if js_clicked:
-                    log_fn(f"🔘 JS clicked continue: '{js_clicked}'")
+                if js_result:
+                    log_fn(f"🔘 JS clicked 'متابعة الدفع': {js_result}")
                     continue_clicked = True
-                    time.sleep(random.uniform(3, 6))
-                    try:
-                        page.wait_for_load_state('networkidle', timeout=20000)
-                    except:
-                        pass
             except Exception as e:
-                log_fn(f"⚠️ JS continue click failed: {str(e)[:50]}")
+                log_fn(f"⚠️ JS button click failed: {str(e)[:50]}")
         
         if continue_clicked:
+            time.sleep(random.uniform(3, 5))
+            try:
+                page.wait_for_load_state('networkidle', timeout=10000)
+            except:
+                pass
             log_fn(f"✅ Continue clicked! New URL: {page.url}")
             return True
         else:
-            log_fn("⚠️ Could not find continue/استمرار button")
+            log_fn("⚠️ Could not click متابعة الدفع button")
             return False
     
     except Exception as e:
