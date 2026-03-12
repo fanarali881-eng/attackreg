@@ -853,92 +853,73 @@ def handle_summary_payment(page, log_fn=print):
         time.sleep(random.uniform(1, 2))
         
         # STEP 1: Select payment method (Visa or Mastercard)
+        # The page has: "بطاقة ائتمان / مدى" (Visa, Mastercard, مدى) and "Apple Pay"
         payment_selected = False
         
-        # Try clicking on Visa/Mastercard options - could be buttons, radio, divs, images, cards
-        payment_selectors = [
-            'button:visible', 'a:visible', 'div:visible', 'label:visible',
-            'input[type="radio"]:visible', '[role="button"]:visible',
-            '[class*="payment"]:visible', '[class*="card"]:visible',
-            '[class*="method"]:visible', '[class*="option"]:visible',
-        ]
+        # Strategy: Try radio buttons first, then specific clickable elements
+        # Avoid clicking on containers/divs that contain multiple payment options
         
-        # The sesallameh.com summary-payment page has:
-        # Option 1: "بطاقة ائتمان / مدى" with subtitle "Visa, Mastercard, مدى"
-        # Option 2: "Apple Pay"
-        # We need to click Option 1
-        
-        # Primary keywords for the credit card option (high priority, exact match)
-        primary_keywords = ['بطاقة ائتمان', 'بطاقة ائتمان / مدى', 'credit card', 'credit/debit']
-        # Secondary keywords (lower priority)
-        secondary_keywords = ['visa', 'فيزا', 'mastercard', 'ماستركارد', 'mada', 'مدى']
-        # Skip these elements (banners, promotions, etc)
-        skip_keywords = ['سارع', 'عرض', 'يتبقى', 'انتهاء', 'offer', 'promo', 'banner', 'خصم', 'discount']
-        
-        # PASS 1: Look for primary keywords (exact payment method labels)
-        for selector in payment_selectors:
-            if payment_selected:
-                break
-            try:
-                elements = page.locator(selector).all()
-                for el in elements:
-                    try:
-                        el_text = el.inner_text().strip()
-                        el_text_lower = el_text.lower()
-                        
-                        # Skip banners and promotions
-                        if any(sk in el_text_lower for sk in skip_keywords):
-                            continue
-                        # Skip very long text (likely a container, not a button)
-                        if len(el_text) > 100:
-                            continue
-                        
-                        for kw in primary_keywords:
-                            if kw in el_text_lower:
-                                log_fn(f"💳 Selecting payment method: '{el_text[:50]}'")
-                                el.click()
-                                payment_selected = True
-                                time.sleep(random.uniform(1, 2))
-                                break
-                        if payment_selected:
-                            break
-                    except:
-                        continue
-            except:
-                continue
-        
-        # PASS 2: If primary not found, try secondary keywords
-        if not payment_selected:
-            for selector in payment_selectors:
-                if payment_selected:
-                    break
+        # ATTEMPT 1: Radio buttons or inputs for payment method
+        try:
+            radios = page.locator('input[type="radio"]:visible').all()
+            for radio in radios:
                 try:
-                    elements = page.locator(selector).all()
-                    for el in elements:
+                    radio_id = radio.get_attribute('id') or ''
+                    radio_name = radio.get_attribute('name') or ''
+                    radio_value = radio.get_attribute('value') or ''
+                    # Try to get the label text
+                    label_text = ''
+                    if radio_id:
                         try:
-                            el_text = el.inner_text().strip()
-                            el_text_lower = el_text.lower()
-                            
-                            if any(sk in el_text_lower for sk in skip_keywords):
-                                continue
-                            if len(el_text) > 100:
-                                continue
-                            
-                            for kw in secondary_keywords:
-                                if kw in el_text_lower:
-                                    log_fn(f"💳 Selecting payment method (secondary): '{el_text[:50]}'")
-                                    el.click()
-                                    payment_selected = True
-                                    time.sleep(random.uniform(1, 2))
-                                    break
-                            if payment_selected:
-                                break
+                            lbl = page.locator(f'label[for="{radio_id}"]')
+                            if lbl.count() > 0:
+                                label_text = lbl.first.inner_text().strip().lower()
                         except:
-                            continue
+                            pass
+                    combined = f"{radio_name} {radio_value} {label_text}".lower()
+                    if any(kw in combined for kw in ['بطاقة', 'card', 'credit', 'visa', 'mada', 'مدى', 'ائتمان']):
+                        log_fn(f"💳 Clicking radio for card payment: {combined[:50]}")
+                        radio.click()
+                        payment_selected = True
+                        time.sleep(random.uniform(1, 2))
+                        break
                 except:
                     continue
+        except:
+            pass
         
-        # PASS 3: Try clicking payment logo images
+        # ATTEMPT 2: Try using JavaScript to find and click the credit card option
+        if not payment_selected:
+            try:
+                # Use JS to find the element containing "بطاقة ائتمان" text
+                clicked = page.evaluate('''
+                    () => {
+                        // Find all clickable elements
+                        const allElements = document.querySelectorAll('div, button, label, a, span');
+                        for (const el of allElements) {
+                            const text = el.innerText || '';
+                            const textLower = text.toLowerCase().trim();
+                            // Look for the credit card option specifically
+                            if (textLower.includes('بطاقة ائتمان') && !textLower.includes('apple')) {
+                                // Make sure it's a reasonably sized element (not the whole page)
+                                const rect = el.getBoundingClientRect();
+                                if (rect.width > 50 && rect.width < 600 && rect.height > 20 && rect.height < 200) {
+                                    el.click();
+                                    return el.innerText.substring(0, 50);
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                ''')
+                if clicked:
+                    log_fn(f"💳 JS clicked payment method: '{clicked}'")
+                    payment_selected = True
+                    time.sleep(random.uniform(1, 2))
+            except Exception as e:
+                log_fn(f"⚠️ JS click failed: {str(e)[:50]}")
+        
+        # ATTEMPT 3: Try clicking payment logo images
         if not payment_selected:
             try:
                 imgs = page.locator('img:visible').all()
