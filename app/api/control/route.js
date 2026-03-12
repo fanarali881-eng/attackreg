@@ -183,11 +183,28 @@ export async function POST(req) {
           // Build env var string for inline use
           let envStr = 'PYTHONUNBUFFERED=1';
           if (proxies && proxies.length > 0) {
-            const p = proxies[0];
-            envStr += ' PROXY_USER=' + (p.username || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            envStr += ' PROXY_PASS=' + (p.password || '').replace(/[^a-zA-Z0-9_@.-]/g, '');
-            envStr += ' PROXY_HOST=' + (p.host || 'proxy.packetstream.io').replace(/[^a-zA-Z0-9_.-]/g, '');
-            envStr += ' PROXY_PORT=' + (p.port || '31112').replace(/[^0-9]/g, '');
+            let p = proxies[0];
+            // Parse proxy URL string like http://user:pass@host:port
+            let pUser = '', pPass = '', pHost = 'proxy.packetstream.io', pPort = '31112';
+            if (typeof p === 'string') {
+              try {
+                const proxyUrl = new URL(p);
+                pUser = decodeURIComponent(proxyUrl.username || '');
+                pPass = decodeURIComponent(proxyUrl.password || '');
+                pHost = proxyUrl.hostname || 'proxy.packetstream.io';
+                pPort = proxyUrl.port || '31112';
+              } catch(e) {
+                // Fallback: try regex
+                const m = p.match(/\/\/([^:]+):([^@]+)@([^:]+):(\d+)/);
+                if (m) { pUser = m[1]; pPass = m[2]; pHost = m[3]; pPort = m[4]; }
+              }
+            } else {
+              pUser = p.username || ''; pPass = p.password || ''; pHost = p.host || 'proxy.packetstream.io'; pPort = p.port || '31112';
+            }
+            envStr += ` PROXY_USER=${pUser.replace(/[^a-zA-Z0-9_@.-]/g, '')}`;
+            envStr += ` PROXY_PASS=${pPass.replace(/[^a-zA-Z0-9_@.#!-]/g, '')}`;
+            envStr += ` PROXY_HOST=${pHost.replace(/[^a-zA-Z0-9_.-]/g, '')}`;
+            envStr += ` PROXY_PORT=${pPort.toString().replace(/[^0-9]/g, '')}`;
           }
           
           // Step 1: Kill old processes
