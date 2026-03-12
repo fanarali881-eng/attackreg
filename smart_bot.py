@@ -1431,6 +1431,105 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.mouse.move(random.randint(100, 500), random.randint(100, 300))
                         time.sleep(random.uniform(0.5, 1))
 
+                        # STEP 1.5: Handle Cloudflare phishing warning
+                        try:
+                            page_text_check = page.inner_text('body').lower()
+                            if 'phishing' in page_text_check or 'ignore & proceed' in page_text_check or 'ignore and proceed' in page_text_check or 'cdn-cgi/phish' in page.url.lower():
+                                print("⚠️ Cloudflare phishing warning detected - bypassing...")
+                                # Try clicking "Ignore & Proceed" button/link
+                                bypass_clicked = False
+                                for selector in ['button', 'a', 'input[type="submit"]']:
+                                    try:
+                                        els = page.locator(f'{selector}:visible').all()
+                                        for el in els:
+                                            try:
+                                                el_text = el.inner_text().strip().lower()
+                                                if 'ignore' in el_text or 'proceed' in el_text or 'تجاوز' in el_text:
+                                                    print(f"🔘 Clicking bypass: '{el_text[:30]}'")
+                                                    el.click()
+                                                    bypass_clicked = True
+                                                    break
+                                            except:
+                                                continue
+                                    except:
+                                        continue
+                                    if bypass_clicked:
+                                        break
+                                
+                                if not bypass_clicked:
+                                    # Try form submit for phish-bypass
+                                    try:
+                                        form = page.locator('form[action*="phish-bypass"]')
+                                        if form.count() > 0:
+                                            form.first.locator('button, input[type="submit"]').first.click()
+                                            bypass_clicked = True
+                                            print("🔘 Clicked phish-bypass form submit")
+                                    except:
+                                        pass
+                                
+                                if bypass_clicked:
+                                    time.sleep(random.uniform(3, 5))
+                                    try:
+                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                    except:
+                                        pass
+                                    print(f"✅ Cloudflare bypassed! Now at: {page.url}")
+                                else:
+                                    print("⚠️ Could not bypass Cloudflare warning")
+                        except:
+                            pass
+
+                        # STEP 1.6: Handle landing/home page - look for booking/appointment buttons
+                        try:
+                            page_type_pre, _ = analyze_page_content(page, log_fn=print)
+                            if page_type_pre in ('summary', 'unknown'):
+                                # This might be a landing page - look for booking buttons
+                                booking_keywords = ['حجز موعد', 'احجز الآن', 'حجز', 'موعد جديد', 'book now', 'book appointment',
+                                                   'new appointment', 'احجز', 'سجل الآن', 'تسجيل', 'ابدأ', 'start',
+                                                   'register', 'get started', 'حجز فحص', 'طلب موعد']
+                                landing_clicked = False
+                                # Check all clickable elements
+                                for selector in ['a:visible', 'button:visible', '[role="button"]:visible', '.btn:visible']:
+                                    try:
+                                        els = page.locator(selector).all()
+                                        for el in els:
+                                            try:
+                                                el_text = el.inner_text().strip().lower()
+                                                el_href = (el.get_attribute('href') or '').lower()
+                                                # Check text match
+                                                for kw in booking_keywords:
+                                                    if kw in el_text or kw in el_href:
+                                                        print(f"🔘 Found booking button: '{el_text[:40]}' (href: {el_href[:50]})")
+                                                        el.click()
+                                                        landing_clicked = True
+                                                        break
+                                                if landing_clicked:
+                                                    break
+                                                # Also check href for appointment/booking paths
+                                                if any(path in el_href for path in ['appointment', 'booking', 'register', 'new-', 'حجز']):
+                                                    print(f"🔘 Found booking link: '{el_text[:40]}' (href: {el_href[:50]})")
+                                                    el.click()
+                                                    landing_clicked = True
+                                                    break
+                                            except:
+                                                continue
+                                    except:
+                                        continue
+                                    if landing_clicked:
+                                        break
+                                
+                                if landing_clicked:
+                                    time.sleep(random.uniform(3, 5))
+                                    try:
+                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                    except:
+                                        pass
+                                    print(f"✅ Navigated to booking page: {page.url}")
+                                else:
+                                    print(f"ℹ️ No booking button found on landing page - proceeding with current page")
+                        except:
+                            pass
+
                         # STEP 2: Analyze the page
                         page_type, page_info = analyze_page_content(page, log_fn=print)
                         
@@ -1439,8 +1538,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             total_errors += 1
                             continue
 
-                        # STEP 3: Handle up to 5 pages (form → summary → payment → confirmation)
-                        max_pages = 5
+                        # STEP 3: Handle up to 7 pages (landing → form → summary → payment → confirmation)
+                        max_pages = 7
                         for page_num in range(1, max_pages + 1):
                             if time.time() >= end_time:
                                 break
