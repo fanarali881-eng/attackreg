@@ -216,7 +216,7 @@ def send_analytics_hit(analytics_info, page_url, hostname, proxy=None, user_agen
 # ============ CONFIG ============
 STATUS_FILE = "/root/visit_status.json"
 WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "200"))
-WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "30"))
+WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "60"))
 STAY_TIME = int(os.environ.get("STAY_TIME", "35"))
 
 PROXY_USER = os.environ.get("PROXY_USER", "")
@@ -740,11 +740,11 @@ def solve_cloudflare_once(url, proxy=None):
     # Method 2: FlareSolverr (reliable fallback)
     for port in range(8191, 8211):
         try:
-            payload = {"cmd": "request.get", "url": url, "maxTimeout": 45000}
+            payload = {"cmd": "request.get", "url": url, "maxTimeout": 120000}
             if proxy:
                 payload["proxy"] = {"url": proxy}
             
-            r = requests.post(f"http://localhost:{port}/v1", json=payload, timeout=50)
+            r = requests.post(f"http://localhost:{port}/v1", json=payload, timeout=130)
             data = r.json()
             
             if data.get("status") == "ok":
@@ -1719,109 +1719,76 @@ def visitor_protected_shared(site_info, vid, cookies, ua):
 
 
 def visitor_protected_per_proxy(site_info, vid):
-    """Per-proxy bypass: curl_cffi TLS spoof per visitor OR FlareSolverr fallback."""
+    """Per-proxy bypass: FlareSolverr ONLY with retry on multiple ports."""
     url = site_info["target_url"]
     proxy = get_proxy_url()
     fp, profile = gen_fingerprint()
     
-    # Try curl_cffi direct bypass first (fast)
-    if HAS_CFFI:
+    # FlareSolverr ONLY - try up to 3 different ports
+    start_port = 8191 + (vid % 10)
+    for attempt in range(3):
+        flare_port = 8191 + ((vid + attempt) % 10)
         try:
-            r = smart_request(url, profile, proxy=proxy, timeout=20)
+            payload = {"cmd": "request.get", "url": url, "maxTimeout": 120000}
+            if proxy:
+                payload["proxy"] = {"url": proxy}
             
-            # ADVANCED VERIFICATION
-            success, reason = verify_visit_response(r)
-            if success:
-                cookies = dict(r.cookies)
-                with lock:
-                    stats["success"] += 1
-                    stats["active_visitors"] += 1
-                    stats["verified_visitors"] += 1
-                    stats["unique_ips"] += 1
-                    if stats["active_visitors"] > stats["peak_active"]:
-                        stats["peak_active"] = stats["active_visitors"]
-                    if stats["verified_visitors"] > stats["peak_verified"]:
-                        stats["peak_verified"] = stats["verified_visitors"]
-                log_progress()
+            r = requests.post(f"http://localhost:{flare_port}/v1", json=payload, timeout=130)
+            data = r.json()
+            
+            if data.get("status") == "ok":
+                solution = data.get("solution", {})
+                sol_html = solution.get("response", "")
+                cookies = {c["name"]: c["value"] for c in solution.get("cookies", [])}
+                ua = solution.get("userAgent", profile["ua"])
                 
-                stay = STAY_TIME + random.randint(-5, 5)
-                end_time = time.time() + max(stay, 15)
+                # Consider success if response > 50KB (real site content)
+                flare_success = False
+                if len(sol_html) > 50000:
+                    flare_success = True
+                elif sol_html and not any(ind in sol_html.lower() for ind in BLOCK_INDICATORS):
+                    flare_success = True
                 
-                while time.time() < end_time and not stop_event.is_set():
-                    time.sleep(random.uniform(3, 8))
-                    if time.time() >= end_time or stop_event.is_set(): break
-                    page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
-                    try:
-                        smart_request(site_info["base_url"] + page, profile, proxy=proxy,
-                                    cookies=cookies, timeout=10)
-                    except: pass
-                
-                with lock:
-                    stats["active_visitors"] -= 1
-                    stats["verified_visitors"] -= 1
-                return True
+                if flare_success:
+                    with lock:
+                        stats["success"] += 1
+                        stats["active_visitors"] += 1
+                        stats["verified_visitors"] += 1
+                        stats["unique_ips"] += 1
+                        if stats["active_visitors"] > stats["peak_active"]:
+                            stats["peak_active"] = stats["active_visitors"]
+                        if stats["verified_visitors"] > stats["peak_verified"]:
+                            stats["peak_verified"] = stats["verified_visitors"]
+                    log_progress()
+                    
+                    # Browse other pages via FlareSolverr
+                    stay = STAY_TIME + random.randint(-5, 5)
+                    end_time = time.time() + max(stay, 15)
+                    
+                    while time.time() < end_time and not stop_event.is_set():
+                        time.sleep(random.uniform(5, 12))
+                        if time.time() >= end_time or stop_event.is_set(): break
+                        page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
+                        page_url = site_info["base_url"] + page
+                        try:
+                            nav_payload = {"cmd": "request.get", "url": page_url, "maxTimeout": 60000}
+                            if proxy:
+                                nav_payload["proxy"] = {"url": proxy}
+                            requests.post(f"http://localhost:{flare_port}/v1", json=nav_payload, timeout=65)
+                        except: pass
+                    
+                    with lock:
+                        stats["active_visitors"] -= 1
+                        stats["verified_visitors"] -= 1
+                    return True
+                else:
+                    with lock: stats["blocked_visitors"] += 1
+                    break  # Got response but blocked, don't retry
             else:
-                with lock: stats["blocked_visitors"] += 1
-        except:
-            pass
-    
-    # Fallback: FlareSolverr
-    flare_port = 8191 + (vid % 20)
-    try:
-        payload = {"cmd": "request.get", "url": url, "maxTimeout": 30000}
-        if proxy:
-            payload["proxy"] = {"url": proxy}
-        
-        r = requests.post(f"http://localhost:{flare_port}/v1", json=payload, timeout=35)
-        data = r.json()
-        
-        if data.get("status") == "ok":
-            solution = data.get("solution", {})
-            sol_html = solution.get("response", "")
-            cookies = {c["name"]: c["value"] for c in solution.get("cookies", [])}
-            ua = solution.get("userAgent", profile["ua"])
-            
-            # Verify FlareSolverr actually got real content
-            flare_blocked = False
-            if sol_html:
-                sol_lower = sol_html.lower()
-                for indicator in BLOCK_INDICATORS:
-                    if indicator in sol_lower:
-                        flare_blocked = True
-                        break
-            
-            if not flare_blocked:
-                with lock:
-                    stats["success"] += 1
-                    stats["active_visitors"] += 1
-                    stats["verified_visitors"] += 1
-                    stats["unique_ips"] += 1
-                    if stats["active_visitors"] > stats["peak_active"]:
-                        stats["peak_active"] = stats["active_visitors"]
-                    if stats["verified_visitors"] > stats["peak_verified"]:
-                        stats["peak_verified"] = stats["verified_visitors"]
-                log_progress()
-                
-                stay = STAY_TIME + random.randint(-5, 5)
-                end_time = time.time() + max(stay, 15)
-                
-                while time.time() < end_time and not stop_event.is_set():
-                    time.sleep(random.uniform(5, 10))
-                    if time.time() >= end_time or stop_event.is_set(): break
-                    page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
-                    try:
-                        smart_request(site_info["base_url"] + page, profile, proxy=proxy,
-                                    cookies=cookies, timeout=10)
-                    except: pass
-                
-                with lock:
-                    stats["active_visitors"] -= 1
-                    stats["verified_visitors"] -= 1
-                return True
-            else:
-                with lock: stats["blocked_visitors"] += 1
-    except:
-        pass
+                # FlareSolverr error - try next port
+                continue
+        except Exception as e:
+            continue
     
     with lock: stats["failed"] += 1
     log_progress()

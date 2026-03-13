@@ -27,6 +27,45 @@ import sys
 from urllib.parse import urlparse, urljoin
 from collections import deque
 
+
+# ============ AUTO-INSTALL PATCHRIGHT ============
+_patchright_checked = False
+
+def ensure_patchright_installed():
+    """Install patchright and chromium if not already installed. Only runs once."""
+    global _patchright_checked
+    if _patchright_checked:
+        return
+    _patchright_checked = True
+    try:
+        import patchright
+        print("  \u2705 Patchright already installed", flush=True)
+    except ImportError:
+        print("  \U0001f4e6 Installing patchright (first time only)...", flush=True)
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'patchright', '-q',
+                           '--break-system-packages'], capture_output=True, timeout=120)
+            subprocess.run([sys.executable, '-m', 'patchright', 'install', 'chromium'],
+                           capture_output=True, timeout=300)
+            print("  \u2705 Patchright installed successfully!", flush=True)
+        except Exception as e:
+            print(f"  \u274c Failed to install patchright: {e}", flush=True)
+    # Ensure Xvfb is running
+    try:
+        result = subprocess.run(['pgrep', '-f', 'Xvfb :99'], capture_output=True)
+        if result.returncode != 0:
+            subprocess.Popen(
+                ['Xvfb', ':99', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            time.sleep(1)
+            print("  \u2705 Xvfb started on :99", flush=True)
+    except:
+        pass
+    if not os.environ.get('DISPLAY'):
+        os.environ['DISPLAY'] = ':99'
+
+
 # ============ SAFE LIMITS FOR 8GB RAM ============
 MAX_BROWSER_VISITORS = 20          # Max concurrent real browsers per server
 WAVE_SIZE_BROWSER = 5              # Visitors per wave (small, accumulate)
@@ -292,8 +331,8 @@ try:
             print("FAIL:no_response")
             sys.exit(1)
         
-        # Wait for challenge
-        for _ in range(25):
+        # Wait for challenge (JS challenge auto-solves in ~5s)
+        for _ in range(15):
             content = page.content()
             if not is_challenge(content):
                 break
@@ -301,9 +340,37 @@ try:
         
         content = page.content()
         if is_challenge(content):
-            print("FAIL:challenge_stuck")
-            browser.close()
-            sys.exit(1)
+            # Check if this is a Cloudflare phishing warning page (has Turnstile + bypass button)
+            is_phishing = 'phish-bypass' in content.lower() or 'suspected phishing' in content.lower() or 'reported for potential phishing' in content.lower()
+            
+            if is_phishing:
+                print("PHISHING:detected_trying_bypass", flush=True)
+                # Use turnstile_solver to bypass phishing page
+                try:
+                    sys.path.insert(0, '/root')
+                    from turnstile_solver import bypass_phishing_in_browser
+                    success = bypass_phishing_in_browser(page, target_url)
+                    if success:
+                        time.sleep(3)
+                        content = page.content()
+                        if not is_challenge(content):
+                            print("PHISHING:bypassed_successfully", flush=True)
+                        else:
+                            print("FAIL:phishing_bypass_failed")
+                            browser.close()
+                            sys.exit(1)
+                    else:
+                        print("FAIL:phishing_bypass_returned_false")
+                        browser.close()
+                        sys.exit(1)
+                except Exception as e:
+                    print("FAIL:phishing_bypass_error:" + str(e)[:100])
+                    browser.close()
+                    sys.exit(1)
+            else:
+                print("FAIL:challenge_stuck")
+                browser.close()
+                sys.exit(1)
         
         # Wait for full page load (JavaScript execution including NexaFlow)
         time.sleep(random.uniform(3, 6))
@@ -529,6 +596,9 @@ def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAV
     Each visitor is a separate subprocess running Playwright.
     Visitors accumulate across waves and stay until time runs out.
     """
+    # Ensure patchright is installed before launching browser visitors
+    ensure_patchright_installed()
+    
     target_url = site_info.get("target_url", site_info.get("url", ""))
     
     # Get proxy URL
