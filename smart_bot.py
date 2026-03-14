@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v29 - Fully Dynamic Field Detection
+Smart Universal Form Bot v34 - React-Fix + Debug
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -499,7 +499,7 @@ def fill_all_empty_fields(page, data=None):
     
     # STEP B: Fill empty selects using Playwright select_option (React-compatible)
     try:
-        # Get info about empty selects
+        # Get info about TRULY empty selects (not ones that already have real values)
         empty_sels = page.evaluate("""() => {
             const result = [];
             const selects = document.querySelectorAll('select');
@@ -507,11 +507,18 @@ def fill_all_empty_fields(page, data=None):
             for (const sel of selects) {
                 if (sel.offsetParent === null) continue;
                 const currentOpt = sel.options[sel.selectedIndex];
-                const hasRealValue = sel.value && sel.value !== '' && sel.value !== '-' && 
-                    currentOpt && !currentOpt.text.includes('اختر') && !currentOpt.text.includes('Select');
-                if (!hasRealValue) {
+                const optText = currentOpt ? currentOpt.text.trim() : '';
+                const optVal = sel.value || '';
+                
+                // Skip if select has a real value (not empty, not placeholder)
+                const placeholderWords = ['اختر', 'اختيار', 'Select', 'Choose', '--', '---'];
+                const isPlaceholder = !optVal || optVal === '' || optVal === '-' || optVal === '0' ||
+                    placeholderWords.some(pw => optText.includes(pw)) || optText === '';
+                
+                if (isPlaceholder) {
                     const opts = Array.from(sel.options).filter(o => 
-                        o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر') && !o.text.includes('Select'));
+                        o.value && o.value !== '' && o.value !== '-' && o.value !== '0' &&
+                        !placeholderWords.some(pw => o.text.includes(pw)));
                     if (opts.length > 0) {
                         const choice = opts[Math.floor(Math.random() * opts.length)];
                         result.push({ visIdx: visIdx, value: choice.value, text: choice.text });
@@ -1517,7 +1524,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v33 (React-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v34 (React-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1585,38 +1592,48 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         try:
                             form_state = page.evaluate("""() => {
                                 const result = { inputs: {}, selects: {}, emptyFields: [] };
-                                // Check all visible inputs
                                 const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
                                 for (const inp of inputs) {
                                     if (inp.offsetParent === null) continue;
                                     const name = inp.name || inp.id || 'unnamed';
                                     result.inputs[name] = inp.value || '';
-                                    if (!inp.value || inp.value.trim() === '') result.emptyFields.push('input:' + name);
+                                    if (!inp.value || (inp.value && inp.value.trim() === '')) result.emptyFields.push('input:' + name);
                                 }
-                                // Check all visible selects
                                 const selects = document.querySelectorAll('select');
                                 for (const sel of selects) {
                                     if (sel.offsetParent === null) continue;
                                     const name = sel.name || sel.id || 'unnamed';
                                     const opt = sel.options[sel.selectedIndex];
-                                    result.selects[name] = { value: sel.value, text: opt ? opt.text : '' };
-                                    if (!sel.value || sel.value === '' || sel.value === '-' || (opt && (opt.text.includes('اختر') || opt.text.includes('Select')))) {
+                                    result.selects[name] = { value: sel.value || '', text: (opt ? opt.text : '') || '' };
+                                    if (!sel.value || sel.value === '' || sel.value === '-' || (opt && (opt.text.includes('\u0627\u062e\u062a\u0631') || opt.text.includes('Select')))) {
                                         result.emptyFields.push('select:' + name);
                                     }
                                 }
-                                // Check for validation errors already visible
                                 const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"], .text-danger');
-                                result.visibleErrors = Array.from(errors).map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 200);
+                                result.visibleErrors = Array.from(errors).map(e => (e.innerText || '').trim()).filter(t => t.length > 0 && t.length < 200);
                                 return result;
                             }""")
                             if form_state:
-                                print(f"  🔍 PRE-SUBMIT STATE:", flush=True)
-                                print(f"    Inputs: {json.dumps({k: v[:20] for k,v in form_state.get('inputs', {}).items()}, ensure_ascii=False)}", flush=True)
-                                print(f"    Selects: {json.dumps({k: v.get('text','')[:20] for k,v in form_state.get('selects', {}).items()}, ensure_ascii=False)}", flush=True)
+                                print(f"  PRE-SUBMIT STATE:", flush=True)
+                                try:
+                                    inp_summary = {k: str(v or '')[:20] for k,v in form_state.get('inputs', {}).items()}
+                                    print(f"    Inputs: {json.dumps(inp_summary, ensure_ascii=False)}", flush=True)
+                                except:
+                                    pass
+                                try:
+                                    sel_summary = {}
+                                    for k,v in form_state.get('selects', {}).items():
+                                        if isinstance(v, dict):
+                                            sel_summary[k] = str(v.get('text', ''))[:20]
+                                        else:
+                                            sel_summary[k] = str(v)[:20]
+                                    print(f"    Selects: {json.dumps(sel_summary, ensure_ascii=False)}", flush=True)
+                                except:
+                                    pass
                                 if form_state.get('emptyFields'):
-                                    print(f"    ⚠️ EMPTY FIELDS: {form_state['emptyFields']}", flush=True)
+                                    print(f"    EMPTY FIELDS: {form_state['emptyFields']}", flush=True)
                                 if form_state.get('visibleErrors'):
-                                    print(f"    ⚠️ VISIBLE ERRORS: {form_state['visibleErrors'][:3]}", flush=True)
+                                    print(f"    VISIBLE ERRORS: {form_state['visibleErrors'][:3]}", flush=True)
                         except Exception as dbg_err:
                             print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
 
