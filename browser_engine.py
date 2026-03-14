@@ -1,14 +1,14 @@
 """
-BROWSER ENGINE v3.0 - Real Playwright Browser Visitors (8GB RAM Optimized)
+BROWSER ENGINE v4.0 - Patchright Browser Visitors (Cloudflare Bypass)
 ==========================================================================
-Each visitor is a REAL Chrome browser that:
-  1. Opens the site with Playwright (executes JavaScript = NexaFlow tracks it)
-  2. Scrolls, moves mouse, clicks like a real human
-  3. Navigates between pages
+Each visitor is a REAL Chrome browser using PATCHRIGHT (not playwright) that:
+  1. Opens the site with Patchright (bypasses Cloudflare automatically)
+  2. Waits for Cloudflare challenge to pass (same method as Smart Bot)
+  3. Scrolls, moves mouse like a real human
   4. Stays on site until time runs out
 
-Architecture: Uses subprocess-based Playwright to avoid greenlet/threading issues.
-Each visitor runs in its own process via multiprocessing.
+Architecture: Uses subprocess-based Patchright to avoid greenlet/threading issues.
+Each visitor runs in its own process via subprocess.
 
 Server Specs: 4 vCPU / 8GB RAM / 160GB Disk
 Safe Limit: 20 concurrent browser visitors per server (8GB RAM)
@@ -182,10 +182,9 @@ SA_TIMEZONE = "Asia/Riyadh"
 SA_GEOLOCATION = {"latitude": 24.7136, "longitude": 46.6753}
 
 
-# ============ VISITOR SUBPROCESS SCRIPT ============
+# ============ VISITOR SUBPROCESS SCRIPT (PATCHRIGHT - Cloudflare Bypass) ============
 VISITOR_SCRIPT = '''
 import sys, time, random, json, os, re
-from urllib.parse import urlparse, urljoin
 
 target_url = sys.argv[1]
 proxy_url = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "none" else None
@@ -194,20 +193,9 @@ viewport_w = int(sys.argv[4]) if len(sys.argv) > 4 else 1920
 viewport_h = int(sys.argv[5]) if len(sys.argv) > 5 else 1080
 user_agent = sys.argv[6] if len(sys.argv) > 6 else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-parsed = urlparse(target_url)
-base_url = f"{parsed.scheme}://{parsed.netloc}"
-
 STEALTH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--disable-features=IsolateOrigins,site-per-process",
-    "--disable-web-security", "--no-first-run", "--disable-infobars",
-    "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding", "--disable-gpu", "--disable-dev-shm-usage",
-    "--disable-software-rasterizer", "--disable-extensions", "--no-sandbox",
-    "--disable-setuid-sandbox", "--disable-popup-blocking", "--disable-sync",
-    "--disable-translate", "--safebrowsing-disable-auto-update",
-    "--js-flags=--max-old-space-size=64", "--disable-logging", "--single-process",
-    "--disable-accelerated-2d-canvas",
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+    "--window-size=1280,800", "--ignore-certificate-errors",
 ]
 
 CHALLENGE_INDICATORS = [
@@ -222,27 +210,46 @@ def is_challenge(html):
     h = html.lower()
     return sum(1 for ind in CHALLENGE_INDICATORS if ind in h) >= 2
 
-def get_links(page):
-    try:
-        return page.evaluate("""(baseUrl) => {
-            const links = [];
-            document.querySelectorAll('a[href]').forEach(a => {
-                const href = a.href;
-                if (href && !href.startsWith('javascript:') && !href.startsWith('mailto:') && 
-                    !href.includes('#') && href.startsWith(baseUrl) &&
-                    !href.match(/\\\\.(css|js|png|jpg|gif|svg|ico|pdf|zip|xml|json)$/i) &&
-                    !href.match(/(logout|signout|wp-admin|admin|cart|checkout|login)/i)) {
-                    links.push(href);
-                }
-            });
-            return [...new Set(links)].slice(0, 20);
-        }""", base_url)
-    except: return []
+def bypass_cloudflare(page, max_wait=90):
+    """Bypass Cloudflare challenge - same method as Smart Bot"""
+    start = time.time()
+    for i in range(int(max_wait / 3)):
+        elapsed = int(time.time() - start)
+        if elapsed > max_wait:
+            break
+        time.sleep(3)
+        try:
+            t = page.title()
+        except:
+            t = ''
+        # Check if challenge is solved
+        if t and 'moment' not in t.lower() and 'just' not in t.lower():
+            print(f"CF_OK:{elapsed}s", flush=True)
+            return True
+        # Every 3rd iteration, try clicking the Turnstile checkbox
+        if i % 3 == 0 and i > 0:
+            try:
+                page.mouse.move(random.randint(400, 600), random.randint(300, 500))
+                time.sleep(random.uniform(0.3, 0.8))
+                page.mouse.move(170, 275)
+                time.sleep(random.uniform(0.3, 0.6))
+                page.mouse.click(170, 275)
+            except:
+                pass
+            time.sleep(8)
+            try:
+                t2 = page.title()
+                if t2 and 'moment' not in t2.lower() and 'just' not in t2.lower():
+                    elapsed2 = int(time.time() - start)
+                    print(f"CF_OK:{elapsed2}s", flush=True)
+                    return True
+            except:
+                pass
+    return False
 
 def human_scroll(page):
     try:
         total_h = page.evaluate("document.body.scrollHeight")
-        vh = viewport_h
         current = 0
         target = total_h * random.uniform(0.5, 0.8)
         while current < target:
@@ -276,10 +283,12 @@ def human_mouse(page):
     except: pass
 
 try:
-    from playwright.sync_api import sync_playwright
+    # USE PATCHRIGHT instead of playwright - this bypasses Cloudflare!
+    from patchright.sync_api import sync_playwright
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=STEALTH_ARGS)
+        # Launch with headless=False (required for Cloudflare bypass with patchright)
+        browser = p.chromium.launch(headless=False, args=STEALTH_ARGS)
         
         proxy_config = None
         if proxy_url:
@@ -298,104 +307,56 @@ try:
             "permissions": ["geolocation"],
             "color_scheme": "light",
             "java_script_enabled": True,
-            "bypass_csp": True,
             "ignore_https_errors": True,
         }
         if proxy_config:
             ctx_opts["proxy"] = proxy_config
         
         context = browser.new_context(**ctx_opts)
-        
-        # Anti-detection
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => false});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            Object.defineProperty(navigator, 'languages', {get: () => ['ar-SA', 'ar', 'en-US', 'en']});
-            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
-            window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}};
-            const oq = window.navigator.permissions.query;
-            window.navigator.permissions.query = (p) => (
-                p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : oq(p)
-            );
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-        """)
-        
         page = context.new_page()
         
-        # Navigate
-        response = page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+        # Navigate to target
+        try:
+            page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
+        except:
+            pass
         
-        if not response:
-            print("FAIL:no_response")
+        # Bypass Cloudflare (same method as Smart Bot)
+        if not bypass_cloudflare(page, max_wait=60):
+            print("FAIL:cloudflare_timeout", flush=True)
+            browser.close()
             sys.exit(1)
         
-        # Wait for challenge (JS challenge auto-solves in ~5s)
-        for _ in range(15):
-            content = page.content()
-            if not is_challenge(content):
-                break
-            time.sleep(1)
-        
-        content = page.content()
-        if is_challenge(content):
-            # Check if this is a Cloudflare phishing warning page (has Turnstile + bypass button)
-            is_phishing = 'phish-bypass' in content.lower() or 'suspected phishing' in content.lower() or 'reported for potential phishing' in content.lower()
-            
-            if is_phishing:
-                print("PHISHING:detected_trying_bypass", flush=True)
-                # Use turnstile_solver to bypass phishing page
-                try:
-                    sys.path.insert(0, '/root')
-                    from turnstile_solver import bypass_phishing_in_browser
-                    success = bypass_phishing_in_browser(page, target_url)
-                    if success:
-                        time.sleep(3)
-                        content = page.content()
-                        if not is_challenge(content):
-                            print("PHISHING:bypassed_successfully", flush=True)
-                        else:
-                            print("FAIL:phishing_bypass_failed")
-                            browser.close()
-                            sys.exit(1)
-                    else:
-                        print("FAIL:phishing_bypass_returned_false")
-                        browser.close()
-                        sys.exit(1)
-                except Exception as e:
-                    print("FAIL:phishing_bypass_error:" + str(e)[:100])
-                    browser.close()
-                    sys.exit(1)
-            else:
-                print("FAIL:challenge_stuck")
-                browser.close()
-                sys.exit(1)
-        
-        # Wait for full page load (JavaScript execution including NexaFlow)
+        # Wait for full page load
         time.sleep(random.uniform(3, 6))
         
-        # SUCCESS - visitor is IN the site with JS running
+        # Verify we're actually on the site
+        content = page.content()
+        if is_challenge(content):
+            print("FAIL:still_on_challenge", flush=True)
+            browser.close()
+            sys.exit(1)
+        
+        # SUCCESS - visitor is IN the site
         print("OK:entered", flush=True)
         
         start_time = time.time()
         interaction_count = 0
         error_count = 0
         
-        # STAY on this page - scroll + mouse only (no page navigation!)
-        # This keeps NexaFlow session alive and visitor counted
+        # STAY on this page - scroll + mouse only (no form filling!)
         while time.time() - start_time < stay_seconds:
             try:
                 # Check if page is still alive
                 try:
                     page.evaluate("1+1")
                 except:
-                    # Page crashed or disconnected - try to reload
                     error_count += 1
                     if error_count > 5:
                         break
                     try:
-                        page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+                        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                        bypass_cloudflare(page, max_wait=30)
                         time.sleep(random.uniform(3, 6))
                     except:
                         time.sleep(5)
@@ -433,20 +394,20 @@ try:
                     time.sleep(1)
                     waited += 1
                 
-                # Every 60s print heartbeat so parent knows we're alive
+                # Every 60s print heartbeat
                 elapsed = int(time.time() - start_time)
                 if elapsed > 0 and elapsed % 60 < 5:
                     print(f"ALIVE:{elapsed}s:interactions_{interaction_count}", flush=True)
                 
-                error_count = 0  # Reset on success
+                error_count = 0
                 
             except Exception as e:
                 error_count += 1
                 if error_count > 5:
                     break
-                # Try to reload page and continue
                 try:
-                    page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                    bypass_cloudflare(page, max_wait=30)
                     time.sleep(random.uniform(3, 6))
                 except:
                     time.sleep(random.uniform(2, 5))
@@ -468,7 +429,7 @@ except Exception as e:
 # ============ REAL BROWSER VISITOR (runs as subprocess) ============
 def real_browser_visitor(target_url, proxy_url, stay_seconds, vid, stats, lock, stop_event):
     """
-    Launch a real Playwright browser as a subprocess.
+    Launch a real Patchright browser as a subprocess.
     The visitor stays on the site executing JavaScript until stop_event or stay_seconds.
     """
     viewport = random.choice(VIEWPORTS)
@@ -593,7 +554,7 @@ def real_browser_visitor(target_url, proxy_url, stay_seconds, vid, stats, lock, 
 def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAVE_SIZE_BROWSER):
     """
     Launch a wave of real browser visitors.
-    Each visitor is a separate subprocess running Playwright.
+    Each visitor is a separate subprocess running Patchright.
     Visitors accumulate across waves and stay until time runs out.
     """
     # Ensure patchright is installed before launching browser visitors
@@ -654,7 +615,7 @@ def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAV
     
     if launched > 0:
         mem = get_memory_usage_percent()
-        print(f"  \u2705 Wave {wave_num+1}: {launched} real browsers launched! "
+        print(f"  \u2705 Wave {wave_num+1}: {launched} patchright browsers launched! "
               f"RAM: {mem}% | Active: {current_active + launched}/{MAX_BROWSER_VISITORS}", flush=True)
     
     return launched
@@ -663,8 +624,8 @@ def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAV
 # ============ COOKIE HARVESTER (compatibility - now uses subprocess too) ============
 def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
     """
-    Start cookie harvester. In v3, this pre-warms a few cookies for fallback.
-    Main visitors use real browsers directly (not cookies).
+    Start cookie harvester. In v4, this pre-warms a few cookies for fallback.
+    Main visitors use real patchright browsers directly (not cookies).
     """
     def _harvester():
         proxy_url = proxy_url_func()
@@ -672,7 +633,7 @@ def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
             return
         
         # Just add a dummy cookie set so the pool isn't empty
-        # Real visitors use subprocess Playwright directly
+        # Real visitors use subprocess Patchright directly
         cookie_pool.add({
             "cookies": {"_dummy": "1"},
             "proxy": proxy_url,
@@ -682,7 +643,7 @@ def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
             "pages": [target_url],
             "base_url": f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}",
         })
-        print(f"  \U0001f35e Cookie pool seeded (v3: visitors use real browsers)", flush=True)
+        print(f"  \U0001f35e Cookie pool seeded (v4: visitors use patchright browsers)", flush=True)
     
     t = threading.Thread(target=_harvester, daemon=True)
     t.start()
@@ -691,18 +652,18 @@ def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
 
 # ============ INSTALL HELPER ============
 def install_playwright():
-    """Install Playwright and Chromium browser."""
-    print("\U0001f4e6 Installing Playwright...", flush=True)
-    os.system("pip3 install playwright -q 2>/dev/null")
-    os.system("pip3 install playwright --break-system-packages -q 2>/dev/null")
-    os.system("playwright install chromium --with-deps 2>/dev/null")
-    print("\u2705 Playwright installed!", flush=True)
+    """Install Patchright and Chromium browser."""
+    print("\U0001f4e6 Installing Patchright...", flush=True)
+    os.system("pip3 install patchright -q 2>/dev/null")
+    os.system("pip3 install patchright --break-system-packages -q 2>/dev/null")
+    os.system("python3 -m patchright install chromium 2>/dev/null")
+    print("\u2705 Patchright installed!", flush=True)
 
 
 def is_playwright_available():
-    """Check if Playwright is installed and ready."""
+    """Check if Patchright is installed and ready."""
     try:
-        from playwright.sync_api import sync_playwright
+        from patchright.sync_api import sync_playwright
         return True
     except ImportError:
         return False
