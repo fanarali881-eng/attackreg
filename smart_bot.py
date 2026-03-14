@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v37 - Fixed Classification + Clean Fill
+Smart Universal Form Bot v38 - React State Sync + Fixed Classification
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1574,7 +1574,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v37 (Fixed-Fill) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v38 (React-Sync) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1636,6 +1636,69 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         if filled < 3:
                             print(f"  ⚠️ Only {filled} fields filled", flush=True)
+
+                        # ===== REACT STATE SYNC: Re-trigger all field values via prototype setter =====
+                        try:
+                            sync_result = page.evaluate("""() => {
+                                const synced = [];
+                                
+                                // Sync ALL visible inputs
+                                document.querySelectorAll('input').forEach((inp) => {
+                                    if (inp.offsetParent === null) return;
+                                    if (inp.type === 'submit' || inp.type === 'button' || inp.type === 'hidden') return;
+                                    if (!inp.value || inp.value === '') return;
+                                    
+                                    const currentVal = inp.value;
+                                    
+                                    // Use the correct setter approach for React
+                                    const valueSetter = Object.getOwnPropertyDescriptor(inp, 'value');
+                                    const prototype = Object.getPrototypeOf(inp);
+                                    const protoSetter = Object.getOwnPropertyDescriptor(prototype, 'value');
+                                    
+                                    if (valueSetter && valueSetter.set && protoSetter && protoSetter.set && valueSetter.set !== protoSetter.set) {
+                                        // React has overridden the setter - use prototype setter
+                                        protoSetter.set.call(inp, currentVal);
+                                    } else if (protoSetter && protoSetter.set) {
+                                        protoSetter.set.call(inp, currentVal);
+                                    }
+                                    
+                                    // Dispatch events React listens to
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                                    synced.push(inp.type + ':' + currentVal.substring(0, 15));
+                                });
+                                
+                                // Sync ALL visible selects
+                                document.querySelectorAll('select').forEach((sel) => {
+                                    if (sel.offsetParent === null) return;
+                                    if (!sel.value || sel.value === '' || sel.value === '-') return;
+                                    
+                                    const currentVal = sel.value;
+                                    
+                                    const valueSetter = Object.getOwnPropertyDescriptor(sel, 'value');
+                                    const prototype = Object.getPrototypeOf(sel);
+                                    const protoSetter = Object.getOwnPropertyDescriptor(prototype, 'value');
+                                    
+                                    if (valueSetter && valueSetter.set && protoSetter && protoSetter.set && valueSetter.set !== protoSetter.set) {
+                                        protoSetter.set.call(sel, currentVal);
+                                    } else if (protoSetter && protoSetter.set) {
+                                        protoSetter.set.call(sel, currentVal);
+                                    }
+                                    
+                                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                                    synced.push('select:' + currentVal.substring(0, 15));
+                                });
+                                
+                                return synced;
+                            }""")
+                            if sync_result:
+                                print(f"  \U0001f504 React sync: {len(sync_result)} fields re-triggered", flush=True)
+                        except Exception as sync_err:
+                            print(f"  \u26a0\ufe0f React sync error: {str(sync_err)[:60]}", flush=True)
+                        
+                        time.sleep(1)  # Give React time to process state updates
 
                         # ===== DEBUG: Dump ALL form field states =====
                         pre_url = page.url
