@@ -379,50 +379,119 @@ def bypass_cloudflare(page, max_wait=90):
 
 # ============ DYNAMIC FORM FILLING ============
 
-def fill_all_empty_fields(page):
-    """Fill ALL empty visible inputs and selects on the current page using JS"""
+def fill_all_empty_fields(page, data=None):
+    """Fill ALL empty visible inputs and selects using smart classification + Playwright fill()"""
+    if data is None:
+        data = {
+            'name': gen_name(),
+            'national_id': gen_saudi_id(),
+            'phone': gen_saudi_phone(),
+            'email': gen_email(),
+            'plate_num': gen_plate_number(),
+        }
+    
+    filled = 0
+    
+    # STEP A: Get all empty input fields info via JS
     try:
-        result = page.evaluate("""() => {
-            let filled = 0;
-            
-            // Fill empty inputs
+        empty_inputs = page.evaluate("""() => {
+            const fields = [];
             const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+            let visIdx = 0;
             for (const inp of inputs) {
                 if (inp.offsetParent === null) continue;
-                if (inp.value && inp.value.trim() !== '') continue;
+                if (inp.value && inp.value.trim() !== '') { visIdx++; continue; }
                 
+                const ph = inp.getAttribute('placeholder') || '';
+                const name = inp.getAttribute('name') || '';
+                const id = inp.getAttribute('id') || '';
                 const type = inp.getAttribute('type') || 'text';
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                const ac = inp.getAttribute('autocomplete') || '';
+                const aria = inp.getAttribute('aria-label') || '';
+                const maxlen = inp.getAttribute('maxlength') || '';
                 
-                if (type === 'date') {
-                    const d = new Date();
-                    d.setDate(d.getDate() + Math.floor(Math.random() * 14) + 1);
-                    const val = d.toISOString().split('T')[0];
-                    setter.call(inp, val);
-                } else if (type === 'email') {
-                    setter.call(inp, 'test' + Math.floor(Math.random()*9999) + '@gmail.com');
-                } else if (type === 'tel' || type === 'number') {
-                    setter.call(inp, '05' + Math.floor(Math.random()*90000000 + 10000000));
-                } else {
-                    const ph = (inp.getAttribute('placeholder') || '').toLowerCase();
-                    const parent = inp.closest('.mb-4, .mb-3, .mb-2, .form-group, [class*="form"]');
-                    const lbl = parent ? (parent.querySelector('label') || {}).innerText || '' : '';
-                    const clue = ph + ' ' + lbl.toLowerCase();
-                    
-                    if (clue.includes('\u062a\u0627\u0631\u064a\u062e') || clue.includes('date') || clue.includes('\u0645\u0648\u0639\u062f')) {
-                        const d = new Date();
-                        d.setDate(d.getDate() + Math.floor(Math.random() * 14) + 1);
-                        setter.call(inp, d.toISOString().split('T')[0]);
-                    } else {
-                        setter.call(inp, 'test' + Math.floor(Math.random()*9999));
+                let labelText = '';
+                if (id) {
+                    const lbl = document.querySelector('label[for="' + id + '"]');
+                    if (lbl) labelText = lbl.innerText.trim();
+                }
+                if (!labelText) {
+                    const parent = inp.closest('.mb-4, .mb-3, .mb-2, .form-group, [class*="form"], [class*="field"]');
+                    if (parent) {
+                        const lbl = parent.querySelector('label, .label, h6, h5');
+                        if (lbl) labelText = lbl.innerText.trim();
                     }
                 }
-                inp.dispatchEvent(new Event('input', { bubbles: true }));
-                inp.dispatchEvent(new Event('change', { bubbles: true }));
-                filled++;
+                
+                fields.push({
+                    visibleIndex: visIdx,
+                    placeholder: ph,
+                    name: name,
+                    id: id,
+                    type: type,
+                    autocomplete: ac,
+                    ariaLabel: aria,
+                    label: labelText,
+                    maxlength: maxlen,
+                    selector: id ? '#' + CSS.escape(id) : (name ? 'input[name="' + name + '"]' : null)
+                });
+                visIdx++;
             }
-            
-            // Fill empty selects
+            return fields;
+        }""")
+        
+        if empty_inputs:
+            for field in empty_inputs:
+                clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']} {field['autocomplete']} {field['ariaLabel']} type:{field['type']}"
+                field_type = classify_input_field(clues)
+                
+                if field_type == 'unknown':
+                    maxlen = field.get('maxlength', '')
+                    if maxlen == '10':
+                        field_type = 'national_id'
+                    elif maxlen == '4':
+                        field_type = 'plate_number'
+                    elif field.get('type') == 'date':
+                        field_type = 'inspection_date'
+                    elif field.get('type') == 'email':
+                        field_type = 'email'
+                    elif field.get('type') == 'tel':
+                        field_type = 'phone'
+                    else:
+                        all_clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']}"
+                        if any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
+                            field_type = 'inspection_date'
+                        else:
+                            print(f"    [refill] Unknown input: ph='{field['placeholder'][:20]}' label='{field['label'][:20]}'", flush=True)
+                            continue
+                
+                value = get_field_value(field_type, data)
+                if not value:
+                    continue
+                
+                try:
+                    selector = field.get('selector')
+                    if selector:
+                        el = page.locator(selector).first
+                    else:
+                        el = page.locator('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['visibleIndex'])
+                    
+                    if el.is_visible():
+                        el.click()
+                        time.sleep(random.uniform(0.2, 0.4))
+                        el.fill(value)
+                        time.sleep(random.uniform(0.1, 0.3))
+                        filled += 1
+                        print(f"    [refill] {field_type}: {value[:25]}", flush=True)
+                except Exception as e:
+                    print(f"    [refill] Error {field_type}: {str(e)[:50]}", flush=True)
+    except Exception as e:
+        print(f"    [refill] Input scan error: {str(e)[:80]}", flush=True)
+    
+    # STEP B: Fill empty selects using JS dispatchEvent (same as before - this works)
+    try:
+        sel_filled = page.evaluate("""() => {
+            let filled = 0;
             const selects = document.querySelectorAll('select');
             for (const sel of selects) {
                 if (sel.offsetParent === null) continue;
@@ -439,12 +508,13 @@ def fill_all_empty_fields(page):
                     filled++;
                 }
             }
-            
             return filled;
         }""")
-        return result or 0
+        filled += (sel_filled or 0)
     except:
-        return 0
+        pass
+    
+    return filled
 
 
 def fill_form_dynamically(page):
@@ -818,7 +888,7 @@ def fill_form_dynamically(page):
     # We need to keep filling until nothing is empty
     for pass_num in range(4):
         time.sleep(1.5)
-        extra = fill_all_empty_fields(page)
+        extra = fill_all_empty_fields(page, data)
         if extra > 0:
             print(f"    Pass {pass_num+2}: filled {extra} more fields", flush=True)
             filled += extra
@@ -1082,7 +1152,7 @@ def fill_payment(page):
 
 # ============ HANDLE NEXT PAGES ============
 
-def handle_next_pages(page, max_pages=8):
+def handle_next_pages(page, max_pages=8, data=None):
     """Handle multi-step form pages after initial registration"""
     retry_count = 0
     max_retries = 2
@@ -1113,12 +1183,12 @@ def handle_next_pages(page, max_pages=8):
             pass
         
         # Fill ALL empty fields on this page (inputs + selects)
-        extra_filled = fill_all_empty_fields(page)
+        extra_filled = fill_all_empty_fields(page, data)
         if extra_filled > 0:
             print(f"    Filled {extra_filled} empty fields", flush=True)
             time.sleep(1)
             # After filling selects, new dependent fields may appear
-            extra2 = fill_all_empty_fields(page)
+            extra2 = fill_all_empty_fields(page, data)
             if extra2 > 0:
                 print(f"    Filled {extra2} more dependent fields", flush=True)
                 time.sleep(1)
@@ -1171,9 +1241,9 @@ def handle_next_pages(page, max_pages=8):
             if retry_count <= max_retries:
                 # Try filling empty fields again and retry
                 print(f"    Retry {retry_count}/{max_retries}: filling empty fields...", flush=True)
-                fill_all_empty_fields(page)
+                fill_all_empty_fields(page, data)
                 time.sleep(1)
-                fill_all_empty_fields(page)
+                fill_all_empty_fields(page, data)
                 time.sleep(1)
             else:
                 print(f"    Max retries reached, moving on", flush=True)
@@ -1362,7 +1432,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v29 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v30 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1488,7 +1558,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 update_status()
                         else:
                             # Handle next pages
-                            result = handle_next_pages(page)
+                            result = handle_next_pages(page, data=data)
                             if result == 'payment':
                                 recent_entries[0]['status'] = 'payment_selected'
                                 update_status()
