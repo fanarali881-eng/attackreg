@@ -1,11 +1,11 @@
 """
-BROWSER ENGINE v4.0 - Patchright Browser Visitors (Cloudflare Bypass)
+BROWSER ENGINE v5.0 - Patchright Browser Visitors (Smart Bot Method)
 ==========================================================================
-Each visitor is a REAL Chrome browser using PATCHRIGHT (not playwright) that:
-  1. Opens the site with Patchright (bypasses Cloudflare automatically)
-  2. Waits for Cloudflare challenge to pass (same method as Smart Bot)
+Each visitor is a REAL Chrome browser using PATCHRIGHT that:
+  1. Opens the site EXACTLY like Smart Bot (same args, same context, same bypass)
+  2. Navigates between pages (clicks links) - triggers Socket.IO registration
   3. Scrolls, moves mouse like a real human
-  4. Stays on site until time runs out
+  4. Stays on site until time runs out - NO form filling, NO data entry
 
 Architecture: Uses subprocess-based Patchright to avoid greenlet/threading issues.
 Each visitor runs in its own process via subprocess.
@@ -182,9 +182,10 @@ SA_TIMEZONE = "Asia/Riyadh"
 SA_GEOLOCATION = {"latitude": 24.7136, "longitude": 46.6753}
 
 
-# ============ VISITOR SUBPROCESS SCRIPT (PATCHRIGHT - Cloudflare Bypass) ============
+# ============ VISITOR SUBPROCESS SCRIPT (EXACT SAME AS SMART BOT) ============
 VISITOR_SCRIPT = '''
 import sys, time, random, json, os, re
+from urllib.parse import urlparse, urljoin
 
 target_url = sys.argv[1]
 proxy_url = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "none" else None
@@ -193,25 +194,14 @@ viewport_w = int(sys.argv[4]) if len(sys.argv) > 4 else 1920
 viewport_h = int(sys.argv[5]) if len(sys.argv) > 5 else 1080
 user_agent = sys.argv[6] if len(sys.argv) > 6 else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-STEALTH_ARGS = [
+# EXACT SAME browser args as Smart Bot
+BROWSER_ARGS = [
     "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
     "--window-size=1280,800", "--ignore-certificate-errors",
 ]
 
-CHALLENGE_INDICATORS = [
-    "just a moment", "checking your browser", "checking if the site connection is secure",
-    "enable javascript and cookies", "verify you are human", "cf-challenge-running",
-    "challenge-platform", "managed-challenge", "_cf_chl_opt", "cf-turnstile",
-    "please wait while we verify", "access denied", "attention required",
-]
-
-def is_challenge(html):
-    if not html: return True
-    h = html.lower()
-    return sum(1 for ind in CHALLENGE_INDICATORS if ind in h) >= 2
-
 def bypass_cloudflare(page, max_wait=90):
-    """Bypass Cloudflare challenge - same method as Smart Bot"""
+    """Bypass Cloudflare challenge - EXACT SAME as Smart Bot"""
     start = time.time()
     for i in range(int(max_wait / 3)):
         elapsed = int(time.time() - start)
@@ -221,12 +211,10 @@ def bypass_cloudflare(page, max_wait=90):
         try:
             t = page.title()
         except:
-            t = ''
-        # Check if challenge is solved
-        if t and 'moment' not in t.lower() and 'just' not in t.lower():
+            t = ""
+        if t and "moment" not in t.lower() and "just" not in t.lower() and chr(1604)+chr(1581)+chr(1592)+chr(1577) not in t:
             print(f"CF_OK:{elapsed}s", flush=True)
             return True
-        # Every 3rd iteration, try clicking the Turnstile checkbox
         if i % 3 == 0 and i > 0:
             try:
                 page.mouse.move(random.randint(400, 600), random.randint(300, 500))
@@ -239,7 +227,7 @@ def bypass_cloudflare(page, max_wait=90):
             time.sleep(8)
             try:
                 t2 = page.title()
-                if t2 and 'moment' not in t2.lower() and 'just' not in t2.lower():
+                if t2 and "moment" not in t2.lower() and "just" not in t2.lower() and chr(1604)+chr(1581)+chr(1592)+chr(1577) not in t2:
                     elapsed2 = int(time.time() - start)
                     print(f"CF_OK:{elapsed2}s", flush=True)
                     return True
@@ -282,14 +270,36 @@ def human_mouse(page):
             x, y = nx, ny
     except: pass
 
+def find_site_links(page, base_url):
+    """Find internal links on the page to navigate to"""
+    try:
+        parsed = urlparse(base_url)
+        base_domain = parsed.netloc
+        links = page.evaluate("""() => {
+            const anchors = document.querySelectorAll('a[href]');
+            return Array.from(anchors).map(a => a.href).filter(h => h.startsWith('http'));
+        }""")
+        internal = []
+        for link in links:
+            try:
+                lp = urlparse(link)
+                if lp.netloc == base_domain and link != base_url and '#' not in link:
+                    internal.append(link)
+            except:
+                pass
+        return list(set(internal))
+    except:
+        return []
+
 try:
-    # USE PATCHRIGHT instead of playwright - this bypasses Cloudflare!
+    # EXACT SAME as Smart Bot - use patchright
     from patchright.sync_api import sync_playwright
-    
+
     with sync_playwright() as p:
-        # Launch with headless=False (required for Cloudflare bypass with patchright)
-        browser = p.chromium.launch(headless=False, args=STEALTH_ARGS)
-        
+        # EXACT SAME launch as Smart Bot: headless=False
+        browser = p.chromium.launch(headless=False, args=BROWSER_ARGS)
+
+        # EXACT SAME proxy config as Smart Bot
         proxy_config = None
         if proxy_url:
             from urllib.parse import urlparse as _up
@@ -297,57 +307,48 @@ try:
             proxy_config = {"server": f"{pp.scheme}://{pp.hostname}:{pp.port}"}
             if pp.username: proxy_config["username"] = pp.username
             if pp.password: proxy_config["password"] = pp.password
-        
-        ctx_opts = {
+
+        # EXACT SAME context options as Smart Bot
+        context_opts = {
             "viewport": {"width": viewport_w, "height": viewport_h},
-            "user_agent": user_agent,
-            "locale": "ar-SA",
+            "locale": "en-US",
             "timezone_id": "Asia/Riyadh",
-            "geolocation": {"latitude": 24.7136, "longitude": 46.6753},
-            "permissions": ["geolocation"],
-            "color_scheme": "light",
-            "java_script_enabled": True,
             "ignore_https_errors": True,
         }
         if proxy_config:
-            ctx_opts["proxy"] = proxy_config
-        
-        context = browser.new_context(**ctx_opts)
+            context_opts["proxy"] = proxy_config
+
+        context = browser.new_context(**context_opts)
         page = context.new_page()
-        
-        # Navigate to target
+
+        # EXACT SAME navigation as Smart Bot
         try:
             page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
         except:
             pass
-        
-        # Bypass Cloudflare (same method as Smart Bot)
-        if not bypass_cloudflare(page, max_wait=60):
+
+        # EXACT SAME Cloudflare bypass as Smart Bot
+        if not bypass_cloudflare(page, max_wait=90):
             print("FAIL:cloudflare_timeout", flush=True)
             browser.close()
             sys.exit(1)
-        
-        # Wait for full page load
-        time.sleep(random.uniform(3, 6))
-        
-        # Verify we're actually on the site
-        content = page.content()
-        if is_challenge(content):
-            print("FAIL:still_on_challenge", flush=True)
-            browser.close()
-            sys.exit(1)
-        
+
+        time.sleep(2)
+
         # SUCCESS - visitor is IN the site
         print("OK:entered", flush=True)
-        
+
+        # Collect internal links for navigation
+        site_links = find_site_links(page, target_url)
+        visited_pages = [target_url]
+
         start_time = time.time()
         interaction_count = 0
         error_count = 0
-        
-        # STAY on this page - scroll + mouse only (no form filling!)
+
         while time.time() - start_time < stay_seconds:
             try:
-                # Check if page is still alive
+                # Check page alive
                 try:
                     page.evaluate("1+1")
                 except:
@@ -357,50 +358,81 @@ try:
                     try:
                         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                         bypass_cloudflare(page, max_wait=30)
-                        time.sleep(random.uniform(3, 6))
+                        time.sleep(2)
+                        site_links = find_site_links(page, target_url)
                     except:
                         time.sleep(5)
                         continue
-                
-                # Scroll down slowly like reading
+
+                # Scroll like reading
                 human_scroll(page)
                 interaction_count += 1
-                
-                # Wait like reading content (10-30 seconds)
-                read_time = random.uniform(10, 30)
+
+                # Read time
+                read_time = random.uniform(8, 25)
                 waited = 0
                 while waited < read_time and time.time() - start_time < stay_seconds:
                     time.sleep(1)
                     waited += 1
-                
+
                 if time.time() - start_time >= stay_seconds:
                     break
-                
-                # Move mouse around like a real user
+
+                # Mouse movement
                 human_mouse(page)
                 interaction_count += 1
-                
+
+                # Navigate to another page (like a real visitor browsing the site)
+                if site_links and random.random() < 0.4:
+                    next_page = random.choice(site_links)
+                    try:
+                        page.goto(next_page, timeout=30000, wait_until="domcontentloaded")
+                        time.sleep(random.uniform(2, 5))
+                        # Check if CF challenge on new page
+                        try:
+                            t = page.title()
+                            if t and ("moment" in t.lower() or "just" in t.lower()):
+                                bypass_cloudflare(page, max_wait=30)
+                        except:
+                            pass
+                        visited_pages.append(next_page)
+                        # Refresh links from new page
+                        new_links = find_site_links(page, target_url)
+                        if new_links:
+                            site_links = list(set(site_links + new_links))
+                        print(f"PAGE:{next_page[:60]}", flush=True)
+                    except:
+                        pass
+
+                # Sometimes go back to homepage
+                if random.random() < 0.15:
+                    try:
+                        page.goto(target_url, timeout=30000, wait_until="domcontentloaded")
+                        time.sleep(random.uniform(2, 4))
+                    except:
+                        pass
+
                 # Scroll back up sometimes
                 if random.random() < 0.3:
                     try:
                         page.evaluate("window.scrollTo(0, 0)")
                         time.sleep(random.uniform(1, 3))
                     except: pass
-                
-                # Small random wait between interactions
-                pause = random.uniform(3, 10)
+
+                # Pause between interactions
+                pause = random.uniform(3, 8)
                 waited = 0
                 while waited < pause and time.time() - start_time < stay_seconds:
                     time.sleep(1)
                     waited += 1
-                
-                # Every 60s print heartbeat
+
+                # Heartbeat
                 elapsed = int(time.time() - start_time)
                 if elapsed > 0 and elapsed % 60 < 5:
-                    print(f"ALIVE:{elapsed}s:interactions_{interaction_count}", flush=True)
-                
+                    print(f"ALIVE:{elapsed}s:interactions_{interaction_count}:pages_{len(visited_pages)}", flush=True)
+
                 error_count = 0
-                
+
             except Exception as e:
                 error_count += 1
                 if error_count > 5:
@@ -408,13 +440,13 @@ try:
                 try:
                     page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                     bypass_cloudflare(page, max_wait=30)
-                    time.sleep(random.uniform(3, 6))
+                    time.sleep(2)
                 except:
                     time.sleep(random.uniform(2, 5))
-        
+
         stayed = int(time.time() - start_time)
-        print(f"DONE:stayed_{stayed}s_interactions_{interaction_count}", flush=True)
-        
+        print(f"DONE:stayed_{stayed}s_interactions_{interaction_count}_pages_{len(visited_pages)}", flush=True)
+
         try: context.close()
         except: pass
         try: browser.close()
@@ -551,7 +583,7 @@ def real_browser_visitor(target_url, proxy_url, stay_seconds, vid, stats, lock, 
 
 
 # ============ WAVE ENGINE FOR BROWSER MODE ============
-def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAVE_SIZE_BROWSER):
+def run_browser_wave(wave_num, site_info, wave_size, stats, lock, stop_event):
     """
     Launch a wave of real browser visitors.
     Each visitor is a separate subprocess running Patchright.
@@ -624,7 +656,7 @@ def run_browser_wave(wave_num, site_info, stats, lock, stop_event, wave_size=WAV
 # ============ COOKIE HARVESTER (compatibility - now uses subprocess too) ============
 def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
     """
-    Start cookie harvester. In v4, this pre-warms a few cookies for fallback.
+    Start cookie harvester. In v5, this pre-warms a few cookies for fallback.
     Main visitors use real patchright browsers directly (not cookies).
     """
     def _harvester():
@@ -643,7 +675,7 @@ def start_harvester(target_url, proxy_url_func, stop_event, num_contexts=5):
             "pages": [target_url],
             "base_url": f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}",
         })
-        print(f"  \U0001f35e Cookie pool seeded (v4: visitors use patchright browsers)", flush=True)
+        print(f"  \U0001f35e Cookie pool seeded (v5: visitors use patchright browsers)", flush=True)
     
     t = threading.Thread(target=_harvester, daemon=True)
     t.start()
