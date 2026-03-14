@@ -605,6 +605,80 @@ def fill_all_empty_fields(page, data=None):
     except:
         pass
     
+    # Also handle React custom dropdown buttons with placeholder text
+    try:
+        placeholder_btns = page.evaluate("""() => {
+            const results = [];
+            const buttons = document.querySelectorAll('button[role="combobox"], button[data-state], button[aria-expanded]');
+            for (const btn of buttons) {
+                if (btn.offsetParent === null) continue;
+                const text = btn.innerText.trim();
+                if (text.includes('\u0623\u062e\u062a\u0631') || text.includes('\u0627\u062e\u062a\u0631') || text.includes('\u0627\u062e\u062a\u064a\u0627\u0631')) {
+                    results.push({ text: text, rect: btn.getBoundingClientRect() });
+                }
+            }
+            if (results.length === 0) {
+                const allBtns = document.querySelectorAll('button.flex.h-10.items-center');
+                for (const btn of allBtns) {
+                    if (btn.offsetParent === null) continue;
+                    const text = btn.innerText.trim();
+                    if (text.includes('\u0623\u062e\u062a\u0631') || text.includes('\u0627\u062e\u062a\u0631') || text.includes('\u0627\u062e\u062a\u064a\u0627\u0631')) {
+                        results.push({ text: text, rect: btn.getBoundingClientRect() });
+                    }
+                }
+            }
+            return results;
+        }""")
+        if placeholder_btns:
+            for pb in placeholder_btns:
+                try:
+                    rect = pb.get('rect', {})
+                    if rect:
+                        page.mouse.click(rect['x'] + rect['width']/2, rect['y'] + rect['height']/2)
+                        time.sleep(0.8)
+                        opt_text = page.evaluate("""() => {
+                            const options = document.querySelectorAll('[role="option"], [data-radix-collection-item]');
+                            const visible = Array.from(options).filter(o => o.offsetParent !== null);
+                            if (visible.length > 0) {
+                                let startIdx = 0;
+                                const firstText = visible[0].innerText.trim();
+                                if (firstText.includes('\u0623\u062e\u062a\u0631') || firstText.includes('\u0627\u062e\u062a\u0631') || firstText === '') startIdx = 1;
+                                if (visible.length > startIdx) {
+                                    const idx = startIdx + Math.floor(Math.random() * (visible.length - startIdx));
+                                    visible[idx].click();
+                                    return visible[idx].innerText.trim().substring(0, 30);
+                                }
+                            }
+                            return null;
+                        }""")
+                        if opt_text:
+                            filled += 1
+                            print(f"    [refill] React dropdown: '{opt_text}'", flush=True)
+                        else:
+                            try: page.keyboard.press('Escape')
+                            except: pass
+                        time.sleep(0.3)
+                except:
+                    try: page.keyboard.press('Escape')
+                    except: pass
+    except:
+        pass
+    
+    # Handle Shadcn checkbox buttons
+    try:
+        page.evaluate("""() => {
+            const checkBtns = document.querySelectorAll('button[role="checkbox"][data-state="unchecked"], button[aria-checked="false"]');
+            for (const cb of checkBtns) { if (cb.offsetParent !== null) cb.click(); }
+            const peerBtns = document.querySelectorAll('button.peer');
+            for (const pb of peerBtns) {
+                if (pb.offsetParent === null) continue;
+                const state = pb.getAttribute('data-state') || pb.getAttribute('aria-checked');
+                if (state === 'unchecked' || state === 'false') pb.click();
+            }
+        }""")
+    except:
+        pass
+    
     return filled
 
 
@@ -991,6 +1065,151 @@ def fill_form_dynamically(page):
     
     except Exception as e:
         print(f"  ❌ Select detection error: {str(e)[:100]}", flush=True)
+    
+    # ===== STEP 2b: Handle React custom dropdown buttons (Shadcn/Radix Select) =====
+    # Some sites use custom React dropdowns (buttons) alongside hidden native <select> elements.
+    # The native select may have a value but React state is NOT synced, so we click the button UI.
+    try:
+        # Find all custom select trigger buttons that still show placeholder text
+        placeholder_buttons = page.evaluate("""() => {
+            const results = [];
+            const buttons = document.querySelectorAll('button[role="combobox"], button[data-state], button[aria-expanded]');
+            for (const btn of buttons) {
+                if (btn.offsetParent === null) continue;
+                const text = btn.innerText.trim();
+                // Check if button shows placeholder (أختر = Choose)
+                if (text.includes('أختر') || text.includes('اختر') || text.includes('اختيار') || text === '') {
+                    results.push({
+                        text: text,
+                        index: results.length,
+                        rect: btn.getBoundingClientRect()
+                    });
+                }
+            }
+            // Also find by class pattern used in Shadcn UI selects
+            if (results.length === 0) {
+                const allBtns = document.querySelectorAll('button.flex.h-10.items-center');
+                for (const btn of allBtns) {
+                    if (btn.offsetParent === null) continue;
+                    const text = btn.innerText.trim();
+                    if (text.includes('أختر') || text.includes('اختر') || text.includes('اختيار')) {
+                        results.push({
+                            text: text,
+                            index: results.length,
+                            rect: btn.getBoundingClientRect()
+                        });
+                    }
+                }
+            }
+            return results;
+        }""")
+        
+        if placeholder_buttons:
+            print(f"  🔧 Found {len(placeholder_buttons)} React custom dropdowns with placeholder", flush=True)
+            for pb in placeholder_buttons:
+                try:
+                    # Click the placeholder button to open dropdown
+                    btn_text = pb['text']
+                    btn_locator = None
+                    
+                    # Try to find by exact text
+                    if btn_text:
+                        candidates = page.locator(f'button:has-text("{btn_text}")')
+                        for ci in range(candidates.count()):
+                            c = candidates.nth(ci)
+                            if c.is_visible():
+                                inner = c.inner_text().strip()
+                                if inner == btn_text or 'أختر' in inner or 'اختر' in inner:
+                                    btn_locator = c
+                                    break
+                    
+                    if not btn_locator:
+                        # Fallback: click by coordinates
+                        rect = pb.get('rect', {})
+                        if rect:
+                            page.mouse.click(rect['x'] + rect['width']/2, rect['y'] + rect['height']/2)
+                            time.sleep(0.5)
+                        else:
+                            continue
+                    else:
+                        btn_locator.click()
+                        time.sleep(0.5)
+                    
+                    # Wait for dropdown options to appear
+                    time.sleep(0.5)
+                    
+                    # Click a random option from the dropdown
+                    options_clicked = page.evaluate("""() => {
+                        // Shadcn/Radix UI dropdown options
+                        const options = document.querySelectorAll('[role="option"], [data-radix-collection-item], [cmdk-item]');
+                        const visible = Array.from(options).filter(o => o.offsetParent !== null);
+                        if (visible.length > 0) {
+                            // Skip first if it's a placeholder
+                            let startIdx = 0;
+                            const firstText = visible[0].innerText.trim();
+                            if (firstText.includes('أختر') || firstText.includes('اختر') || firstText === '') startIdx = 1;
+                            if (visible.length > startIdx) {
+                                const idx = startIdx + Math.floor(Math.random() * (visible.length - startIdx));
+                                visible[idx].click();
+                                return visible[idx].innerText.trim().substring(0, 30);
+                            }
+                        }
+                        // Fallback: try listbox items
+                        const listItems = document.querySelectorAll('[role="listbox"] > *, .select-option, [class*="option"]');
+                        const visItems = Array.from(listItems).filter(o => o.offsetParent !== null);
+                        if (visItems.length > 0) {
+                            const idx = Math.floor(Math.random() * visItems.length);
+                            visItems[idx].click();
+                            return visItems[idx].innerText.trim().substring(0, 30);
+                        }
+                        return null;
+                    }""")
+                    
+                    if options_clicked:
+                        filled += 1
+                        print(f"    ✅ React dropdown: selected '{options_clicked}'", flush=True)
+                    else:
+                        # Try pressing Escape to close if nothing was selected
+                        try:
+                            page.keyboard.press('Escape')
+                        except:
+                            pass
+                        print(f"    ⚠️ React dropdown: no options found for '{btn_text}'", flush=True)
+                    
+                    time.sleep(random.uniform(0.3, 0.6))
+                    
+                except Exception as rde:
+                    print(f"    ❌ React dropdown error: {str(rde)[:60]}", flush=True)
+                    try:
+                        page.keyboard.press('Escape')
+                    except:
+                        pass
+    except Exception as e:
+        print(f"  ⚠️ React dropdown scan error: {str(e)[:80]}", flush=True)
+    
+    # ===== STEP 2c: Handle Shadcn/Radix checkbox buttons =====
+    # These are <button> elements with role="checkbox" or class containing "peer" + "rounded"
+    try:
+        page.evaluate("""() => {
+            // Find Shadcn checkbox buttons (peer h-4 w-4 shrink-0 rounded-)
+            const checkBtns = document.querySelectorAll('button[role="checkbox"][data-state="unchecked"], button[aria-checked="false"]');
+            for (const cb of checkBtns) {
+                if (cb.offsetParent === null) continue;
+                cb.click();
+            }
+            // Also try: buttons with peer class that look like checkboxes
+            const peerBtns = document.querySelectorAll('button.peer');
+            for (const pb of peerBtns) {
+                if (pb.offsetParent === null) continue;
+                const state = pb.getAttribute('data-state') || pb.getAttribute('aria-checked');
+                if (state === 'unchecked' || state === 'false') {
+                    pb.click();
+                }
+            }
+        }""")
+        print(f"    ✅ Shadcn checkboxes handled", flush=True)
+    except:
+        pass
     
     # ===== STEP 3: Handle radio buttons and checkboxes =====
     try:
