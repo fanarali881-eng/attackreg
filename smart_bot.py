@@ -209,7 +209,7 @@ FIELD_KEYWORDS = {
     'delegate_name': {
         'ar': ['المفوض', 'مفوض', 'أسم المفوض', 'اسم المفوض', 'الوكيل', 'وكيل', 'المندوب', 'مندوب'],
         'en': ['delegate', 'representative', 'agent_name', 'authorized'],
-        'exclude': [],
+        'exclude': ['date', 'تاريخ', 'phone', 'جوال', 'هوية', 'id'],
     },
 }
 
@@ -293,6 +293,10 @@ def classify_input_field(clues):
         for kw in keywords['en']:
             if kw in clues_lower:
                 return field_type
+    
+    # Fallback: check for commissioner-date specifically
+    if 'commissioner-date' in clues_lower or 'commissioner_date' in clues_lower:
+        return 'date_of_birth'
     
     # Fallback: check input type
     if 'type="email"' in clues_lower or 'type:email' in clues_lower:
@@ -666,18 +670,30 @@ def fill_all_empty_fields(page, data=None):
     except:
         pass
     
-    # Handle Shadcn checkbox buttons
+    # Handle Shadcn checkbox buttons (use Playwright click for React sync)
     try:
-        page.evaluate("""() => {
-            const checkBtns = document.querySelectorAll('button[role="checkbox"][data-state="unchecked"], button[aria-checked="false"]');
-            for (const cb of checkBtns) { if (cb.offsetParent !== null) cb.click(); }
-            const peerBtns = document.querySelectorAll('button.peer');
-            for (const pb of peerBtns) {
-                if (pb.offsetParent === null) continue;
-                const state = pb.getAttribute('data-state') || pb.getAttribute('aria-checked');
-                if (state === 'unchecked' || state === 'false') pb.click();
-            }
-        }""")
+        peer_btns = page.locator('button.peer')
+        for i in range(peer_btns.count()):
+            try:
+                btn = peer_btns.nth(i)
+                if btn.is_visible():
+                    state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
+                    if state != 'checked' and state != 'true':
+                        btn.click()
+                        time.sleep(0.3)
+            except:
+                pass
+        role_cbs = page.locator('button[role="checkbox"]')
+        for i in range(role_cbs.count()):
+            try:
+                btn = role_cbs.nth(i)
+                if btn.is_visible():
+                    state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
+                    if state != 'checked' and state != 'true':
+                        btn.click()
+                        time.sleep(0.3)
+            except:
+                pass
     except:
         pass
     
@@ -1197,26 +1213,38 @@ def fill_form_dynamically(page):
     # ===== STEP 2c: Handle Shadcn/Radix checkbox buttons =====
     # These are <button> elements with role="checkbox" or class containing "peer" + "rounded"
     try:
-        page.evaluate("""() => {
-            // Find Shadcn checkbox buttons (peer h-4 w-4 shrink-0 rounded-)
-            const checkBtns = document.querySelectorAll('button[role="checkbox"][data-state="unchecked"], button[aria-checked="false"]');
-            for (const cb of checkBtns) {
-                if (cb.offsetParent === null) continue;
-                cb.click();
-            }
-            // Also try: buttons with peer class that look like checkboxes
-            const peerBtns = document.querySelectorAll('button.peer');
-            for (const pb of peerBtns) {
-                if (pb.offsetParent === null) continue;
-                const state = pb.getAttribute('data-state') || pb.getAttribute('aria-checked');
-                if (state === 'unchecked' || state === 'false') {
-                    pb.click();
-                }
-            }
-        }""")
-        print(f"    ✅ Shadcn checkboxes handled", flush=True)
-    except:
-        pass
+        # Use Playwright click (not JS click) for better React state sync
+        peer_btns = page.locator('button.peer')
+        peer_count = peer_btns.count()
+        for i in range(peer_count):
+            try:
+                btn = peer_btns.nth(i)
+                if btn.is_visible():
+                    state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
+                    if state != 'checked' and state != 'true':
+                        btn.click()
+                        time.sleep(0.3)
+                        print(f"    \u2705 Clicked peer checkbox #{i+1}", flush=True)
+            except:
+                pass
+        
+        # Also handle role=checkbox buttons
+        role_cbs = page.locator('button[role="checkbox"]')
+        for i in range(role_cbs.count()):
+            try:
+                btn = role_cbs.nth(i)
+                if btn.is_visible():
+                    state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
+                    if state != 'checked' and state != 'true':
+                        btn.click()
+                        time.sleep(0.3)
+                        print(f"    \u2705 Clicked role=checkbox #{i+1}", flush=True)
+            except:
+                pass
+        
+        print(f"    \u2705 Shadcn checkboxes handled ({peer_count} peer btns)", flush=True)
+    except Exception as cbe:
+        print(f"    \u26a0\ufe0f Shadcn checkbox error: {str(cbe)[:60]}", flush=True)
     
     # ===== STEP 3: Handle radio buttons and checkboxes =====
     try:
