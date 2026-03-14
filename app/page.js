@@ -90,7 +90,7 @@ export default function Home() {
   // ===== SMART BOT MODE =====
   const [mode, setMode] = useState('attack'); // 'attack' or 'smart'
   const [sesInstances, setSesInstances] = useState('3');
-  const [sesDuration, setSesDuration] = useState('5');
+  const [sesDuration, setSesDuration] = useState('10');
   const [sesPhase, setSesPhase] = useState('idle'); // idle, deploying, running, finished
   const [sesStatus, setSesStatus] = useState([]);
   const [sesRecent, setSesRecent] = useState([]);
@@ -99,7 +99,7 @@ export default function Home() {
   const sesCountdownRef = useRef(null);
   const [sesStartTime, setSesStartTime] = useState(null);
   const [sesRemaining, setSesRemaining] = useState(null);
-  const [smartUrl, setSmartUrl] = useState('https://sesallameh.com/new-appointment');
+  const [smartUrl, setSmartUrl] = useState('');
 
   // Persist
   useEffect(() => { if (panelApiKey) localStorage.setItem('panelApiKey', panelApiKey); }, [panelApiKey]);
