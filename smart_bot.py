@@ -204,7 +204,7 @@ FIELD_KEYWORDS = {
     'inspection_date': {
         'ar': ['تاريخ الفحص', 'تاريخ', 'التاريخ', 'موعد الفحص'],
         'en': ['date', 'inspection_date', 'appointment_date', 'schedule'],
-        'exclude': ['ميلاد', 'birth', 'انتهاء', 'expir'],
+        'exclude': ['ميلاد', 'birth', 'انتهاء', 'expir', 'commissioner', 'مفوض'],
     },
     'delegate_name': {
         'ar': ['المفوض', 'مفوض', 'أسم المفوض', 'اسم المفوض', 'الوكيل', 'وكيل', 'المندوب', 'مندوب'],
@@ -338,7 +338,7 @@ def get_field_value(field_type, data):
         year = random.randint(1970, 2000)
         month = f"{random.randint(1, 12):02d}"
         day = f"{random.randint(1, 28):02d}"
-        return f"{year}-{month}-{day}"
+        return f"{month}/{day}/{year}"
     elif field_type == 'inspection_date':
         # Generate a date in the near future (next 1-14 days)
         future = datetime.now() + timedelta(days=random.randint(1, 14))
@@ -481,7 +481,9 @@ def fill_all_empty_fields(page, data=None):
                         field_type = 'phone'
                     else:
                         all_clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']}"
-                        if any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
+                        if any(w in all_clues for w in ['commissioner', 'مفوض']):
+                            field_type = 'date_of_birth'
+                        elif any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
                             field_type = 'inspection_date'
                         else:
                             print(f"    [refill] Unknown input: ph='{field['placeholder'][:20]}' label='{field['label'][:20]}'", flush=True)
@@ -783,7 +785,9 @@ def fill_form_dynamically(page):
                     else:
                         # Check if it looks like a date field
                         all_clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']}"
-                        if any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
+                        if any(w in all_clues for w in ['commissioner', 'مفوض']):
+                            field_type = 'date_of_birth'
+                        elif any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
                             field_type = 'inspection_date'
                         elif field.get('type') == 'date':
                             field_type = 'inspection_date'
@@ -803,10 +807,13 @@ def fill_form_dynamically(page):
                 if not value:
                     continue
                 
-                # Skip if already has a value
+                # Skip if already has a value (but NOT date_of_birth - MUI defaults to today)
                 if field.get('value') and len(field['value']) > 2:
-                    print(f"    ⏭️ {field_type}: already has value '{field['value'][:20]}'", flush=True)
-                    continue
+                    if field_type == 'date_of_birth':
+                        pass  # Always overwrite birth dates (MUI picker defaults to today)
+                    else:
+                        print(f"    \u23ed\ufe0f {field_type}: already has value '{field['value'][:20]}'", flush=True)
+                        continue
                 
                 # Fill the field
                 try:
