@@ -1643,53 +1643,78 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         if filled < 3:
                             print(f"  ⚠️ Only {filled} fields filled", flush=True)
 
-                        # ===== DEBUG: Verify React state before clicking Next =====
+                        # ===== DEBUG: Dump ALL form field states =====
                         pre_url = page.url
                         try:
                             form_state = page.evaluate("""() => {
-                                const result = { inputs: {}, selects: {}, emptyFields: [] };
-                                const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
-                                for (const inp of inputs) {
-                                    if (inp.offsetParent === null) continue;
-                                    const name = inp.name || inp.id || 'unnamed';
-                                    result.inputs[name] = inp.value || '';
-                                    if (!inp.value || (inp.value && inp.value.trim() === '')) result.emptyFields.push('input:' + name);
-                                }
-                                const selects = document.querySelectorAll('select');
-                                for (const sel of selects) {
-                                    if (sel.offsetParent === null) continue;
-                                    const name = sel.name || sel.id || 'unnamed';
-                                    const opt = sel.options[sel.selectedIndex];
-                                    result.selects[name] = { value: sel.value || '', text: (opt ? opt.text : '') || '' };
-                                    if (!sel.value || sel.value === '' || sel.value === '-' || (opt && (opt.text.includes('\u0627\u062e\u062a\u0631') || opt.text.includes('Select')))) {
-                                        result.emptyFields.push('select:' + name);
+                                const result = { inputs: [], selects: [], errors: [] };
+                                // Get ALL inputs (including hidden to see full picture)
+                                document.querySelectorAll('input').forEach((inp, i) => {
+                                    const visible = inp.offsetParent !== null;
+                                    const type = inp.type || 'text';
+                                    if (type === 'submit' || type === 'button') return;
+                                    let label = '';
+                                    if (inp.id) {
+                                        const lbl = document.querySelector('label[for="' + inp.id + '"]');
+                                        if (lbl) label = lbl.innerText.trim();
                                     }
-                                }
-                                const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"], .text-danger');
-                                result.visibleErrors = Array.from(errors).map(e => (e.innerText || '').trim()).filter(t => t.length > 0 && t.length < 200);
+                                    if (!label) {
+                                        const p = inp.closest('.mb-4, .mb-3, .form-group, [class*="form"]');
+                                        if (p) { const l = p.querySelector('label'); if (l) label = l.innerText.trim(); }
+                                    }
+                                    result.inputs.push({
+                                        i: i,
+                                        name: inp.name || '',
+                                        id: inp.id || '',
+                                        type: type,
+                                        value: (inp.value || '').substring(0, 30),
+                                        label: (label || '').substring(0, 30),
+                                        visible: visible,
+                                        ph: (inp.placeholder || '').substring(0, 20)
+                                    });
+                                });
+                                // Get ALL selects
+                                document.querySelectorAll('select').forEach((sel, i) => {
+                                    const visible = sel.offsetParent !== null;
+                                    const opt = sel.options[sel.selectedIndex];
+                                    let label = '';
+                                    if (sel.id) {
+                                        const lbl = document.querySelector('label[for="' + sel.id + '"]');
+                                        if (lbl) label = lbl.innerText.trim();
+                                    }
+                                    if (!label) {
+                                        const p = sel.closest('.mb-4, .mb-3, .form-group, [class*="form"]');
+                                        if (p) { const l = p.querySelector('label'); if (l) label = l.innerText.trim(); }
+                                    }
+                                    result.selects.push({
+                                        i: i,
+                                        name: sel.name || '',
+                                        id: sel.id || '',
+                                        value: sel.value || '',
+                                        text: opt ? (opt.text || '').substring(0, 30) : '',
+                                        label: (label || '').substring(0, 30),
+                                        visible: visible
+                                    });
+                                });
+                                // Get validation errors
+                                document.querySelectorAll('.text-red-500, .text-red-600, [class*="error"], [class*="invalid"], .text-danger, [role="alert"]').forEach(e => {
+                                    const t = (e.innerText || '').trim();
+                                    if (t.length > 0 && t.length < 200) result.errors.push(t.substring(0, 80));
+                                });
                                 return result;
                             }""")
                             if form_state:
-                                print(f"  PRE-SUBMIT STATE:", flush=True)
-                                try:
-                                    inp_summary = {k: str(v or '')[:20] for k,v in form_state.get('inputs', {}).items()}
-                                    print(f"    Inputs: {json.dumps(inp_summary, ensure_ascii=False)}", flush=True)
-                                except:
-                                    pass
-                                try:
-                                    sel_summary = {}
-                                    for k,v in form_state.get('selects', {}).items():
-                                        if isinstance(v, dict):
-                                            sel_summary[k] = str(v.get('text', ''))[:20]
-                                        else:
-                                            sel_summary[k] = str(v)[:20]
-                                    print(f"    Selects: {json.dumps(sel_summary, ensure_ascii=False)}", flush=True)
-                                except:
-                                    pass
-                                if form_state.get('emptyFields'):
-                                    print(f"    EMPTY FIELDS: {form_state['emptyFields']}", flush=True)
-                                if form_state.get('visibleErrors'):
-                                    print(f"    VISIBLE ERRORS: {form_state['visibleErrors'][:3]}", flush=True)
+                                print(f"  === PRE-SUBMIT FULL STATE ===", flush=True)
+                                for inp in form_state.get('inputs', []):
+                                    status = '\u2705' if inp['value'] else '\u274c'
+                                    vis = 'V' if inp['visible'] else 'H'
+                                    print(f"    {status}[{vis}] input#{inp['i']} name={inp['name']} id={inp['id']} type={inp['type']} label='{inp['label']}' val='{inp['value']}'", flush=True)
+                                for sel in form_state.get('selects', []):
+                                    status = '\u2705' if sel['value'] and sel['value'] != '' and sel['value'] != '-' else '\u274c'
+                                    vis = 'V' if sel['visible'] else 'H'
+                                    print(f"    {status}[{vis}] select#{sel['i']} name={sel['name']} id={sel['id']} label='{sel['label']}' val='{sel['value']}' text='{sel['text']}'", flush=True)
+                                if form_state.get('errors'):
+                                    print(f"    ERRORS: {form_state['errors'][:5]}", flush=True)
                         except Exception as dbg_err:
                             print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
 
