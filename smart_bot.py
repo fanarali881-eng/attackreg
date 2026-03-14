@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v34 - React-Fix + Debug
+Smart Universal Form Bot v35 - Smart Refill + React-Fix
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -497,9 +497,8 @@ def fill_all_empty_fields(page, data=None):
     except Exception as e:
         print(f"    [refill] Input scan error: {str(e)[:80]}", flush=True)
     
-    # STEP B: Fill empty selects using Playwright select_option (React-compatible)
+    # STEP B: Fill empty selects using smart classification + Playwright select_option
     try:
-        # Get info about TRULY empty selects (not ones that already have real values)
         empty_sels = page.evaluate("""() => {
             const result = [];
             const selects = document.querySelectorAll('select');
@@ -510,18 +509,41 @@ def fill_all_empty_fields(page, data=None):
                 const optText = currentOpt ? currentOpt.text.trim() : '';
                 const optVal = sel.value || '';
                 
-                // Skip if select has a real value (not empty, not placeholder)
-                const placeholderWords = ['اختر', 'اختيار', 'Select', 'Choose', '--', '---'];
+                const placeholderWords = ['\u0627\u062e\u062a\u0631', '\u0627\u062e\u062a\u064a\u0627\u0631', 'Select', 'Choose', '--', '---'];
                 const isPlaceholder = !optVal || optVal === '' || optVal === '-' || optVal === '0' ||
                     placeholderWords.some(pw => optText.includes(pw)) || optText === '';
                 
                 if (isPlaceholder) {
+                    // Get label for classification
+                    const name = sel.getAttribute('name') || '';
+                    const id = sel.getAttribute('id') || '';
+                    const aria = sel.getAttribute('aria-label') || '';
+                    let labelText = '';
+                    if (id) {
+                        const lbl = document.querySelector('label[for="' + id + '"');
+                        if (lbl) labelText = lbl.innerText.trim();
+                    }
+                    if (!labelText) {
+                        const parent = sel.closest('.mb-4, .mb-3, .mb-2, .form-group, [class*="form"], [class*="field"]');
+                        if (parent) {
+                            const lbl = parent.querySelector('label, .label, h6, h5');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
+                    }
+                    if (!labelText) {
+                        const parent = sel.parentElement;
+                        if (parent) {
+                            const lbl = parent.querySelector('label');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
+                    }
+                    
                     const opts = Array.from(sel.options).filter(o => 
                         o.value && o.value !== '' && o.value !== '-' && o.value !== '0' &&
-                        !placeholderWords.some(pw => o.text.includes(pw)));
+                        !placeholderWords.some(pw => o.text.includes(pw))).map(o => ({value: o.value, text: o.text.trim()}));
+                    
                     if (opts.length > 0) {
-                        const choice = opts[Math.floor(Math.random() * opts.length)];
-                        result.push({ visIdx: visIdx, value: choice.value, text: choice.text });
+                        result.push({ visIdx: visIdx, label: labelText, name: name, id: id, ariaLabel: aria, options: opts });
                     }
                 }
                 visIdx++;
@@ -531,11 +553,29 @@ def fill_all_empty_fields(page, data=None):
         if empty_sels:
             for es in empty_sels:
                 try:
+                    # Classify the select to pick the right value
+                    clues = f"{es.get('label','')} {es.get('name','')} {es.get('id','')} {es.get('ariaLabel','')}"
+                    field_type, preferred = classify_select_field(clues)
+                    
+                    # Choose option: prefer the preferred value, else random
+                    chosen = None
+                    if preferred:
+                        for opt in es['options']:
+                            if preferred in opt.get('text', '') or preferred in opt.get('value', ''):
+                                chosen = opt
+                                break
+                    if not chosen:
+                        chosen = random.choice(es['options'])
+                    
                     sel_el = page.locator('select:visible').nth(es['visIdx'])
-                    sel_el.select_option(value=es['value'])
+                    sel_el.select_option(value=chosen['value'])
                     filled += 1
-                    print(f"    [refill] select: {es['text'][:30]}", flush=True)
+                    print(f"    [refill] {field_type}: {chosen['text'][:30]}", flush=True)
                     time.sleep(random.uniform(0.3, 0.6))
+                    
+                    # Wait for dependent dropdowns if region/country changed
+                    if field_type in ('region', 'country', 'nationality'):
+                        time.sleep(random.uniform(1.5, 2.5))
                 except:
                     pass
     except:
@@ -796,7 +836,7 @@ def fill_form_dynamically(page):
                     current_opt = next((o for o in sel['options'] if o['value'] == sel['currentValue']), None)
                     if current_opt:
                         opt_text = current_opt.get('text', '')
-                        placeholder_words = ['\u0627\u062e\u062a\u0631', '\u0627\u0644\u0645\u0646\u0637\u0642\u0629', '\u0646\u0648\u0639 \u0627\u0644\u0645\u0631\u0643\u0628\u0629', '\u0627\u0644\u062c\u0646\u0633\u064a\u0629', '\u0628\u0644\u062f', '\u0627\u062e\u062a\u064a\u0627\u0631', 'Select', 'Choose']
+                        placeholder_words = ['\u0627\u062e\u062a\u0631', '\u0627\u062e\u062a\u064a\u0627\u0631', 'Select', 'Choose', '--', '---']
                         is_placeholder = any(pw in opt_text for pw in placeholder_words)
                         if not is_placeholder and len(opt_text) > 0:
                             print(f"    \u23ed\ufe0f {field_type}: already selected '{opt_text[:20]}'", flush=True)
@@ -1524,7 +1564,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v34 (React-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v35 (Smart-Refill) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
