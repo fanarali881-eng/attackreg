@@ -598,11 +598,15 @@ def fill_form_dynamically(page):
                 
                 # Skip if already has a valid value
                 if sel.get('currentValue') and sel['currentValue'] not in ('', '-', '0'):
-                    # Check if it's not just the default "اختر" option
+                    # Check if it's not just the default/placeholder option
                     current_opt = next((o for o in sel['options'] if o['value'] == sel['currentValue']), None)
-                    if current_opt and 'اختر' not in current_opt.get('text', ''):
-                        print(f"    ⏭️ {field_type}: already selected '{current_opt['text'][:20]}'", flush=True)
-                        continue
+                    if current_opt:
+                        opt_text = current_opt.get('text', '')
+                        placeholder_words = ['\u0627\u062e\u062a\u0631', '\u0627\u0644\u0645\u0646\u0637\u0642\u0629', '\u0646\u0648\u0639 \u0627\u0644\u0645\u0631\u0643\u0628\u0629', '\u0627\u0644\u062c\u0646\u0633\u064a\u0629', '\u0628\u0644\u062f', '\u0627\u062e\u062a\u064a\u0627\u0631', 'Select', 'Choose']
+                        is_placeholder = any(pw in opt_text for pw in placeholder_words)
+                        if not is_placeholder and len(opt_text) > 0:
+                            print(f"    \u23ed\ufe0f {field_type}: already selected '{opt_text[:20]}'", flush=True)
+                            continue
                 
                 valid_opts = [o for o in sel['options'] if o['value'] and o['value'] not in ('', '-') and 'اختر' not in o.get('text', '')]
                 
@@ -1116,25 +1120,99 @@ def handle_next_pages(page, max_pages=5):
 
 # ============ FIND BOOKING PAGE ============
 
-def find_booking_page(page, target_url):
-    """Try to find the booking/registration form page - check current page first, then common paths"""
-    
-    # First check if current page already has a form
+def is_registration_form(page):
+    """Check if the current page has a FULL registration form (5+ fields)"""
     try:
-        has_form = page.evaluate("""() => {
-            const inputs = document.querySelectorAll('input:not([type="hidden"])');
+        result = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
             const selects = document.querySelectorAll('select');
             const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
             const visibleSelects = Array.from(selects).filter(s => s.offsetParent !== null);
-            return (visibleInputs.length + visibleSelects.length) >= 3;
+            const total = visibleInputs.length + visibleSelects.length;
+            return { inputs: visibleInputs.length, selects: visibleSelects.length, total: total };
         }""")
-        if has_form:
-            print(f"  ✅ Form found on current page!", flush=True)
-            return True
+        return result and result.get('total', 0) >= 5
+    except:
+        return False
+
+
+def find_booking_page(page, target_url):
+    """Navigate to the booking/registration form by clicking booking button first"""
+    
+    # STEP 1: Try clicking a booking button/link on the current page
+    print("  \ud83d\udd0d Looking for booking button...", flush=True)
+    booking_texts = [
+        '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f',
+        '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632', '\u062a\u0633\u062c\u064a\u0644', '\u0633\u062c\u0644 \u0627\u0644\u0622\u0646', '\u0627\u0628\u062f\u0623 \u0627\u0644\u062d\u062c\u0632',
+        'Book Appointment', 'Book Now', 'New Appointment', 'Register', 'Book',
+    ]
+    
+    for link_text in booking_texts:
+        try:
+            btn = page.locator(f'button:has-text("{link_text}")').first
+            if btn.is_visible():
+                btn.click()
+                print(f"  \u2705 Clicked button: {link_text}", flush=True)
+                time.sleep(4)
+                if is_registration_form(page):
+                    print(f"  \u2705 Registration form found!", flush=True)
+                    return True
+                bypass_cloudflare(page, max_wait=30)
+                time.sleep(2)
+                if is_registration_form(page):
+                    print(f"  \u2705 Registration form found after CF!", flush=True)
+                    return True
+                continue
+        except:
+            pass
+        
+        try:
+            link = page.get_by_text(link_text)
+            if link.count() > 0 and link.first.is_visible():
+                link.first.click()
+                print(f"  \u2705 Clicked link: {link_text}", flush=True)
+                time.sleep(4)
+                if is_registration_form(page):
+                    print(f"  \u2705 Registration form found!", flush=True)
+                    return True
+                bypass_cloudflare(page, max_wait=30)
+                time.sleep(2)
+                if is_registration_form(page):
+                    print(f"  \u2705 Registration form found after CF!", flush=True)
+                    return True
+                continue
+        except:
+            continue
+    
+    # STEP 2: Try clicking any <a> tag that has booking-related href
+    try:
+        clicked_link = page.evaluate("""() => {
+            const links = document.querySelectorAll('a');
+            const keywords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
+            for (const link of links) {
+                const href = (link.getAttribute('href') || '').toLowerCase();
+                const text = link.innerText.trim().toLowerCase();
+                for (const kw of keywords) {
+                    if (href.includes(kw) || text.includes('\u062d\u062c\u0632') || text.includes('\u0645\u0648\u0639\u062f')) {
+                        link.click();
+                        return href || text;
+                    }
+                }
+            }
+            return null;
+        }""")
+        if clicked_link:
+            print(f"  \u2705 Clicked href link: {clicked_link}", flush=True)
+            time.sleep(4)
+            bypass_cloudflare(page, max_wait=30)
+            time.sleep(2)
+            if is_registration_form(page):
+                print(f"  \u2705 Registration form found!", flush=True)
+                return True
     except:
         pass
     
-    # Try common booking page paths
+    # STEP 3: Try common booking page paths directly
     base_url = target_url.rstrip('/')
     common_paths = [
         '/new-appointment', '/appointment', '/booking', '/register',
@@ -1144,42 +1222,34 @@ def find_booking_page(page, target_url):
     for path in common_paths:
         try:
             full_url = base_url + path
-            print(f"  🔍 Trying: {full_url}", flush=True)
+            print(f"  \ud83d\udd0d Trying: {full_url}", flush=True)
             page.goto(full_url, timeout=15000, wait_until='domcontentloaded')
             time.sleep(3)
+            bypass_cloudflare(page, max_wait=30)
+            time.sleep(2)
             
-            has_form = page.evaluate("""() => {
-                const inputs = document.querySelectorAll('input:not([type="hidden"])');
-                const selects = document.querySelectorAll('select');
-                const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
-                const visibleSelects = Array.from(selects).filter(s => s.offsetParent !== null);
-                return (visibleInputs.length + visibleSelects.length) >= 3;
-            }""")
-            if has_form:
-                print(f"  ✅ Form found at: {full_url}", flush=True)
+            if is_registration_form(page):
+                print(f"  \u2705 Registration form found at: {full_url}", flush=True)
                 return True
         except:
             continue
     
-    # Try clicking links on the main page that might lead to booking
+    # STEP 4: If still no form, check if current page has at least some fields
     try:
-        page.goto(target_url, timeout=15000, wait_until='domcontentloaded')
-        time.sleep(3)
-        
-        for link_text in ['حجز موعد', 'موعد جديد', 'احجز', 'تسجيل', 'حجز', 'Book', 'Register', 'New Appointment']:
-            try:
-                link = page.get_by_text(link_text)
-                if link.count() > 0 and link.first.is_visible():
-                    link.first.click()
-                    time.sleep(3)
-                    print(f"  ✅ Clicked link: {link_text} -> {page.url[:60]}", flush=True)
-                    return True
-            except:
-                continue
+        result = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input:not([type="hidden"])');
+            const selects = document.querySelectorAll('select');
+            const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
+            const visibleSelects = Array.from(selects).filter(s => s.offsetParent !== null);
+            return visibleInputs.length + visibleSelects.length;
+        }""")
+        if result and result >= 2:
+            print(f"  \u26a0\ufe0f Partial form found ({result} fields), proceeding anyway", flush=True)
+            return True
     except:
         pass
     
-    print(f"  ⚠️ No form found, proceeding with current page", flush=True)
+    print(f"  \u274c No registration form found", flush=True)
     return False
 
 
