@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v26 - Fully Dynamic Field Detection
+Smart Universal Form Bot v27 - Fully Dynamic Field Detection
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -18,6 +18,14 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 os.environ.setdefault('DISPLAY', ':99')
+os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+
+# Fix stdout/stderr encoding for Arabic text
+import io
+import sys as _sys
+if hasattr(_sys.stdout, 'buffer'):
+    _sys.stdout = io.TextIOWrapper(_sys.stdout.buffer, encoding='utf-8', errors='replace')
+    _sys.stderr = io.TextIOWrapper(_sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ============ RANDOM SAUDI DATA GENERATOR ============
 
@@ -1309,7 +1317,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"🚀 Smart Bot v26 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v27 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
