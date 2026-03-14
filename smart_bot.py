@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v38 - React State Sync + Fixed Classification
+Smart Universal Form Bot v39 - React State Sync + Fixed Classification
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -253,6 +253,16 @@ SELECT_KEYWORDS = {
     'service': {
         'ar': ['خدمة الفحص', 'الخدمة', 'خدمة', 'نوع الخدمة'],
         'en': ['service', 'service_type', 'inspection_type'],
+        'preferred': None,
+    },
+    'vehicle_condition': {
+        'ar': ['حالة المركبة', 'حالة السيارة', 'الحالة'],
+        'en': ['vehicle_condition', 'car_condition', 'condition'],
+        'preferred': None,
+    },
+    'plate_letter': {
+        'ar': ['حرف لوحة', 'حرف اللوحة', 'الحرف'],
+        'en': ['plate_letter', 'letter'],
         'preferred': None,
     },
 }
@@ -1051,7 +1061,49 @@ def fill_form_dynamically(page):
         else:
             break
     
-    print(f"  📊 Total fields filled: {filled}", flush=True)
+    # ===== STEP 7: Final checkbox/agreement check =====
+    # Some checkboxes (like delegation terms) only appear after delegation is enabled
+    # Re-check ALL checkboxes and check any unchecked ones
+    try:
+        page.evaluate("""() => {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            for (const cb of checkboxes) {
+                if (cb.offsetParent === null) continue;
+                if (!cb.checked) {
+                    cb.click();
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    cb.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }
+        }""")
+        print(f"    \u2705 Final checkbox re-check done", flush=True)
+    except:
+        pass
+    
+    # Also try clicking any agreement/terms text that might be a clickable label
+    for agree_text in ['أوافق', 'الموافقة', 'شروط التفويض', 'الشروط والأحكام']:
+        try:
+            el = page.get_by_text(agree_text)
+            if el.count() > 0 and el.first.is_visible():
+                # Check if there's a nearby unchecked checkbox
+                parent = el.first.locator('xpath=ancestor::label | xpath=preceding-sibling::input[@type="checkbox"]')
+                if parent.count() > 0:
+                    parent.first.click()
+                    print(f"    \u2705 Clicked agreement: {agree_text}", flush=True)
+                    time.sleep(0.3)
+        except:
+            pass
+    
+    # Scroll down to make sure everything is visible
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(0.5)
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(0.5)
+    except:
+        pass
+    
+    print(f"  \U0001f4ca Total fields filled: {filled}", flush=True)
     return filled, data
 
 
@@ -1588,7 +1640,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v38 (React-Sync) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v39 (React-Sync) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1759,16 +1811,92 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         post_url = page.url
                         if post_url == pre_url:
                             print(f"  ⚠️ URL DID NOT CHANGE after click! Still: {post_url[:60]}", flush=True)
-                            # Check for validation errors
+                            
+                            # Take screenshot for debugging
+                            try:
+                                page.screenshot(path='/root/debug_after_click.png')
+                                print(f"  📸 Screenshot saved: /root/debug_after_click.png", flush=True)
+                            except:
+                                pass
+                            
+                            # Check button state
+                            try:
+                                btn_info = page.evaluate("""() => {
+                                    const btns = document.querySelectorAll('button');
+                                    const info = [];
+                                    for (const btn of btns) {
+                                        if (btn.offsetParent === null) continue;
+                                        info.push({
+                                            text: btn.innerText.trim().substring(0, 30),
+                                            disabled: btn.disabled,
+                                            type: btn.type,
+                                            classes: btn.className.substring(0, 50)
+                                        });
+                                    }
+                                    return info;
+                                }""")
+                                for bi in btn_info:
+                                    print(f"  🔘 Button: '{bi['text']}' disabled={bi['disabled']} type={bi['type']} class={bi['classes'][:30]}", flush=True)
+                            except:
+                                pass
+                            
+                            # Check for ANY new visible elements (toast, modal, popup, error messages)
+                            try:
+                                new_elements = page.evaluate("""() => {
+                                    const results = [];
+                                    // Check for toasts, modals, alerts
+                                    const selectors = [
+                                        '[class*="toast"]', '[class*="modal"]', '[class*="alert"]',
+                                        '[class*="popup"]', '[class*="notification"]', '[class*="snack"]',
+                                        '[class*="error"]', '[class*="warning"]', '[class*="message"]',
+                                        '[role="alert"]', '[role="dialog"]', '.Toastify',
+                                        '[class*="red"]', '[class*="invalid"]'
+                                    ];
+                                    for (const sel of selectors) {
+                                        document.querySelectorAll(sel).forEach(el => {
+                                            if (el.offsetParent !== null && el.innerText.trim().length > 0) {
+                                                results.push(sel + ': ' + el.innerText.trim().substring(0, 80));
+                                            }
+                                        });
+                                    }
+                                    return results;
+                                }""")
+                                if new_elements:
+                                    print(f"  🔍 POST-CLICK ELEMENTS:", flush=True)
+                                    for ne in new_elements[:10]:
+                                        print(f"    → {ne}", flush=True)
+                                else:
+                                    print(f"  🔍 No toast/modal/alert/error elements found", flush=True)
+                            except:
+                                pass
+                            
+                            # Check for validation errors (broader search)
                             try:
                                 post_errors = page.evaluate("""() => {
                                     const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"], .text-danger, [role="alert"]');
-                                    return Array.from(errors).map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 200);
+                                    return Array.from(errors).map(e => (e.className || '').substring(0, 30) + '|' + e.innerText.trim()).filter(t => t.length > 1 && t.length < 200);
                                 }""")
                                 if post_errors:
-                                    print(f"  ❌ VALIDATION ERRORS: {post_errors[:5]}", flush=True)
+                                    print(f"  ❌ VALIDATION ERRORS: {post_errors[:8]}", flush=True)
                                 else:
                                     print(f"  🔍 No visible validation errors found", flush=True)
+                            except:
+                                pass
+                            
+                            # Check page body text for any error messages
+                            try:
+                                body_text = page.evaluate("""() => {
+                                    return document.body.innerText.substring(0, 2000);
+                                }""")
+                                # Look for error-related Arabic words
+                                error_words = ['خطأ', 'مطلوب', 'يرجى', 'غير صالح', 'فشل', 'لا يمكن', 'ادخل', 'اختر', 'يجب']
+                                found_errors = [w for w in error_words if w in body_text]
+                                if found_errors:
+                                    print(f"  ⚠️ Error words in page: {found_errors}", flush=True)
+                                    # Print the lines containing error words
+                                    for line in body_text.split('\n'):
+                                        if any(w in line for w in error_words) and len(line.strip()) > 2 and len(line.strip()) < 100:
+                                            print(f"    → {line.strip()}", flush=True)
                             except:
                                 pass
                             
