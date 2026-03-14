@@ -1,6 +1,7 @@
 """
-Smart Universal Form Bot v25 - Patchright-powered Cloudflare bypass
-Uses Patchright (undetected Chrome) + smart placeholder-based form detection
+Smart Universal Form Bot v26 - Fully Dynamic Field Detection
+Uses Patchright (undetected Chrome) + dynamic form field detection
+Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
 Generates random Saudi data, fills registration + payment forms
 """
@@ -148,119 +149,165 @@ def gen_cardholder_name():
     return f"{first_en} {last_en}"
 
 
-# ============ SMART FILL HELPERS ============
+# ============ FIELD CLASSIFICATION KEYWORDS ============
+# Each category has Arabic + English keywords to match against placeholder, label, name, id, aria-label
 
-def fill_by_placeholder(page, placeholder, value, exact=False):
-    """Fill input by its placeholder text using Playwright .fill()"""
-    try:
-        if exact:
-            el = page.locator(f'input[placeholder="{placeholder}"]').first
-        else:
-            el = page.locator(f'input[placeholder*="{placeholder}"]').first
-        if el.is_visible():
-            el.click()
-            time.sleep(random.uniform(0.2, 0.5))
-            el.fill(value)
-            time.sleep(random.uniform(0.1, 0.3))
-            return True
-    except:
-        pass
-    return False
+FIELD_KEYWORDS = {
+    'name': {
+        'ar': ['الاسم', 'الإسم', 'اسم', 'إسم', 'ادخل الاسم', 'إدخل الإسم', 'الاسم الكامل', 'اسم المالك', 'اسم صاحب'],
+        'en': ['name', 'full_name', 'fullname', 'owner_name', 'applicant'],
+        'exclude': ['مستخدم', 'user', 'حامل', 'holder', 'cardholder', 'card', 'بطاقة'],
+    },
+    'national_id': {
+        'ar': ['الهوية', 'هوية', 'رقم الهوية', 'هوية وطنية', 'الهوية الوطنية', 'رقم الإقامة', 'هوية/إقامة', 'السجل المدني'],
+        'en': ['national_id', 'identity', 'id_number', 'iqama', 'civil_id', 'national'],
+        'exclude': [],
+    },
+    'phone': {
+        'ar': ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'رقم الهاتف', 'موبايل', 'أكتب رقم الجوال', 'رقم التواصل'],
+        'en': ['phone', 'mobile', 'tel', 'telephone', 'cell', 'contact_number'],
+        'exclude': [],
+    },
+    'email': {
+        'ar': ['البريد', 'بريد', 'الإيميل', 'إيميل', 'البريد الإلكتروني', 'بريد إلكتروني'],
+        'en': ['email', 'e-mail', 'mail'],
+        'exclude': [],
+    },
+    'plate_number': {
+        'ar': ['أرقام اللوحة', 'رقم اللوحة', 'الأرقام', 'أدخل الأرقام', 'أرقام'],
+        'en': ['plate_number', 'plate_digits', 'plate_num', 'plate'],
+        'exclude': ['حروف', 'letter'],
+    },
+    'city': {
+        'ar': ['المدينة', 'مدينة'],
+        'en': ['city'],
+        'exclude': [],
+    },
+    'address': {
+        'ar': ['العنوان', 'عنوان'],
+        'en': ['address', 'street'],
+        'exclude': ['بريد', 'email', 'url', 'رابط'],
+    },
+    'date_of_birth': {
+        'ar': ['تاريخ الميلاد', 'الميلاد'],
+        'en': ['birth', 'dob', 'date_of_birth'],
+        'exclude': [],
+    },
+}
 
-def type_by_placeholder(page, placeholder, value, exact=False):
-    """Type into input by placeholder (human-like, character by character)"""
-    try:
-        if exact:
-            el = page.locator(f'input[placeholder="{placeholder}"]').first
-        else:
-            el = page.locator(f'input[placeholder*="{placeholder}"]').first
-        if el.is_visible():
-            el.click()
-            time.sleep(random.uniform(0.2, 0.5))
-            el.fill('')
-            for ch in value:
-                el.type(ch, delay=random.randint(30, 80))
-            time.sleep(random.uniform(0.1, 0.3))
-            return True
-    except:
-        pass
-    return False
+# Keywords for SELECT dropdowns
+SELECT_KEYWORDS = {
+    'nationality': {
+        'ar': ['الجنسية', 'جنسية'],
+        'en': ['nationality', 'nation'],
+        'preferred': 'السعودية',
+    },
+    'country': {
+        'ar': ['بلد التسجيل', 'البلد', 'بلد', 'الدولة'],
+        'en': ['country', 'registration_country'],
+        'preferred': 'السعودية',
+    },
+    'region': {
+        'ar': ['المنطقة', 'منطقة'],
+        'en': ['region', 'area'],
+        'preferred': None,
+    },
+    'center': {
+        'ar': ['مركز الفحص', 'المركز', 'مركز', 'الفرع', 'فرع'],
+        'en': ['center', 'branch', 'station', 'inspection_center'],
+        'preferred': None,
+    },
+    'vehicle_type': {
+        'ar': ['نوع المركبة', 'المركبة', 'نوع السيارة'],
+        'en': ['vehicle_type', 'car_type'],
+        'preferred': None,
+    },
+    'registration_type': {
+        'ar': ['نوع التسجيل', 'التسجيل'],
+        'en': ['registration_type', 'reg_type'],
+        'preferred': None,
+    },
+    'time_slot': {
+        'ar': ['وقت الفحص', 'الوقت', 'وقت', 'الموعد'],
+        'en': ['time', 'slot', 'appointment_time', 'time_slot'],
+        'preferred': None,
+    },
+    'service': {
+        'ar': ['خدمة الفحص', 'الخدمة', 'خدمة', 'نوع الخدمة'],
+        'en': ['service', 'service_type', 'inspection_type'],
+        'preferred': None,
+    },
+}
 
-def select_by_prev_label(page, label_text, option_value=None):
-    """Select dropdown option by the label that precedes it"""
-    try:
-        result = page.evaluate("""(args) => {
-            const [labelText, optionValue] = args;
-            const labels = document.querySelectorAll('label');
-            for (const label of labels) {
-                if (label.innerText.trim().includes(labelText)) {
-                    let next = label.nextElementSibling;
-                    while (next) {
-                        if (next.tagName === 'SELECT') {
-                            const opts = Array.from(next.options).filter(o => o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                            if (opts.length === 0) return null;
-                            if (optionValue) {
-                                for (const opt of opts) {
-                                    if (opt.value === optionValue || opt.text.includes(optionValue)) {
-                                        next.value = opt.value;
-                                        next.dispatchEvent(new Event('change', { bubbles: true }));
-                                        return opt.text.substring(0, 30);
-                                    }
-                                }
-                            }
-                            const choice = opts[Math.floor(Math.random() * opts.length)];
-                            next.value = choice.value;
-                            next.dispatchEvent(new Event('change', { bubbles: true }));
-                            return choice.text.substring(0, 30);
-                        }
-                        const sel = next.querySelector('select');
-                        if (sel) {
-                            const opts = Array.from(sel.options).filter(o => o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                            if (opts.length === 0) return null;
-                            if (optionValue) {
-                                for (const opt of opts) {
-                                    if (opt.value === optionValue || opt.text.includes(optionValue)) {
-                                        sel.value = opt.value;
-                                        sel.dispatchEvent(new Event('change', { bubbles: true }));
-                                        return opt.text.substring(0, 30);
-                                    }
-                                }
-                            }
-                            const choice = opts[Math.floor(Math.random() * opts.length)];
-                            sel.value = choice.value;
-                            sel.dispatchEvent(new Event('change', { bubbles: true }));
-                            return choice.text.substring(0, 30);
-                        }
-                        next = next.nextElementSibling;
-                    }
-                    const container = label.closest('.mb-4, .form-group, div') || label.parentElement;
-                    if (container) {
-                        const sel = container.querySelector('select');
-                        if (sel) {
-                            const opts = Array.from(sel.options).filter(o => o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                            if (opts.length === 0) return null;
-                            if (optionValue) {
-                                for (const opt of opts) {
-                                    if (opt.value === optionValue || opt.text.includes(optionValue)) {
-                                        sel.value = opt.value;
-                                        sel.dispatchEvent(new Event('change', { bubbles: true }));
-                                        return opt.text.substring(0, 30);
-                                    }
-                                }
-                            }
-                            const choice = opts[Math.floor(Math.random() * opts.length)];
-                            sel.value = choice.value;
-                            sel.dispatchEvent(new Event('change', { bubbles: true }));
-                            return choice.text.substring(0, 30);
-                        }
-                    }
-                }
-            }
-            return null;
-        }""", [label_text, option_value])
-        return result
-    except:
-        return None
+
+# ============ DYNAMIC FIELD DETECTION ============
+
+def classify_input_field(clues):
+    """Classify an input field based on all available clues (placeholder, label, name, id, aria-label)"""
+    clues_lower = clues.lower()
+    
+    for field_type, keywords in FIELD_KEYWORDS.items():
+        # Check exclusions first
+        for exc in keywords.get('exclude', []):
+            if exc in clues_lower:
+                continue
+        
+        # Check Arabic keywords
+        for kw in keywords['ar']:
+            if kw in clues:
+                return field_type
+        
+        # Check English keywords
+        for kw in keywords['en']:
+            if kw in clues_lower:
+                return field_type
+    
+    # Fallback: check input type
+    if 'type="email"' in clues_lower or 'type:email' in clues_lower:
+        return 'email'
+    if 'type="tel"' in clues_lower or 'type:tel' in clues_lower:
+        return 'phone'
+    
+    return 'unknown'
+
+
+def classify_select_field(clues):
+    """Classify a SELECT dropdown based on its label/name/id"""
+    clues_lower = clues.lower()
+    
+    for field_type, keywords in SELECT_KEYWORDS.items():
+        for kw in keywords['ar']:
+            if kw in clues:
+                return field_type, keywords.get('preferred')
+        for kw in keywords['en']:
+            if kw in clues_lower:
+                return field_type, keywords.get('preferred')
+    
+    return 'unknown', None
+
+
+def get_field_value(field_type, data):
+    """Get the appropriate value for a classified field type"""
+    if field_type == 'name':
+        return data['name']
+    elif field_type == 'national_id':
+        return data['national_id']
+    elif field_type == 'phone':
+        return data['phone']
+    elif field_type == 'email':
+        return data['email']
+    elif field_type == 'plate_number':
+        return data['plate_num']
+    elif field_type == 'city':
+        return random.choice(SAUDI_CITIES)
+    elif field_type == 'address':
+        return f"شارع {random.randint(1, 50)}، حي {random.choice(['النزهة', 'الروضة', 'العليا', 'السلامة', 'الحمراء', 'المروج'])}"
+    elif field_type == 'date_of_birth':
+        year = random.randint(1970, 2000)
+        month = f"{random.randint(1, 12):02d}"
+        day = f"{random.randint(1, 28):02d}"
+        return f"{year}-{month}-{day}"
+    return None
 
 
 # ============ CLOUDFLARE BYPASS ============
@@ -289,7 +336,6 @@ def bypass_cloudflare(page, max_wait=90):
         # Every 3rd iteration, try clicking the Turnstile checkbox
         if i % 3 == 0 and i > 0:
             try:
-                # Move mouse naturally then click checkbox area
                 page.mouse.move(random.randint(400, 600), random.randint(300, 500))
                 time.sleep(random.uniform(0.3, 0.8))
                 page.mouse.move(170, 275)
@@ -299,7 +345,6 @@ def bypass_cloudflare(page, max_wait=90):
             except:
                 pass
             
-            # Wait after click for verification
             time.sleep(8)
             try:
                 t2 = page.title()
@@ -315,11 +360,11 @@ def bypass_cloudflare(page, max_wait=90):
     return False
 
 
-# ============ FILL REGISTRATION FORM ============
+# ============ DYNAMIC FORM FILLING ============
 
-def fill_registration_form(page):
-    """Fill the alamsallameh.com registration form using placeholder-based detection"""
-    print("  📝 Filling registration form...", flush=True)
+def fill_form_dynamically(page):
+    """Dynamically detect and fill ALL form fields on the current page"""
+    print("  📝 Dynamic form detection starting...", flush=True)
     
     data = {
         'name': gen_name(),
@@ -333,243 +378,391 @@ def fill_registration_form(page):
     filled = 0
     time.sleep(2)
     
-    # 1. الإسم
-    if fill_by_placeholder(page, 'إدخل الإسم', data['name']):
-        filled += 1
-        print(f"    ✅ الإسم: {data['name']}", flush=True)
-    elif fill_by_placeholder(page, 'الاسم', data['name']):
-        filled += 1
-        print(f"    ✅ الإسم (alt): {data['name']}", flush=True)
-    else:
-        print(f"    ❌ الإسم", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 2. رقم الهوية
-    if fill_by_placeholder(page, 'رقم الهوية', data['national_id']):
-        filled += 1
-        print(f"    ✅ الهوية: {data['national_id']}", flush=True)
-    elif fill_by_placeholder(page, 'الهوية', data['national_id']):
-        filled += 1
-        print(f"    ✅ الهوية (alt): {data['national_id']}", flush=True)
-    else:
-        print(f"    ❌ الهوية", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 3. الجنسية
-    result = select_by_prev_label(page, 'الجنسية', 'السعودية')
-    if result:
-        filled += 1
-        print(f"    ✅ الجنسية: {result}", flush=True)
-    else:
-        filled += 1
-        print(f"    ⚠️ الجنسية (default السعودية)", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 4. رقم الجوال
-    if fill_by_placeholder(page, 'أكتب رقم الجوال', data['phone']):
-        filled += 1
-        print(f"    ✅ الجوال: {data['phone']}", flush=True)
-    elif fill_by_placeholder(page, 'رقم الجوال', data['phone']):
-        filled += 1
-        print(f"    ✅ الجوال (alt): {data['phone']}", flush=True)
-    else:
-        try:
-            el = page.locator('input.flex-1').first
-            if el.is_visible():
-                el.click()
-                time.sleep(0.3)
-                el.fill(data['phone'])
-                filled += 1
-                print(f"    ✅ الجوال (class): {data['phone']}", flush=True)
-        except:
-            # Last resort: find input near phone icon/label
-            try:
-                el = page.locator('input[type="tel"]').first
-                if el.is_visible():
-                    el.click()
-                    time.sleep(0.3)
-                    el.fill(data['phone'])
-                    filled += 1
-                    print(f"    ✅ الجوال (type=tel): {data['phone']}", flush=True)
-            except:
-                print(f"    ❌ الجوال", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 5. البريد الإلكتروني
-    if fill_by_placeholder(page, 'البريد الإلكتروني', data['email']):
-        filled += 1
-        print(f"    ✅ الإيميل: {data['email']}", flush=True)
-    else:
-        try:
-            el = page.locator('input[type="email"]').first
-            if el.is_visible():
-                el.click()
-                time.sleep(0.3)
-                el.fill(data['email'])
-                filled += 1
-                print(f"    ✅ الإيميل (type): {data['email']}", flush=True)
-        except:
-            print(f"    ❌ الإيميل", flush=True)
-    time.sleep(random.uniform(0.5, 1))
-    
-    # 6. حالة المركبة - click "تحمل رخصة سير"
+    # ===== STEP 1: Discover and fill all INPUT fields =====
     try:
-        btn = page.get_by_text("تحمل رخصة سير")
-        if btn.count() > 0 and btn.first.is_visible():
-            btn.first.click()
-            filled += 1
-            print(f"    ✅ حالة المركبة: رخصة سير", flush=True)
-            time.sleep(random.uniform(0.5, 1))
-    except:
-        pass
-    
-    # 7. بلد التسجيل
-    result = select_by_prev_label(page, 'بلد التسجيل', 'السعودية')
-    if result:
-        filled += 1
-        print(f"    ✅ بلد التسجيل: {result}", flush=True)
-    else:
-        filled += 1
-        print(f"    ⚠️ بلد التسجيل (default)", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 8. حروف اللوحة (3 selects)
-    try:
-        plate_result = page.evaluate("""() => {
-            const results = [];
-            const selects = document.querySelectorAll('select');
-            let plateCount = 0;
-            for (const sel of selects) {
-                const opts = Array.from(sel.options);
-                const hasLetters = opts.some(o => o.text.includes(' - ') && o.text.length < 10);
-                if (hasLetters && plateCount < 3) {
-                    const validOpts = opts.filter(o => o.value && o.value !== '' && o.value !== '-');
-                    if (validOpts.length > 0) {
-                        const choice = validOpts[Math.floor(Math.random() * validOpts.length)];
-                        sel.value = choice.value;
-                        sel.dispatchEvent(new Event('change', { bubbles: true }));
-                        results.push(choice.text.substring(0, 8));
-                        plateCount++;
+        field_info = page.evaluate("""() => {
+            const fields = [];
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+            
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue; // skip hidden
+                
+                const ph = inp.getAttribute('placeholder') || '';
+                const name = inp.getAttribute('name') || '';
+                const id = inp.getAttribute('id') || '';
+                const type = inp.getAttribute('type') || 'text';
+                const ac = inp.getAttribute('autocomplete') || '';
+                const aria = inp.getAttribute('aria-label') || '';
+                const maxlen = inp.getAttribute('maxlength') || '';
+                
+                // Find associated label
+                let labelText = '';
+                if (id) {
+                    const lbl = document.querySelector('label[for="' + id + '"]');
+                    if (lbl) labelText = lbl.innerText.trim();
+                }
+                if (!labelText) {
+                    // Check parent/previous sibling for label
+                    let el = inp.previousElementSibling;
+                    while (el) {
+                        if (el.tagName === 'LABEL' || el.tagName === 'SPAN' || el.tagName === 'P' || el.tagName === 'H6') {
+                            labelText = el.innerText.trim();
+                            break;
+                        }
+                        el = el.previousElementSibling;
+                    }
+                    if (!labelText) {
+                        const parent = inp.closest('.mb-4, .mb-3, .mb-2, .form-group, .field, [class*="form"], [class*="field"]');
+                        if (parent) {
+                            const lbl = parent.querySelector('label, .label, h6, h5');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
+                    }
+                    if (!labelText) {
+                        const parent = inp.parentElement;
+                        if (parent) {
+                            const lbl = parent.querySelector('label');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
                     }
                 }
+                
+                fields.push({
+                    index: fields.length,
+                    placeholder: ph,
+                    name: name,
+                    id: id,
+                    type: type,
+                    autocomplete: ac,
+                    ariaLabel: aria,
+                    label: labelText,
+                    maxlength: maxlen,
+                    selector: id ? '#' + CSS.escape(id) : (name ? 'input[name="' + name + '"]' : null),
+                    value: inp.value || ''
+                });
             }
-            return results;
+            return fields;
         }""")
-        if plate_result:
-            filled += len(plate_result)
-            for r in plate_result:
-                print(f"    ✅ حرف لوحة: {r}", flush=True)
+        
+        if field_info:
+            print(f"  🔍 Found {len(field_info)} input fields", flush=True)
+            
+            for field in field_info:
+                # Build clues string from all attributes
+                clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']} {field['autocomplete']} {field['ariaLabel']} type:{field['type']}"
+                
+                field_type = classify_input_field(clues)
+                
+                if field_type == 'unknown':
+                    # Try maxlength-based detection
+                    maxlen = field.get('maxlength', '')
+                    if maxlen == '10' and not field.get('value'):
+                        field_type = 'national_id'
+                    elif maxlen == '4' and not field.get('value'):
+                        field_type = 'plate_number'
+                    else:
+                        print(f"    ⚠️ Unknown field: ph='{field['placeholder'][:30]}' label='{field['label'][:30]}' name='{field['name']}' id='{field['id']}'", flush=True)
+                        continue
+                
+                value = get_field_value(field_type, data)
+                if not value:
+                    continue
+                
+                # Skip if already has a value
+                if field.get('value') and len(field['value']) > 2:
+                    print(f"    ⏭️ {field_type}: already has value '{field['value'][:20]}'", flush=True)
+                    continue
+                
+                # Fill the field
+                try:
+                    selector = field.get('selector')
+                    if selector:
+                        el = page.locator(selector).first
+                    else:
+                        # Fallback: use nth input
+                        el = page.locator(f'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['index'])
+                    
+                    if el.is_visible():
+                        el.click()
+                        time.sleep(random.uniform(0.2, 0.4))
+                        el.fill(value)
+                        time.sleep(random.uniform(0.1, 0.3))
+                        filled += 1
+                        print(f"    ✅ {field_type}: {value[:30]}", flush=True)
+                except Exception as e:
+                    print(f"    ❌ {field_type}: {str(e)[:60]}", flush=True)
+                
+                time.sleep(random.uniform(0.2, 0.5))
+    
+    except Exception as e:
+        print(f"  ❌ Input detection error: {str(e)[:100]}", flush=True)
+    
+    # ===== STEP 2: Handle SELECT dropdowns =====
+    try:
+        select_info = page.evaluate("""() => {
+            const selects = [];
+            const allSelects = document.querySelectorAll('select');
+            
+            for (const sel of allSelects) {
+                if (sel.offsetParent === null) continue; // skip hidden
+                
+                const name = sel.getAttribute('name') || '';
+                const id = sel.getAttribute('id') || '';
+                const aria = sel.getAttribute('aria-label') || '';
+                
+                // Find label
+                let labelText = '';
+                if (id) {
+                    const lbl = document.querySelector('label[for="' + id + '"]');
+                    if (lbl) labelText = lbl.innerText.trim();
+                }
+                if (!labelText) {
+                    let el = sel.previousElementSibling;
+                    while (el) {
+                        if (el.tagName === 'LABEL' || el.tagName === 'SPAN' || el.tagName === 'P' || el.tagName === 'H6') {
+                            labelText = el.innerText.trim();
+                            break;
+                        }
+                        el = el.previousElementSibling;
+                    }
+                    if (!labelText) {
+                        const parent = sel.closest('.mb-4, .mb-3, .mb-2, .form-group, .field, [class*="form"], [class*="field"]');
+                        if (parent) {
+                            const lbl = parent.querySelector('label, .label, h6, h5');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
+                    }
+                    if (!labelText) {
+                        const parent = sel.parentElement;
+                        if (parent) {
+                            const lbl = parent.querySelector('label');
+                            if (lbl) labelText = lbl.innerText.trim();
+                        }
+                    }
+                }
+                
+                // Get options
+                const opts = Array.from(sel.options).map(o => ({
+                    value: o.value,
+                    text: o.text.trim(),
+                    selected: o.selected
+                }));
+                
+                // Check if it's a plate letter select (has Arabic letter options like "أ - A")
+                const isPlateLetters = opts.some(o => o.text.includes(' - ') && o.text.length < 10);
+                
+                selects.push({
+                    index: selects.length,
+                    name: name,
+                    id: id,
+                    ariaLabel: aria,
+                    label: labelText,
+                    currentValue: sel.value,
+                    options: opts,
+                    isPlateLetters: isPlateLetters,
+                    selector: id ? '#' + CSS.escape(id) : (name ? 'select[name="' + name + '"]' : null)
+                });
+            }
+            return selects;
+        }""")
+        
+        if select_info:
+            print(f"  🔍 Found {len(select_info)} select dropdowns", flush=True)
+            
+            plate_letter_count = 0
+            
+            for sel in select_info:
+                # Handle plate letter selects
+                if sel.get('isPlateLetters') and plate_letter_count < 3:
+                    try:
+                        valid_opts = [o for o in sel['options'] if o['value'] and o['value'] not in ('', '-')]
+                        if valid_opts:
+                            choice = random.choice(valid_opts)
+                            page.evaluate(f"""(args) => {{
+                                const sel = document.querySelectorAll('select')[{sel['index']}];
+                                if (sel) {{
+                                    sel.value = args.value;
+                                    sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                }}
+                            }}""", {'value': choice['value']})
+                            plate_letter_count += 1
+                            filled += 1
+                            print(f"    ✅ حرف لوحة {plate_letter_count}: {choice['text'][:10]}", flush=True)
+                    except:
+                        pass
+                    continue
+                
+                # Classify the select
+                clues = f"{sel['label']} {sel['name']} {sel['id']} {sel['ariaLabel']}"
+                field_type, preferred = classify_select_field(clues)
+                
+                # Skip if already has a valid value
+                if sel.get('currentValue') and sel['currentValue'] not in ('', '-', '0'):
+                    # Check if it's not just the default "اختر" option
+                    current_opt = next((o for o in sel['options'] if o['value'] == sel['currentValue']), None)
+                    if current_opt and 'اختر' not in current_opt.get('text', ''):
+                        print(f"    ⏭️ {field_type}: already selected '{current_opt['text'][:20]}'", flush=True)
+                        continue
+                
+                valid_opts = [o for o in sel['options'] if o['value'] and o['value'] not in ('', '-') and 'اختر' not in o.get('text', '')]
+                
+                if not valid_opts:
+                    continue
+                
+                # Choose option
+                chosen = None
+                if preferred:
+                    # Try to find preferred option
+                    for opt in valid_opts:
+                        if preferred in opt.get('text', '') or preferred in opt.get('value', ''):
+                            chosen = opt
+                            break
+                
+                if not chosen:
+                    chosen = random.choice(valid_opts)
+                
+                try:
+                    idx = sel['index']
+                    page.evaluate(f"""(args) => {{
+                        const allSelects = document.querySelectorAll('select');
+                        let visibleIdx = 0;
+                        for (const s of allSelects) {{
+                            if (s.offsetParent === null) continue;
+                            if (visibleIdx === args.idx) {{
+                                s.value = args.value;
+                                s.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                return true;
+                            }}
+                            visibleIdx++;
+                        }}
+                        return false;
+                    }}""", {'idx': idx, 'value': chosen['value']})
+                    filled += 1
+                    print(f"    ✅ {field_type}: {chosen['text'][:30]}", flush=True)
+                    
+                    # Wait for dependent dropdowns to load (region -> center)
+                    if field_type in ('region', 'country', 'nationality'):
+                        time.sleep(random.uniform(1, 2))
+                    else:
+                        time.sleep(random.uniform(0.3, 0.6))
+                    
+                except Exception as e:
+                    print(f"    ❌ {field_type}: {str(e)[:60]}", flush=True)
+    
+    except Exception as e:
+        print(f"  ❌ Select detection error: {str(e)[:100]}", flush=True)
+    
+    # ===== STEP 3: Handle radio buttons and checkboxes =====
+    try:
+        page.evaluate("""() => {
+            // Click first visible radio in each group
+            const groups = {};
+            const radios = document.querySelectorAll('input[type="radio"]');
+            for (const r of radios) {
+                if (r.offsetParent === null) continue;
+                const name = r.getAttribute('name') || 'default';
+                if (!groups[name]) {
+                    groups[name] = [];
+                }
+                groups[name].push(r);
+            }
+            for (const name in groups) {
+                const checked = groups[name].find(r => r.checked);
+                if (!checked && groups[name].length > 0) {
+                    const choice = groups[name][Math.floor(Math.random() * groups[name].length)];
+                    choice.click();
+                    choice.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            
+            // Check unchecked required checkboxes (terms, agreements)
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            for (const cb of checkboxes) {
+                if (cb.offsetParent === null) continue;
+                if (!cb.checked) {
+                    cb.click();
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        }""")
+        print(f"    ✅ Radio/Checkbox handled", flush=True)
     except:
         pass
-    time.sleep(random.uniform(0.3, 0.6))
     
-    # 9. أرقام اللوحة
-    plate_digits = data['plate_num'].zfill(4)
-    page.evaluate("window.scrollTo(0, 600)")
-    time.sleep(0.5)
-    plate_filled = False
-    
-    if fill_by_placeholder(page, 'أدخل الأرقام', plate_digits):
-        filled += 1
-        plate_filled = True
-        print(f"    ✅ أرقام اللوحة: {plate_digits}", flush=True)
-    
-    if not plate_filled:
+    # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
+    for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
         try:
-            el = page.locator('input[maxlength="4"]').first
-            if el.is_visible():
-                el.click()
-                time.sleep(0.3)
-                el.fill(plate_digits)
+            btn = page.get_by_text(btn_text)
+            if btn.count() > 0 and btn.first.is_visible():
+                btn.first.click()
                 filled += 1
-                plate_filled = True
-                print(f"    ✅ أرقام اللوحة (maxlen): {plate_digits}", flush=True)
+                print(f"    ✅ Clicked: {btn_text}", flush=True)
+                time.sleep(random.uniform(0.5, 1))
+                break
         except:
-            pass
+            continue
     
-    if not plate_filled:
-        try:
-            el = page.locator('input[placeholder*="الأرقام"]').first
-            if el.is_visible():
-                el.click()
-                time.sleep(0.3)
-                page.keyboard.type(plate_digits, delay=100)
-                filled += 1
-                plate_filled = True
-                print(f"    ✅ أرقام اللوحة (keyboard): {plate_digits}", flush=True)
-        except:
-            pass
-    
-    if not plate_filled:
-        try:
-            result = page.evaluate("""(digits) => {
-                const inp = document.querySelector('input[placeholder*="الأرقام"], input[maxlength="4"]');
-                if (inp) {
-                    inp.focus();
-                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    setter.call(inp, digits);
-                    inp.dispatchEvent(new Event('input', { bubbles: true }));
-                    inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    return 'js:' + digits;
-                }
-                return null;
-            }""", plate_digits)
-            if result:
-                filled += 1
-                plate_filled = True
-                print(f"    ✅ أرقام اللوحة (JS): {result}", flush=True)
-        except:
-            pass
-    
-    if not plate_filled:
-        print(f"    ❌ أرقام اللوحة", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 10. نوع التسجيل
-    reg_types = ['خصوصي', 'نقل خاص', 'نقل عام', 'حافلة صغيرة', 'مركبة أجرة']
-    result = select_by_prev_label(page, 'نوع التسجيل', random.choice(reg_types))
-    if result:
-        filled += 1
-        print(f"    ✅ نوع التسجيل: {result}", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 11. نوع المركبة
-    result = select_by_prev_label(page, 'نوع المركبة', None)
-    if result:
-        filled += 1
-        print(f"    ✅ نوع المركبة: {result}", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
-    
-    # 12. خدمة الفحص (default)
-    filled += 1
-    print(f"    ✅ خدمة الفحص: الدوري (default)", flush=True)
-    
-    # 13. المنطقة
-    result = select_by_prev_label(page, 'المنطقة', None)
-    if result:
-        filled += 1
-        print(f"    ✅ المنطقة: {result}", flush=True)
-        time.sleep(random.uniform(1, 2))
+    # ===== STEP 5: Scroll down and check for more fields =====
+    try:
+        page.evaluate("window.scrollTo(0, 600)")
+        time.sleep(1)
         
-        # 14. مركز الفحص
-        result2 = select_by_prev_label(page, 'مركز الفحص', None)
-        if result2:
-            filled += 1
-            print(f"    ✅ مركز الفحص: {result2}", flush=True)
-    time.sleep(random.uniform(0.3, 0.6))
+        # Re-check for any unfilled visible inputs after scroll
+        unfilled = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+            let count = 0;
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue;
+                if (!inp.value || inp.value.trim() === '') count++;
+            }
+            return count;
+        }""")
+        if unfilled > 0:
+            print(f"    ⚠️ {unfilled} unfilled inputs remaining after first pass", flush=True)
+    except:
+        pass
     
-    # 15. تاريخ الفحص (default today)
-    filled += 1
-    print(f"    ✅ تاريخ الفحص: today (default)", flush=True)
+    # ===== STEP 6: Fill any remaining empty selects (second pass after dependencies loaded) =====
+    try:
+        time.sleep(1)
+        page.evaluate("""() => {
+            const selects = document.querySelectorAll('select');
+            for (const sel of selects) {
+                if (sel.offsetParent === null) continue;
+                if (sel.value && sel.value !== '' && sel.value !== '-') continue;
+                const opts = Array.from(sel.options).filter(o => 
+                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
+                if (opts.length > 0) {
+                    const choice = opts[Math.floor(Math.random() * opts.length)];
+                    sel.value = choice.value;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        }""")
+        print(f"    ✅ Second pass: remaining selects filled", flush=True)
+    except:
+        pass
     
-    # 16. وقت الفحص
-    result = select_by_prev_label(page, 'وقت الفحص', None)
-    if result:
-        filled += 1
-        print(f"    ✅ وقت الفحص: {result}", flush=True)
-    else:
-        filled += 1
-        print(f"    ✅ وقت الفحص: default", flush=True)
+    # Wait for any dependent fields to load, then do a third pass
+    time.sleep(2)
+    try:
+        page.evaluate("""() => {
+            const selects = document.querySelectorAll('select');
+            for (const sel of selects) {
+                if (sel.offsetParent === null) continue;
+                if (sel.value && sel.value !== '' && sel.value !== '-') continue;
+                const opts = Array.from(sel.options).filter(o => 
+                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
+                if (opts.length > 0) {
+                    const choice = opts[Math.floor(Math.random() * opts.length)];
+                    sel.value = choice.value;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        }""")
+        print(f"    ✅ Third pass: final selects filled", flush=True)
+    except:
+        pass
     
     print(f"  📊 Total fields filled: {filled}", flush=True)
     return filled, data
@@ -608,7 +801,7 @@ def fill_payment(page):
         pass
     
     # B: Select بطاقة ائتمان / مدى
-    for text in ['بطاقة ائتمان', 'مدى', 'بطاقة ائتمان / مدى', 'Visa', 'MasterCard']:
+    for text in ['بطاقة ائتمان', 'مدى', 'بطاقة ائتمان / مدى', 'Visa', 'MasterCard', 'بطاقة', 'Credit Card']:
         try:
             el = page.get_by_text(text)
             if el.count() > 0 and el.first.is_visible():
@@ -620,7 +813,7 @@ def fill_payment(page):
             continue
     
     # C: Click متابعة الدفع
-    for text in ['متابعة الدفع', 'متابعة', 'استمرار', 'Continue']:
+    for text in ['متابعة الدفع', 'متابعة', 'استمرار', 'Continue', 'Proceed', 'ادفع']:
         try:
             btn = page.get_by_text(text)
             if btn.count() > 0 and btn.first.is_visible():
@@ -657,7 +850,7 @@ def fill_payment(page):
                     aria = (inp.get_attribute('aria-label') or '').lower()
                     clues = f"{ph} {name} {iid} {ac} {aria}"
                     
-                    if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'pan', '1234', 'رقم البطاقة', 'card_number']):
+                    if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'pan', '1234', 'رقم البطاقة', 'card_number', 'cardno']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill('')
@@ -666,7 +859,7 @@ def fill_payment(page):
                         filled += 1
                         print(f"    ✅ رقم البطاقة: {card_num[:4]}****{card_num[-4:]}", flush=True)
                     
-                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder']):
+                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder', 'cardname']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill(holder)
@@ -756,9 +949,9 @@ def fill_payment(page):
                     let value = null;
                     let fieldName = null;
                     
-                    if (text.includes('رقم البطاقة')) { value = data.card_number; fieldName = 'card'; }
-                    else if (text.includes('اسم حامل') || text.includes('حامل البطاقة')) { value = data.card_holder; fieldName = 'holder'; }
-                    else if (text.includes('رمز الأمان') || text.includes('CVV')) { value = data.card_cvv; fieldName = 'cvv'; }
+                    if (text.includes('رقم البطاقة') || text.includes('Card Number')) { value = data.card_number; fieldName = 'card'; }
+                    else if (text.includes('اسم حامل') || text.includes('حامل البطاقة') || text.includes('Cardholder')) { value = data.card_holder; fieldName = 'holder'; }
+                    else if (text.includes('رمز الأمان') || text.includes('CVV') || text.includes('CVC')) { value = data.card_cvv; fieldName = 'cvv'; }
                     else { continue; }
                     
                     let next = label.nextElementSibling;
@@ -802,6 +995,7 @@ def fill_payment(page):
                 'button:has-text("ادفع الآن")', 'button:has-text("ادفع")',
                 'button:has-text("Pay")', 'button:has-text("دفع")',
                 'button:has-text("تأكيد الدفع")', 'button:has-text("إتمام")',
+                'button:has-text("Pay Now")', 'button:has-text("Submit")',
                 'button[type="submit"]', 'input[type="submit"]',
             ]:
                 try:
@@ -835,11 +1029,26 @@ def handle_next_pages(page, max_pages=5):
         title = page.title()
         print(f"\n  📄 Step {step+1}: {page.url[:60]} | {title}", flush=True)
         
-        if 'summary-payment' in url or 'credit-card' in url or 'checkout' in url:
+        # Check for payment page
+        if any(kw in url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
             print("  💳 PAYMENT PAGE DETECTED!", flush=True)
             return 'payment'
         
-        # Fill any empty selects
+        # Check page content for payment indicators
+        try:
+            has_payment = page.evaluate("""() => {
+                const text = document.body.innerText;
+                return text.includes('بطاقة ائتمان') || text.includes('طريقة الدفع') || 
+                       text.includes('ملخص الدفع') || text.includes('المبلغ') ||
+                       text.includes('Credit Card') || text.includes('Payment');
+            }""")
+            if has_payment:
+                print("  💳 PAYMENT CONTENT DETECTED!", flush=True)
+                return 'payment'
+        except:
+            pass
+        
+        # Fill any visible form fields on this page too (dynamic)
         try:
             page.evaluate("""() => {
                 const selects = document.querySelectorAll('select');
@@ -863,6 +1072,8 @@ def handle_next_pages(page, max_pages=5):
         for selector in [
             'button:has-text("التالي")', 'button:has-text("متابعة الدفع")',
             'button:has-text("متابعة")', 'button:has-text("تأكيد")',
+            'button:has-text("Next")', 'button:has-text("Continue")',
+            'button:has-text("إرسال")', 'button:has-text("Submit")',
             'button[type="submit"]',
         ]:
             try:
@@ -881,7 +1092,7 @@ def handle_next_pages(page, max_pages=5):
             break
         
         new_url = page.url.lower()
-        if 'summary-payment' in new_url or 'credit-card' in new_url:
+        if any(kw in new_url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
             print("  💳 PAYMENT PAGE DETECTED!", flush=True)
             return 'payment'
         
@@ -901,6 +1112,75 @@ def handle_next_pages(page, max_pages=5):
                 pass
     
     return 'done'
+
+
+# ============ FIND BOOKING PAGE ============
+
+def find_booking_page(page, target_url):
+    """Try to find the booking/registration form page - check current page first, then common paths"""
+    
+    # First check if current page already has a form
+    try:
+        has_form = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input:not([type="hidden"])');
+            const selects = document.querySelectorAll('select');
+            const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
+            const visibleSelects = Array.from(selects).filter(s => s.offsetParent !== null);
+            return (visibleInputs.length + visibleSelects.length) >= 3;
+        }""")
+        if has_form:
+            print(f"  ✅ Form found on current page!", flush=True)
+            return True
+    except:
+        pass
+    
+    # Try common booking page paths
+    base_url = target_url.rstrip('/')
+    common_paths = [
+        '/new-appointment', '/appointment', '/booking', '/register',
+        '/book', '/reservation', '/form', '/apply',
+    ]
+    
+    for path in common_paths:
+        try:
+            full_url = base_url + path
+            print(f"  🔍 Trying: {full_url}", flush=True)
+            page.goto(full_url, timeout=15000, wait_until='domcontentloaded')
+            time.sleep(3)
+            
+            has_form = page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                const selects = document.querySelectorAll('select');
+                const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
+                const visibleSelects = Array.from(selects).filter(s => s.offsetParent !== null);
+                return (visibleInputs.length + visibleSelects.length) >= 3;
+            }""")
+            if has_form:
+                print(f"  ✅ Form found at: {full_url}", flush=True)
+                return True
+        except:
+            continue
+    
+    # Try clicking links on the main page that might lead to booking
+    try:
+        page.goto(target_url, timeout=15000, wait_until='domcontentloaded')
+        time.sleep(3)
+        
+        for link_text in ['حجز موعد', 'موعد جديد', 'احجز', 'تسجيل', 'حجز', 'Book', 'Register', 'New Appointment']:
+            try:
+                link = page.get_by_text(link_text)
+                if link.count() > 0 and link.first.is_visible():
+                    link.first.click()
+                    time.sleep(3)
+                    print(f"  ✅ Clicked link: {link_text} -> {page.url[:60]}", flush=True)
+                    return True
+            except:
+                continue
+    except:
+        pass
+    
+    print(f"  ⚠️ No form found, proceeding with current page", flush=True)
+    return False
 
 
 # ============ MAIN BOT LOOP ============
@@ -959,7 +1239,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"🚀 Smart Bot v25 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"🚀 Smart Bot v26 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -996,7 +1276,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
                     try:
-                        # Navigate to target
+                        # Navigate to target URL directly (no hardcoded paths)
                         print(f"  🌐 Opening {target_url}...", flush=True)
                         try:
                             page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
@@ -1012,23 +1292,25 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         time.sleep(2)
 
-                        # Navigate to booking page
-                        booking_url = target_url.rstrip('/') + '/new-appointment'
-                        try:
-                            page.goto(booking_url, timeout=30000, wait_until='domcontentloaded')
-                        except:
-                            pass
-                        time.sleep(5)
+                        # Find the booking/form page dynamically
+                        find_booking_page(page, target_url)
+                        time.sleep(3)
 
-                        # Fill registration form
-                        filled, data = fill_registration_form(page)
+                        # Fill form dynamically
+                        filled, data = fill_form_dynamically(page)
 
-                        if filled < 5:
+                        if filled < 3:
                             print(f"  ⚠️ Only {filled} fields filled", flush=True)
 
-                        # Click التالي
+                        # Click next/submit button
                         clicked = False
-                        for selector in ['button:has-text("التالي")', 'button[type="submit"]']:
+                        for selector in [
+                            'button:has-text("التالي")', 'button:has-text("متابعة")',
+                            'button:has-text("إرسال")', 'button:has-text("تأكيد")',
+                            'button:has-text("Next")', 'button:has-text("Submit")',
+                            'button:has-text("Continue")',
+                            'button[type="submit"]',
+                        ]:
                             try:
                                 btn = page.locator(selector).first
                                 if btn.is_visible():
@@ -1041,7 +1323,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 continue
 
                         if not clicked:
-                            print("  ❌ Could not click التالي", flush=True)
+                            print("  ❌ Could not click submit button", flush=True)
                             total_errors += 1
                             update_status()
                             page.close()
@@ -1063,7 +1345,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         # Check if we moved to payment
                         current_url = page.url.lower()
-                        if 'summary-payment' in current_url:
+                        if any(kw in current_url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
                             print("  💳 Direct to payment!", flush=True)
                             recent_entries[0]['status'] = 'summary_done'
                             update_status()
