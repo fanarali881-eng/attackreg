@@ -488,6 +488,7 @@ def fill_all_empty_fields(page, data=None):
                         el.click()
                         time.sleep(random.uniform(0.2, 0.4))
                         el.fill(value)
+                        el.press('Tab')  # Trigger React state update
                         time.sleep(random.uniform(0.1, 0.3))
                         filled += 1
                         print(f"    [refill] {field_type}: {value[:25]}", flush=True)
@@ -496,29 +497,40 @@ def fill_all_empty_fields(page, data=None):
     except Exception as e:
         print(f"    [refill] Input scan error: {str(e)[:80]}", flush=True)
     
-    # STEP B: Fill empty selects using JS dispatchEvent (same as before - this works)
+    # STEP B: Fill empty selects using Playwright select_option (React-compatible)
     try:
-        sel_filled = page.evaluate("""() => {
-            let filled = 0;
+        # Get info about empty selects
+        empty_sels = page.evaluate("""() => {
+            const result = [];
             const selects = document.querySelectorAll('select');
+            let visIdx = 0;
             for (const sel of selects) {
                 if (sel.offsetParent === null) continue;
-                if (sel.value && sel.value !== '' && sel.value !== '-') {
-                    const currentOpt = sel.options[sel.selectedIndex];
-                    if (currentOpt && !currentOpt.text.includes('\u0627\u062e\u062a\u0631') && !currentOpt.text.includes('Select')) continue;
+                const currentOpt = sel.options[sel.selectedIndex];
+                const hasRealValue = sel.value && sel.value !== '' && sel.value !== '-' && 
+                    currentOpt && !currentOpt.text.includes('اختر') && !currentOpt.text.includes('Select');
+                if (!hasRealValue) {
+                    const opts = Array.from(sel.options).filter(o => 
+                        o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر') && !o.text.includes('Select'));
+                    if (opts.length > 0) {
+                        const choice = opts[Math.floor(Math.random() * opts.length)];
+                        result.push({ visIdx: visIdx, value: choice.value, text: choice.text });
+                    }
                 }
-                const opts = Array.from(sel.options).filter(o => 
-                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('\u0627\u062e\u062a\u0631') && !o.text.includes('Select'));
-                if (opts.length > 0) {
-                    const choice = opts[Math.floor(Math.random() * opts.length)];
-                    sel.value = choice.value;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    filled++;
-                }
+                visIdx++;
             }
-            return filled;
+            return result;
         }""")
-        filled += (sel_filled or 0)
+        if empty_sels:
+            for es in empty_sels:
+                try:
+                    sel_el = page.locator('select:visible').nth(es['visIdx'])
+                    sel_el.select_option(value=es['value'])
+                    filled += 1
+                    print(f"    [refill] select: {es['text'][:30]}", flush=True)
+                    time.sleep(random.uniform(0.3, 0.6))
+                except:
+                    pass
     except:
         pass
     
@@ -664,6 +676,8 @@ def fill_form_dynamically(page):
                         el.click()
                         time.sleep(random.uniform(0.2, 0.4))
                         el.fill(value)
+                        # Trigger blur/change for React state update
+                        el.press('Tab')
                         time.sleep(random.uniform(0.1, 0.3))
                         filled += 1
                         print(f"    ✅ {field_type}: {value[:30]}", flush=True)
@@ -756,13 +770,8 @@ def fill_form_dynamically(page):
                         valid_opts = [o for o in sel['options'] if o['value'] and o['value'] not in ('', '-')]
                         if valid_opts:
                             choice = random.choice(valid_opts)
-                            page.evaluate(f"""(args) => {{
-                                const sel = document.querySelectorAll('select')[{sel['index']}];
-                                if (sel) {{
-                                    sel.value = args.value;
-                                    sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                }}
-                            }}""", {'value': choice['value']})
+                            sel_el = page.locator('select:visible').nth(sel['index'])
+                            sel_el.select_option(value=choice['value'])
                             plate_letter_count += 1
                             filled += 1
                             print(f"    ✅ حرف لوحة {plate_letter_count}: {choice['text'][:10]}", flush=True)
@@ -804,21 +813,8 @@ def fill_form_dynamically(page):
                     chosen = random.choice(valid_opts)
                 
                 try:
-                    idx = sel['index']
-                    page.evaluate(f"""(args) => {{
-                        const allSelects = document.querySelectorAll('select');
-                        let visibleIdx = 0;
-                        for (const s of allSelects) {{
-                            if (s.offsetParent === null) continue;
-                            if (visibleIdx === args.idx) {{
-                                s.value = args.value;
-                                s.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                return true;
-                            }}
-                            visibleIdx++;
-                        }}
-                        return false;
-                    }}""", {'idx': idx, 'value': chosen['value']})
+                    sel_el = page.locator('select:visible').nth(sel['index'])
+                    sel_el.select_option(value=chosen['value'])
                     filled += 1
                     print(f"    ✅ {field_type}: {chosen['text'][:30]}", flush=True)
                     
@@ -897,20 +893,8 @@ def fill_form_dynamically(page):
                                 
                                 ns_chosen = random.choice(ns_valid)
                                 try:
-                                    page.evaluate(f"""(args) => {{
-                                        const allSelects = document.querySelectorAll('select');
-                                        let visibleIdx = 0;
-                                        for (const s of allSelects) {{
-                                            if (s.offsetParent === null) continue;
-                                            if (visibleIdx === args.idx) {{
-                                                s.value = args.value;
-                                                s.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                                return true;
-                                            }}
-                                            visibleIdx++;
-                                        }}
-                                        return false;
-                                    }}""", {'idx': ns['visibleIndex'], 'value': ns_chosen['value']})
+                                    dep_sel = page.locator('select:visible').nth(ns['visibleIndex'])
+                                    dep_sel.select_option(value=ns_chosen['value'])
                                     filled += 1
                                     print(f"    ✅ [dependent] {ns_type}: {ns_chosen['text'][:30]}", flush=True)
                                     time.sleep(random.uniform(0.5, 1))
@@ -1533,7 +1517,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v32 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v33 (React-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -1596,6 +1580,46 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         if filled < 3:
                             print(f"  ⚠️ Only {filled} fields filled", flush=True)
 
+                        # ===== DEBUG: Verify React state before clicking Next =====
+                        pre_url = page.url
+                        try:
+                            form_state = page.evaluate("""() => {
+                                const result = { inputs: {}, selects: {}, emptyFields: [] };
+                                // Check all visible inputs
+                                const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+                                for (const inp of inputs) {
+                                    if (inp.offsetParent === null) continue;
+                                    const name = inp.name || inp.id || 'unnamed';
+                                    result.inputs[name] = inp.value || '';
+                                    if (!inp.value || inp.value.trim() === '') result.emptyFields.push('input:' + name);
+                                }
+                                // Check all visible selects
+                                const selects = document.querySelectorAll('select');
+                                for (const sel of selects) {
+                                    if (sel.offsetParent === null) continue;
+                                    const name = sel.name || sel.id || 'unnamed';
+                                    const opt = sel.options[sel.selectedIndex];
+                                    result.selects[name] = { value: sel.value, text: opt ? opt.text : '' };
+                                    if (!sel.value || sel.value === '' || sel.value === '-' || (opt && (opt.text.includes('اختر') || opt.text.includes('Select')))) {
+                                        result.emptyFields.push('select:' + name);
+                                    }
+                                }
+                                // Check for validation errors already visible
+                                const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"], .text-danger');
+                                result.visibleErrors = Array.from(errors).map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 200);
+                                return result;
+                            }""")
+                            if form_state:
+                                print(f"  🔍 PRE-SUBMIT STATE:", flush=True)
+                                print(f"    Inputs: {json.dumps({k: v[:20] for k,v in form_state.get('inputs', {}).items()}, ensure_ascii=False)}", flush=True)
+                                print(f"    Selects: {json.dumps({k: v.get('text','')[:20] for k,v in form_state.get('selects', {}).items()}, ensure_ascii=False)}", flush=True)
+                                if form_state.get('emptyFields'):
+                                    print(f"    ⚠️ EMPTY FIELDS: {form_state['emptyFields']}", flush=True)
+                                if form_state.get('visibleErrors'):
+                                    print(f"    ⚠️ VISIBLE ERRORS: {form_state['visibleErrors'][:3]}", flush=True)
+                        except Exception as dbg_err:
+                            print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
+
                         # Click next/submit button
                         clicked = False
                         for selector in [
@@ -1622,6 +1646,55 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             update_status()
                             page.close()
                             continue
+
+                        # ===== DEBUG: Check post-click state =====
+                        post_url = page.url
+                        if post_url == pre_url:
+                            print(f"  ⚠️ URL DID NOT CHANGE after click! Still: {post_url[:60]}", flush=True)
+                            # Check for validation errors
+                            try:
+                                post_errors = page.evaluate("""() => {
+                                    const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"], .text-danger, [role="alert"]');
+                                    return Array.from(errors).map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 200);
+                                }""")
+                                if post_errors:
+                                    print(f"  ❌ VALIDATION ERRORS: {post_errors[:5]}", flush=True)
+                                else:
+                                    print(f"  🔍 No visible validation errors found", flush=True)
+                            except:
+                                pass
+                            
+                            # Try filling empty fields and clicking again
+                            print(f"  🔄 Retrying: fill empty fields + click again...", flush=True)
+                            fill_all_empty_fields(page, data)
+                            time.sleep(1)
+                            fill_all_empty_fields(page, data)
+                            time.sleep(1)
+                            
+                            # Click again
+                            for selector in [
+                                'button:has-text("التالي")', 'button:has-text("متابعة")',
+                                'button:has-text("إرسال")', 'button:has-text("تأكيد")',
+                                'button:has-text("Next")', 'button:has-text("Submit")',
+                                'button[type="submit"]',
+                            ]:
+                                try:
+                                    btn = page.locator(selector).first
+                                    if btn.is_visible():
+                                        btn.click()
+                                        print(f"  🔘 Retry clicked: {selector}", flush=True)
+                                        time.sleep(random.uniform(3, 5))
+                                        break
+                                except:
+                                    continue
+                            
+                            post_url2 = page.url
+                            if post_url2 != pre_url:
+                                print(f"  ✅ URL changed on retry: {post_url2[:60]}", flush=True)
+                            else:
+                                print(f"  ❌ URL still unchanged after retry", flush=True)
+                        else:
+                            print(f"  ✅ URL changed: {pre_url[:40]} → {post_url[:40]}", flush=True)
 
                         # Record submission
                         total_submissions += 1
