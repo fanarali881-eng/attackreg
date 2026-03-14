@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v35 - Smart Refill + React-Fix
+Smart Universal Form Bot v36 - React Native Events + Smart Refill
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -487,8 +487,16 @@ def fill_all_empty_fields(page, data=None):
                     if el.is_visible():
                         el.click()
                         time.sleep(random.uniform(0.2, 0.4))
-                        el.fill(value)
-                        el.press('Tab')  # Trigger React state update
+                        el.fill('')
+                        el.type(value, delay=30)
+                        time.sleep(0.2)
+                        el.evaluate("""(el) => {
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(el, el.value);
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }""")
                         time.sleep(random.uniform(0.1, 0.3))
                         filled += 1
                         print(f"    [refill] {field_type}: {value[:25]}", flush=True)
@@ -716,18 +724,26 @@ def fill_form_dynamically(page):
                     if selector:
                         el = page.locator(selector).first
                     else:
-                        # Fallback: use nth input
                         el = page.locator(f'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['index'])
                     
                     if el.is_visible():
                         el.click()
                         time.sleep(random.uniform(0.2, 0.4))
-                        el.fill(value)
-                        # Trigger blur/change for React state update
-                        el.press('Tab')
+                        # Use React-compatible input method
+                        el.fill('')  # Clear first
+                        el.type(value, delay=30)  # Type char by char like a real user
+                        time.sleep(0.2)
+                        # Dispatch React synthetic events via JS
+                        el.evaluate("""(el) => {
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(el, el.value);
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }""")
                         time.sleep(random.uniform(0.1, 0.3))
                         filled += 1
-                        print(f"    ✅ {field_type}: {value[:30]}", flush=True)
+                        print(f"    \u2705 {field_type}: {value[:30]}", flush=True)
                 except Exception as e:
                     print(f"    ❌ {field_type}: {str(e)[:60]}", flush=True)
                 
@@ -1564,7 +1580,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v35 (Smart-Refill) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v36 (React-Native) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
