@@ -2037,62 +2037,93 @@ def find_booking_page(page, target_url):
         print("  Already on registration form!", flush=True)
         return True
     
-    # STEP 1: Try clicking a booking button/link on the current page
+    # STEP 1: Try clicking a booking button/link using Playwright (works with SPA routing)
     print("  Looking for booking button...", flush=True)
     
-    # Use JavaScript to find and click the first booking-related link/button
+    # Try Playwright click first (better for SPA/React apps)
+    booking_texts = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز']
+    
+    # Method A: Playwright click on links with href containing appointment/booking
     try:
-        clicked = page.evaluate("""() => {
-            const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632'];
-            const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
-            
-            // Try links first (most common for navigation)
-            const links = document.querySelectorAll('a');
-            for (const link of links) {
-                const href = (link.getAttribute('href') || '').toLowerCase();
-                const text = link.innerText.trim();
-                
-                // Check href keywords
-                for (const kw of hrefWords) {
-                    if (href.includes(kw)) {
-                        link.click();
-                        return 'link:' + href;
-                    }
-                }
-                // Check text keywords
-                for (const kw of bookingWords) {
-                    if (text.includes(kw)) {
-                        link.click();
-                        return 'link:' + text;
-                    }
-                }
-            }
-            
-            // Try buttons
-            const buttons = document.querySelectorAll('button');
-            for (const btn of buttons) {
-                const text = btn.innerText.trim();
-                for (const kw of bookingWords) {
-                    if (text.includes(kw)) {
-                        btn.click();
-                        return 'button:' + text;
-                    }
-                }
-            }
-            
-            return null;
-        }""")
-        
-        if clicked:
-            print(f"  Clicked: {clicked}", flush=True)
-            time.sleep(5)
-            bypass_cloudflare(page, max_wait=30)
-            time.sleep(2)
-            if is_registration_form(page):
-                print(f"  Registration form found!", flush=True)
-                return True
+        for href_kw in ['new-appointment', 'appointment', 'booking', 'register', 'book']:
+            link = page.locator(f'a[href*="{href_kw}"]').first
+            if link.count() > 0 and link.is_visible():
+                link.click()
+                print(f"  Clicked link with href: {href_kw}", flush=True)
+                time.sleep(3)
+                if is_registration_form(page):
+                    print(f"  Registration form found!", flush=True)
+                    return True
+                break
     except:
         pass
+    
+    # Method B: Playwright click on elements with booking text
+    if not is_registration_form(page):
+        for text in booking_texts:
+            try:
+                el = page.get_by_text(text, exact=False)
+                if el.count() > 0 and el.first.is_visible():
+                    el.first.click()
+                    print(f"  Clicked: {text}", flush=True)
+                    time.sleep(3)
+                    if is_registration_form(page):
+                        print(f"  Registration form found!", flush=True)
+                        return True
+                    break
+            except:
+                continue
+    
+    # Method C: JS click fallback
+    if not is_registration_form(page):
+        try:
+            clicked = page.evaluate("""() => {
+                const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632'];
+                const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
+                
+                const links = document.querySelectorAll('a');
+                for (const link of links) {
+                    const href = (link.getAttribute('href') || '').toLowerCase();
+                    const text = link.innerText.trim();
+                    
+                    for (const kw of hrefWords) {
+                        if (href.includes(kw)) {
+                            link.click();
+                            return 'link:' + href;
+                        }
+                    }
+                    for (const kw of bookingWords) {
+                        if (text.includes(kw)) {
+                            link.click();
+                            return 'link:' + text;
+                        }
+                    }
+                }
+                
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    const text = btn.innerText.trim();
+                    for (const kw of bookingWords) {
+                        if (text.includes(kw)) {
+                            btn.click();
+                            return 'button:' + text;
+                        }
+                    }
+                }
+                
+                return null;
+            }""")
+            
+            if clicked:
+                print(f"  Clicked (JS): {clicked}", flush=True)
+                time.sleep(5)
+                bypass_cloudflare(page, max_wait=30)
+                time.sleep(2)
+                if is_registration_form(page):
+                    print(f"  Registration form found!", flush=True)
+                    return True
+        except:
+            pass
     
     # STEP 2: Try common booking page paths directly
     base_url = target_url.rstrip('/')
