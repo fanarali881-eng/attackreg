@@ -206,6 +206,11 @@ FIELD_KEYWORDS = {
         'en': ['date', 'inspection_date', 'appointment_date', 'schedule'],
         'exclude': ['ميلاد', 'birth', 'انتهاء', 'expir'],
     },
+    'delegate_name': {
+        'ar': ['المفوض', 'مفوض', 'أسم المفوض', 'اسم المفوض', 'الوكيل', 'وكيل', 'المندوب', 'مندوب'],
+        'en': ['delegate', 'representative', 'agent_name', 'authorized'],
+        'exclude': [],
+    },
 }
 
 # Keywords for SELECT dropdowns
@@ -324,6 +329,9 @@ def get_field_value(field_type, data):
         # Generate a date in the near future (next 1-14 days)
         future = datetime.now() + timedelta(days=random.randint(1, 14))
         return future.strftime('%Y-%m-%d')
+    elif field_type == 'delegate_name':
+        # Use the same person's name as delegate
+        return data.get('name', gen_name())
     return None
 
 
@@ -1432,7 +1440,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v30 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v31 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
