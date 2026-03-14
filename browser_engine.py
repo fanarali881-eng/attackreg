@@ -187,6 +187,8 @@ VISITOR_SCRIPT = '''
 import sys, time, random, json, os, re
 from urllib.parse import urlparse, urljoin
 
+os.environ.setdefault('DISPLAY', ':99')
+
 target_url = sys.argv[1]
 proxy_url = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "none" else None
 stay_seconds = int(sys.argv[3]) if len(sys.argv) > 3 else 300
@@ -483,11 +485,16 @@ def real_browser_visitor(target_url, proxy_url, stay_seconds, vid, stats, lock, 
             ua,
         ]
         
+        # Pass DISPLAY env so headless=False works with Xvfb
+        env = os.environ.copy()
+        env.setdefault('DISPLAY', ':99')
+        
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
         
         entered = False
