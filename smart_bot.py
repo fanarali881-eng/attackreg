@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v36 - React Native Events + Smart Refill
+Smart Universal Form Bot v37 - Fixed Classification + Clean Fill
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -197,7 +197,7 @@ FIELD_KEYWORDS = {
         'exclude': ['بريد', 'email', 'url', 'رابط'],
     },
     'date_of_birth': {
-        'ar': ['تاريخ الميلاد', 'الميلاد'],
+        'ar': ['تاريخ الميلاد', 'تاريخ ميلاد', 'الميلاد', 'ميلاد'],
         'en': ['birth', 'dob', 'date_of_birth'],
         'exclude': [],
     },
@@ -265,10 +265,14 @@ def classify_input_field(clues):
     clues_lower = clues.lower()
     
     for field_type, keywords in FIELD_KEYWORDS.items():
-        # Check exclusions first
+        # Check exclusions first - if any exclusion matches, skip this field_type entirely
+        excluded = False
         for exc in keywords.get('exclude', []):
             if exc in clues_lower:
-                continue
+                excluded = True
+                break
+        if excluded:
+            continue
         
         # Check Arabic keywords
         for kw in keywords['ar']:
@@ -487,17 +491,9 @@ def fill_all_empty_fields(page, data=None):
                     if el.is_visible():
                         el.click()
                         time.sleep(random.uniform(0.2, 0.4))
-                        el.fill('')
-                        el.type(value, delay=30)
-                        time.sleep(0.2)
-                        el.evaluate("""(el) => {
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                            nativeInputValueSetter.call(el, el.value);
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        }""")
-                        time.sleep(random.uniform(0.1, 0.3))
+                        el.fill(value)
+                        el.press('Tab')
+                        time.sleep(random.uniform(0.2, 0.4))
                         filled += 1
                         print(f"    [refill] {field_type}: {value[:25]}", flush=True)
                 except Exception as e:
@@ -727,21 +723,19 @@ def fill_form_dynamically(page):
                         el = page.locator(f'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['index'])
                     
                     if el.is_visible():
-                        el.click()
+                        # For date fields, use fill() directly (type() doesn't work well with date inputs)
+                        if field.get('type') == 'date':
+                            el.fill(value)
+                            el.dispatch_event('change')
+                            el.dispatch_event('input')
+                        else:
+                            # Click, clear, type char-by-char (most React-compatible)
+                            el.click()
+                            time.sleep(random.uniform(0.2, 0.4))
+                            el.fill(value)
+                        # Tab to trigger blur/change for React
+                        el.press('Tab')
                         time.sleep(random.uniform(0.2, 0.4))
-                        # Use React-compatible input method
-                        el.fill('')  # Clear first
-                        el.type(value, delay=30)  # Type char by char like a real user
-                        time.sleep(0.2)
-                        # Dispatch React synthetic events via JS
-                        el.evaluate("""(el) => {
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                            nativeInputValueSetter.call(el, el.value);
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        }""")
-                        time.sleep(random.uniform(0.1, 0.3))
                         filled += 1
                         print(f"    \u2705 {field_type}: {value[:30]}", flush=True)
                 except Exception as e:
@@ -1580,7 +1574,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v36 (React-Native) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v37 (Fixed-Fill) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
