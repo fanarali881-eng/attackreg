@@ -1628,144 +1628,165 @@ def fill_payment(page):
         except:
             continue
     
-    # Handle Shadcn Select dropdowns for expiry month/year (React custom selects)
+    # Handle custom Select dropdowns for expiry month/year (Radix/Shadcn/MUI/any custom select)
     try:
         month_done = False
         year_done = False
         
-        # Find all Shadcn Select trigger buttons (they have role='combobox' or data-placeholder)
-        shadcn_btns = page.evaluate("""() => {
-            const results = [];
-            // Look for select trigger buttons
-            const btns = document.querySelectorAll('button[role="combobox"], [class*="SelectTrigger"]');
-            btns.forEach((btn, idx) => {
-                if (btn.offsetParent !== null) {
-                    results.push({
-                        idx: idx,
-                        text: btn.innerText.trim(),
-                        classes: btn.className.substring(0, 80)
-                    });
-                }
-            });
-            return results;
-        }""")
+        # Universal approach: find select triggers by label context using Playwright
+        # This works for any website with labeled select components
+        month_labels = ['شهر الانتهاء', 'شهر', 'الشهر', 'Expiry Month', 'Month', 'MM']
+        year_labels = ['سنة الانتهاء', 'سنة', 'السنة', 'Expiry Year', 'Year', 'YY', 'YYYY']
         
-        if shadcn_btns:
-            print(f"    🔍 Found {len(shadcn_btns)} Shadcn Select buttons for payment", flush=True)
-            
-            for btn_info in shadcn_btns:
-                btn_text = btn_info['text']
-                
-                # Check if this is month or year select by its placeholder/text
-                is_month_btn = 'الشهر' in btn_text or 'Month' in btn_text.lower() or btn_text in ['الشهر', '']
-                is_year_btn = 'السنة' in btn_text or 'Year' in btn_text.lower() or btn_text in ['السنة', '']
-                
-                if (is_month_btn and not month_done) or (is_year_btn and not year_done):
+        # STEP A: Find triggers by their parent label using Playwright locators
+        for label_text in month_labels:
+            if month_done:
+                break
+            try:
+                # Find label element containing this text
+                label_el = page.locator(f'label:has-text("{label_text}")').first
+                if label_el.count() == 0:
+                    continue
+                # Find the trigger button in the same container (sibling or child)
+                container = label_el.locator('..') # parent
+                trigger = container.locator('button[role="combobox"], [data-slot="select-trigger"], button[type="button"]').first
+                if trigger.count() > 0 and trigger.is_visible():
+                    trigger.click()
+                    time.sleep(0.8)
+                    options = page.locator('[role="option"]').all()
+                    if options:
+                        # Try exact match first
+                        for opt in options:
+                            opt_text = opt.inner_text().strip()
+                            if opt_text == exp_month or opt_text == str(int(exp_month)):
+                                opt.click()
+                                month_done = True
+                                filled += 1
+                                print(f"    ✅ شهر الانتهاء: {exp_month}", flush=True)
+                                break
+                        # Fallback: click any valid month
+                        if not month_done and len(options) >= 2:
+                            options[random.randint(0, min(11, len(options)-1))].click()
+                            month_done = True
+                            filled += 1
+                            print(f"    ✅ شهر الانتهاء (fallback)", flush=True)
+                    else:
+                        page.keyboard.press('Escape')
+                    time.sleep(0.3)
+            except:
+                try:
+                    page.keyboard.press('Escape')
+                except:
+                    pass
+        
+        for label_text in year_labels:
+            if year_done:
+                break
+            try:
+                label_el = page.locator(f'label:has-text("{label_text}")').first
+                if label_el.count() == 0:
+                    continue
+                container = label_el.locator('..')
+                trigger = container.locator('button[role="combobox"], [data-slot="select-trigger"], button[type="button"]').first
+                if trigger.count() > 0 and trigger.is_visible():
+                    trigger.click()
+                    time.sleep(0.8)
+                    options = page.locator('[role="option"]').all()
+                    if options:
+                        for opt in options:
+                            opt_text = opt.inner_text().strip()
+                            if opt_text == exp_year or opt_text == str(int(exp_year)) or opt_text == exp_year[-2:]:
+                                opt.click()
+                                year_done = True
+                                filled += 1
+                                print(f"    ✅ سنة الانتهاء: {exp_year}", flush=True)
+                                break
+                        if not year_done:
+                            valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
+                            if valid_opts:
+                                valid_opts[min(2, len(valid_opts)-1)].click()
+                                year_done = True
+                                filled += 1
+                                print(f"    ✅ سنة الانتهاء (fallback)", flush=True)
+                    else:
+                        page.keyboard.press('Escape')
+                    time.sleep(0.3)
+            except:
+                try:
+                    page.keyboard.press('Escape')
+                except:
+                    pass
+        
+        # STEP B: If label approach failed, try finding ALL combobox/trigger buttons on page
+        if not month_done or not year_done:
+            try:
+                triggers = page.locator('button[role="combobox"], [data-slot="select-trigger"]').all()
+                print(f"    🔍 Found {len(triggers)} select triggers on payment page", flush=True)
+                for i, trigger in enumerate(triggers):
+                    if month_done and year_done:
+                        break
                     try:
-                        # Click the trigger button
-                        trigger = page.locator('button[role="combobox"], [class*="SelectTrigger"]').nth(btn_info['idx'])
-                        trigger.click()
-                        time.sleep(0.5)
+                        if not trigger.is_visible():
+                            continue
+                        btn_text = trigger.inner_text().strip()
+                        is_month = any(kw in btn_text for kw in ['الشهر', 'شهر', 'Month', 'MM']) or (btn_text == '' and not month_done)
+                        is_year = any(kw in btn_text for kw in ['السنة', 'سنة', 'Year', 'YY']) or (btn_text == '' and month_done and not year_done)
                         
-                        # Find the dropdown options
-                        options = page.locator('[role="option"]').all()
-                        if options:
-                            if is_month_btn and not month_done:
-                                # Find the matching month
-                                for opt in options:
-                                    opt_text = opt.inner_text().strip()
-                                    if opt_text == exp_month or opt_text == str(int(exp_month)):
-                                        opt.click()
-                                        month_done = True
-                                        filled += 1
-                                        print(f"    ✅ شهر الانتهاء (Shadcn): {exp_month}", flush=True)
-                                        break
-                                if not month_done:
-                                    # Click any valid month
-                                    if len(options) > 2:
+                        if (is_month and not month_done) or (is_year and not year_done):
+                            trigger.click()
+                            time.sleep(0.8)
+                            options = page.locator('[role="option"]').all()
+                            if options:
+                                if is_month and not month_done:
+                                    for opt in options:
+                                        if opt.inner_text().strip() == exp_month or opt.inner_text().strip() == str(int(exp_month)):
+                                            opt.click()
+                                            month_done = True
+                                            filled += 1
+                                            print(f"    ✅ شهر الانتهاء (trigger): {exp_month}", flush=True)
+                                            break
+                                    if not month_done and len(options) >= 2:
                                         options[random.randint(0, min(11, len(options)-1))].click()
                                         month_done = True
                                         filled += 1
-                                        print(f"    ✅ شهر الانتهاء (Shadcn fallback)", flush=True)
-                            elif is_year_btn and not year_done:
-                                # Find the matching year
-                                for opt in options:
-                                    opt_text = opt.inner_text().strip()
-                                    if opt_text == exp_year or opt_text == str(int(exp_year)) or opt_text == exp_year[-2:]:
-                                        opt.click()
-                                        year_done = True
-                                        filled += 1
-                                        print(f"    ✅ سنة الانتهاء (Shadcn): {exp_year}", flush=True)
-                                        break
-                                if not year_done:
-                                    # Click a valid year (not the first placeholder)
-                                    valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
-                                    if valid_opts:
-                                        valid_opts[min(2, len(valid_opts)-1)].click()
-                                        year_done = True
-                                        filled += 1
-                                        print(f"    ✅ سنة الانتهاء (Shadcn fallback)", flush=True)
-                        else:
-                            # Close the dropdown if no options found
-                            page.keyboard.press('Escape')
-                        
-                        time.sleep(0.3)
-                    except Exception as e:
-                        print(f"    ⚠️ Shadcn select error: {str(e)[:60]}", flush=True)
+                                        print(f"    ✅ شهر الانتهاء (trigger fallback)", flush=True)
+                                elif is_year and not year_done:
+                                    for opt in options:
+                                        ot = opt.inner_text().strip()
+                                        if ot == exp_year or ot == str(int(exp_year)) or ot == exp_year[-2:]:
+                                            opt.click()
+                                            year_done = True
+                                            filled += 1
+                                            print(f"    ✅ سنة الانتهاء (trigger): {exp_year}", flush=True)
+                                            break
+                                    if not year_done:
+                                        valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
+                                        if valid_opts:
+                                            valid_opts[min(2, len(valid_opts)-1)].click()
+                                            year_done = True
+                                            filled += 1
+                                            print(f"    ✅ سنة الانتهاء (trigger fallback)", flush=True)
+                            else:
+                                page.keyboard.press('Escape')
+                            time.sleep(0.3)
+                    except:
                         try:
                             page.keyboard.press('Escape')
                         except:
                             pass
-        
-        # If month/year still not done, try by finding buttons near labels
-        if not month_done or not year_done:
-            try:
-                # Use JS to find and click the select triggers by their label context
-                page.evaluate("""(data) => {
-                    const labels = document.querySelectorAll('label');
-                    for (const label of labels) {
-                        const text = label.innerText.trim();
-                        let targetValue = null;
-                        
-                        if (text.includes('شهر') && !data.month_done) {
-                            targetValue = data.exp_month;
-                        } else if (text.includes('سنة') && !data.year_done) {
-                            targetValue = data.exp_year;
-                        } else {
-                            continue;
-                        }
-                        
-                        // Find the select trigger near this label
-                        const container = label.closest('div.space-y-2') || label.parentElement;
-                        if (container) {
-                            const trigger = container.querySelector('button[role="combobox"]');
-                            if (trigger) {
-                                trigger.click();
-                            }
-                        }
-                    }
-                }""", {'exp_month': exp_month, 'exp_year': exp_year, 'month_done': month_done, 'year_done': year_done})
-                time.sleep(0.5)
-                
-                # Now try to click the option
-                options = page.locator('[role="option"]').all()
-                if options:
-                    target_val = exp_month if not month_done else exp_year
-                    for opt in options:
-                        if opt.inner_text().strip() == target_val or opt.inner_text().strip() == str(int(target_val)):
-                            opt.click()
-                            filled += 1
-                            if not month_done:
-                                month_done = True
-                                print(f"    ✅ شهر الانتهاء (label-based): {exp_month}", flush=True)
-                            else:
-                                year_done = True
-                                print(f"    ✅ سنة الانتهاء (label-based): {exp_year}", flush=True)
-                            break
             except:
                 pass
+        
+        if month_done:
+            print(f"    ✅ Month selected", flush=True)
+        else:
+            print(f"    ⚠️ Month NOT selected", flush=True)
+        if year_done:
+            print(f"    ✅ Year selected", flush=True)
+        else:
+            print(f"    ⚠️ Year NOT selected", flush=True)
     except Exception as e:
-        print(f"    ⚠️ Shadcn payment select error: {str(e)[:80]}", flush=True)
+        print(f"    ⚠️ Custom select error: {str(e)[:80]}", flush=True)
     
     # JS label-based fallback
     if filled < 3:
