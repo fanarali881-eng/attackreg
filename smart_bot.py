@@ -2231,6 +2231,53 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             except:
                                 pass
                             
+                            # Check if page content changed (SPA form progression)
+                            # If payment button appeared, form progressed successfully!
+                            try:
+                                pay_btn_visible = page.evaluate("""() => {
+                                    const btns = document.querySelectorAll('button');
+                                    for (const btn of btns) {
+                                        if (btn.offsetParent === null) continue;
+                                        const text = btn.innerText.trim();
+                                        if (text.includes('ادفع') || text.includes('Pay') || text.includes('الدفع')) {
+                                            return text;
+                                        }
+                                    }
+                                    return null;
+                                }""")
+                                if pay_btn_visible:
+                                    print(f"  ✅ SPA: Payment page detected! Button: '{pay_btn_visible}'", flush=True)
+                                    # Skip retry, go directly to payment
+                                    total_submissions += 1
+                                    entry = {
+                                        'id': total_submissions,
+                                        'time': datetime.now().strftime('%H:%M:%S'),
+                                        'name': data.get('name', '-'),
+                                        'national_id': data.get('national_id', '-'),
+                                        'phone': data.get('phone', '-'),
+                                        'email': data.get('email', '-'),
+                                        'status': 'summary_done'
+                                    }
+                                    update_status(entry=entry)
+                                    print(f"  ✅ Page 1 filled! Going to payment... (Submission #{total_submissions})", flush=True)
+                                    paid, card_data = fill_payment(page)
+                                    if paid:
+                                        recent_entries[0]['status'] = 'payment_done'
+                                        if card_data:
+                                            recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                            recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                            recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                            recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
+                                        update_status()
+                                        print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
+                                    else:
+                                        recent_entries[0]['status'] = 'payment_attempted'
+                                        update_status()
+                                    page.close()
+                                    continue
+                            except:
+                                pass
+                            
                             # Check button state
                             try:
                                 btn_info = page.evaluate("""() => {
