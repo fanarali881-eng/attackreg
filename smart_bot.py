@@ -1401,52 +1401,49 @@ def fill_form_dynamically(page):
         pass
     
     # ===== STEP 7c: Fix MUI DatePicker for commissioner-date =====
-    # MUI DatePicker inputs don't accept regular typing - need special handling
+    # MUI DatePicker inputs don't accept regular typing - use JS to set value directly
     try:
-        # Find all date inputs that have today's date (likely birth dates defaulting to today)
-        today_str = datetime.now().strftime('%m/%d/%Y')
-        date_inputs = page.locator('input[name*="commissioner-date"], input[name*="commissioner_date"]')
-        for i in range(date_inputs.count()):
-            try:
-                inp = date_inputs.nth(i)
-                if inp.is_visible():
-                    current_val = inp.input_value()
-                    if current_val == today_str or '2026' in current_val or '2025' in current_val:
-                        # Generate a proper birth date
-                        birth_year = random.randint(1970, 2000)
-                        birth_month = f"{random.randint(1, 12):02d}"
-                        birth_day = f"{random.randint(1, 28):02d}"
-                        birth_date = f"{birth_month}/{birth_day}/{birth_year}"
-                        
-                        # Method 1: Triple-click to select all, then type
-                        inp.click(click_count=3)
-                        time.sleep(0.3)
-                        inp.press('Control+a')
-                        time.sleep(0.1)
-                        inp.type(birth_date, delay=50)
-                        inp.press('Tab')
-                        time.sleep(0.5)
-                        
-                        # Verify if value changed
-                        new_val = inp.input_value()
-                        if new_val != current_val and '2026' not in new_val:
-                            print(f"    \u2705 Commissioner date set to: {new_val}", flush=True)
-                            filled += 1
-                        else:
-                            # Method 2: Use React's nativeInputValueSetter
-                            inp.evaluate("""(el) => {
-                                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                nativeInputValueSetter.call(el, '""" + birth_date + """');
-                                el.dispatchEvent(new Event('input', { bubbles: true }));
-                                el.dispatchEvent(new Event('change', { bubbles: true }));
-                                el.dispatchEvent(new Event('blur', { bubbles: true }));
-                            }""")
-                            time.sleep(0.5)
-                            new_val2 = inp.input_value()
-                            print(f"    \u2705 Commissioner date (method 2): {new_val2}", flush=True)
-                            filled += 1
-            except Exception as de:
-                print(f"    \u26a0\ufe0f Date fix error: {str(de)[:60]}", flush=True)
+        birth_year = random.randint(1970, 2000)
+        birth_month = f"{random.randint(1, 12):02d}"
+        birth_day = f"{random.randint(1, 28):02d}"
+        birth_date = f"{birth_month}/{birth_day}/{birth_year}"
+        
+        date_fixed = page.evaluate("""(birthDate) => {
+            const results = [];
+            // Find commissioner-date input
+            const dateInputs = document.querySelectorAll('input[name*="commissioner-date"], input[name*="commissioner_date"]');
+            for (const inp of dateInputs) {
+                if (inp.offsetParent === null) continue;
+                const currentVal = inp.value;
+                if (currentVal.includes('2026') || currentVal.includes('2025') || currentVal.includes('2024')) {
+                    // Use React's nativeInputValueSetter to bypass read-only
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeInputValueSetter.call(inp, birthDate);
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                    
+                    // Also try React fiber approach
+                    const key = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (key) {
+                        const fiber = inp[key];
+                        if (fiber && fiber.memoizedProps && fiber.memoizedProps.onChange) {
+                            fiber.memoizedProps.onChange({ target: { value: birthDate } });
+                        }
+                    }
+                    
+                    results.push({ old: currentVal, new: inp.value, birthDate: birthDate });
+                }
+            }
+            return results;
+        }""", birth_date)
+        
+        if date_fixed and len(date_fixed) > 0:
+            for df in date_fixed:
+                print(f"    \u2705 Commissioner date: {df.get('old','')} -> {df.get('new','')} (target: {birth_date})", flush=True)
+                filled += 1
+        else:
+            print(f"    \u26a0\ufe0f No commissioner-date inputs found to fix", flush=True)
     except Exception as de:
         print(f"    \u26a0\ufe0f Commissioner date error: {str(de)[:60]}", flush=True)
     
