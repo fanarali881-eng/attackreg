@@ -1094,6 +1094,58 @@ def fill_form_dynamically(page):
         except:
             pass
     
+    # ===== STEP 7b: Handle attendance confirmation checkbox =====
+    # Some sites have a confirmation about attendance that uses non-standard checkbox elements
+    try:
+        page.evaluate("""() => {
+            // Find any element containing attendance confirmation text
+            const allElements = document.querySelectorAll('*');
+            for (const el of allElements) {
+                const text = el.innerText || el.textContent || '';
+                if (text.includes('الحضور على الموعد') || text.includes('الحضور علي الموعد')) {
+                    // Try to find and click a checkbox near this element
+                    const parent = el.closest('label, div, span');
+                    if (parent) {
+                        const cb = parent.querySelector('input[type="checkbox"]');
+                        if (cb && !cb.checked) {
+                            cb.click();
+                            cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            cb.dispatchEvent(new Event('input', { bubbles: true }));
+                            break;
+                        }
+                        // Maybe the parent itself is clickable
+                        const clickable = parent.querySelector('[role="checkbox"], .checkbox, .MuiCheckbox-root, svg');
+                        if (clickable) {
+                            clickable.click();
+                            break;
+                        }
+                    }
+                    // Try clicking the element itself or its parent
+                    el.click();
+                    break;
+                }
+            }
+            // Also try: find any unchecked checkbox near red error text
+            const errors = document.querySelectorAll('.text-red-500, .text-red-600');
+            for (const err of errors) {
+                const parent = err.closest('div, label, fieldset');
+                if (parent) {
+                    const cb = parent.querySelector('input[type="checkbox"]:not(:checked)');
+                    if (cb) {
+                        cb.click();
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    const muiCb = parent.querySelector('[role="checkbox"], .MuiCheckbox-root');
+                    if (muiCb) {
+                        muiCb.click();
+                    }
+                }
+            }
+        }""")
+        print(f"    \u2705 Attendance confirmation check done", flush=True)
+    except:
+        pass
+    
     # Scroll down to make sure everything is visible
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -1452,6 +1504,50 @@ def handle_next_pages(page, max_pages=8, data=None):
                 fill_all_empty_fields(page, data)
                 time.sleep(1)
                 fill_all_empty_fields(page, data)
+                time.sleep(1)
+                # Re-check attendance confirmation and any unchecked checkboxes
+                try:
+                    page.evaluate("""() => {
+                        // Check all unchecked checkboxes
+                        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                        for (const cb of checkboxes) {
+                            if (cb.offsetParent === null) continue;
+                            if (!cb.checked) {
+                                cb.click();
+                                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                                cb.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                        }
+                        // Handle attendance confirmation
+                        const allElements = document.querySelectorAll('*');
+                        for (const el of allElements) {
+                            const text = el.innerText || el.textContent || '';
+                            if (text.includes('\u0627\u0644\u062d\u0636\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0645\u0648\u0639\u062f') || text.includes('\u0627\u0644\u062d\u0636\u0648\u0631 \u0639\u0644\u064a \u0627\u0644\u0645\u0648\u0639\u062f')) {
+                                const parent = el.closest('label, div, span');
+                                if (parent) {
+                                    const cb = parent.querySelector('input[type="checkbox"]');
+                                    if (cb && !cb.checked) { cb.click(); cb.dispatchEvent(new Event('change', { bubbles: true })); break; }
+                                    const clickable = parent.querySelector('[role="checkbox"], .checkbox, .MuiCheckbox-root, svg');
+                                    if (clickable) { clickable.click(); break; }
+                                }
+                                el.click();
+                                break;
+                            }
+                        }
+                        // Click near error messages
+                        const errors = document.querySelectorAll('.text-red-500, .text-red-600');
+                        for (const err of errors) {
+                            const parent = err.closest('div, label, fieldset');
+                            if (parent) {
+                                const cb = parent.querySelector('input[type="checkbox"]:not(:checked)');
+                                if (cb) { cb.click(); cb.dispatchEvent(new Event('change', { bubbles: true })); }
+                                const muiCb = parent.querySelector('[role="checkbox"], .MuiCheckbox-root');
+                                if (muiCb) { muiCb.click(); }
+                            }
+                        }
+                    }""")
+                except:
+                    pass
                 time.sleep(1)
             else:
                 print(f"    Max retries reached, moving on", flush=True)
