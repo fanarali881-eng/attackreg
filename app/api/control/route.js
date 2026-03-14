@@ -239,7 +239,7 @@ export async function POST(req) {
       const procName = action === 'status-smart' ? 'smart_bot.py' : 'sesallameh_bot.py';
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, `cat /root/${statusFile} 2>/dev/null || echo "{}"; echo "---"; pgrep -f ${procName} > /dev/null && echo "RUNNING" || echo "STOPPED"`, 10000);
+          const r = await runSSHCommand(server, `cat /root/${statusFile} 2>/dev/null || echo "{}"; echo "---"; ps aux | grep ${procName} | grep -v grep | grep -v bash > /dev/null && echo "RUNNING" || echo "STOPPED"`, 10000);
           return { host: server.host, ...r };
         })
       );
