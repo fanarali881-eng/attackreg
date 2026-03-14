@@ -1421,6 +1421,11 @@ def handle_next_pages(page, max_pages=8, data=None):
         time.sleep(random.uniform(2, 4))
         url = page.url.lower()
         title = page.title()
+        # Capture page content fingerprint before clicking (for SPA detection)
+        try:
+            page_content_before = page.evaluate("() => document.body.innerText.substring(0, 500)")
+        except:
+            page_content_before = ''
         print(f"\n  Step {step+1}: {page.url[:60]} | {title}", flush=True)
         
         # Check for payment page
@@ -1486,7 +1491,17 @@ def handle_next_pages(page, max_pages=8, data=None):
             print(f"    URL changed to: {page.url[:60]}", flush=True)
             retry_count = 0  # Reset retry counter on successful navigation
         else:
-            # URL didn't change - check for validation errors
+            # URL didn't change - check if page content changed (SPA form progression)
+            try:
+                page_content_after = page.evaluate("() => document.body.innerText.substring(0, 500)")
+            except:
+                page_content_after = ''
+            if page_content_before and page_content_after and page_content_before != page_content_after:
+                # Page content changed = form progressed (SPA)
+                print(f"    SPA form progressed (content changed)", flush=True)
+                retry_count = 0
+                continue
+            # Content also didn't change - check for validation errors
             retry_count += 1
             try:
                 errors = page.evaluate("""() => {
