@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v27 - Fully Dynamic Field Detection
+Smart Universal Form Bot v28 - Fully Dynamic Field Detection
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -201,6 +201,11 @@ FIELD_KEYWORDS = {
         'en': ['birth', 'dob', 'date_of_birth'],
         'exclude': [],
     },
+    'inspection_date': {
+        'ar': ['تاريخ الفحص', 'تاريخ', 'التاريخ', 'موعد الفحص'],
+        'en': ['date', 'inspection_date', 'appointment_date', 'schedule'],
+        'exclude': ['ميلاد', 'birth', 'انتهاء', 'expir'],
+    },
 }
 
 # Keywords for SELECT dropdowns
@@ -315,6 +320,10 @@ def get_field_value(field_type, data):
         month = f"{random.randint(1, 12):02d}"
         day = f"{random.randint(1, 28):02d}"
         return f"{year}-{month}-{day}"
+    elif field_type == 'inspection_date':
+        # Generate a date in the near future (next 1-14 days)
+        future = datetime.now() + timedelta(days=random.randint(1, 14))
+        return future.strftime('%Y-%m-%d')
     return None
 
 
@@ -469,8 +478,23 @@ def fill_form_dynamically(page):
                     elif maxlen == '4' and not field.get('value'):
                         field_type = 'plate_number'
                     else:
-                        print(f"    ⚠️ Unknown field: ph='{field['placeholder'][:30]}' label='{field['label'][:30]}' name='{field['name']}' id='{field['id']}'", flush=True)
-                        continue
+                        # Check if it looks like a date field
+                        all_clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']}"
+                        if any(w in all_clues for w in ['\u062a\u0627\u0631\u064a\u062e', 'date', '\u0645\u0648\u0639\u062f']):
+                            field_type = 'inspection_date'
+                        elif field.get('type') == 'date':
+                            field_type = 'inspection_date'
+                        else:
+                            print(f"    Unknown field: ph='{field['placeholder'][:30]}' label='{field['label'][:30]}' name='{field['name']}' id='{field['id']}'", flush=True)
+                            # Try to fill unknown fields with a generic value based on type
+                            if field.get('type') == 'number':
+                                value = str(random.randint(1, 100))
+                            elif field.get('type') == 'email':
+                                field_type = 'email'
+                            elif field.get('type') == 'tel':
+                                field_type = 'phone'
+                            else:
+                                continue
                 
                 value = get_field_value(field_type, data)
                 if not value:
@@ -1147,80 +1171,69 @@ def is_registration_form(page):
 def find_booking_page(page, target_url):
     """Navigate to the booking/registration form by clicking booking button first"""
     
+    # Check if already on a registration form
+    if is_registration_form(page):
+        print("  Already on registration form!", flush=True)
+        return True
+    
     # STEP 1: Try clicking a booking button/link on the current page
-    print("  \ud83d\udd0d Looking for booking button...", flush=True)
-    booking_texts = [
-        '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f',
-        '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632', '\u062a\u0633\u062c\u064a\u0644', '\u0633\u062c\u0644 \u0627\u0644\u0622\u0646', '\u0627\u0628\u062f\u0623 \u0627\u0644\u062d\u062c\u0632',
-        'Book Appointment', 'Book Now', 'New Appointment', 'Register', 'Book',
-    ]
+    print("  Looking for booking button...", flush=True)
     
-    for link_text in booking_texts:
-        try:
-            btn = page.locator(f'button:has-text("{link_text}")').first
-            if btn.is_visible():
-                btn.click()
-                print(f"  \u2705 Clicked button: {link_text}", flush=True)
-                time.sleep(4)
-                if is_registration_form(page):
-                    print(f"  \u2705 Registration form found!", flush=True)
-                    return True
-                bypass_cloudflare(page, max_wait=30)
-                time.sleep(2)
-                if is_registration_form(page):
-                    print(f"  \u2705 Registration form found after CF!", flush=True)
-                    return True
-                continue
-        except:
-            pass
-        
-        try:
-            link = page.get_by_text(link_text)
-            if link.count() > 0 and link.first.is_visible():
-                link.first.click()
-                print(f"  \u2705 Clicked link: {link_text}", flush=True)
-                time.sleep(4)
-                if is_registration_form(page):
-                    print(f"  \u2705 Registration form found!", flush=True)
-                    return True
-                bypass_cloudflare(page, max_wait=30)
-                time.sleep(2)
-                if is_registration_form(page):
-                    print(f"  \u2705 Registration form found after CF!", flush=True)
-                    return True
-                continue
-        except:
-            continue
-    
-    # STEP 2: Try clicking any <a> tag that has booking-related href
+    # Use JavaScript to find and click the first booking-related link/button
     try:
-        clicked_link = page.evaluate("""() => {
+        clicked = page.evaluate("""() => {
+            const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632'];
+            const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
+            
+            // Try links first (most common for navigation)
             const links = document.querySelectorAll('a');
-            const keywords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
             for (const link of links) {
                 const href = (link.getAttribute('href') || '').toLowerCase();
-                const text = link.innerText.trim().toLowerCase();
-                for (const kw of keywords) {
-                    if (href.includes(kw) || text.includes('\u062d\u062c\u0632') || text.includes('\u0645\u0648\u0639\u062f')) {
+                const text = link.innerText.trim();
+                
+                // Check href keywords
+                for (const kw of hrefWords) {
+                    if (href.includes(kw)) {
                         link.click();
-                        return href || text;
+                        return 'link:' + href;
+                    }
+                }
+                // Check text keywords
+                for (const kw of bookingWords) {
+                    if (text.includes(kw)) {
+                        link.click();
+                        return 'link:' + text;
                     }
                 }
             }
+            
+            // Try buttons
+            const buttons = document.querySelectorAll('button');
+            for (const btn of buttons) {
+                const text = btn.innerText.trim();
+                for (const kw of bookingWords) {
+                    if (text.includes(kw)) {
+                        btn.click();
+                        return 'button:' + text;
+                    }
+                }
+            }
+            
             return null;
         }""")
-        if clicked_link:
-            print(f"  \u2705 Clicked href link: {clicked_link}", flush=True)
-            time.sleep(4)
+        
+        if clicked:
+            print(f"  Clicked: {clicked}", flush=True)
+            time.sleep(5)
             bypass_cloudflare(page, max_wait=30)
             time.sleep(2)
             if is_registration_form(page):
-                print(f"  \u2705 Registration form found!", flush=True)
+                print(f"  Registration form found!", flush=True)
                 return True
     except:
         pass
     
-    # STEP 3: Try common booking page paths directly
+    # STEP 2: Try common booking page paths directly
     base_url = target_url.rstrip('/')
     common_paths = [
         '/new-appointment', '/appointment', '/booking', '/register',
@@ -1230,19 +1243,19 @@ def find_booking_page(page, target_url):
     for path in common_paths:
         try:
             full_url = base_url + path
-            print(f"  \ud83d\udd0d Trying: {full_url}", flush=True)
+            print(f"  Trying: {full_url}", flush=True)
             page.goto(full_url, timeout=15000, wait_until='domcontentloaded')
             time.sleep(3)
             bypass_cloudflare(page, max_wait=30)
             time.sleep(2)
             
             if is_registration_form(page):
-                print(f"  \u2705 Registration form found at: {full_url}", flush=True)
+                print(f"  Registration form found at: {full_url}", flush=True)
                 return True
         except:
             continue
     
-    # STEP 4: If still no form, check if current page has at least some fields
+    # STEP 3: If still no form, check if current page has at least some fields
     try:
         result = page.evaluate("""() => {
             const inputs = document.querySelectorAll('input:not([type="hidden"])');
@@ -1252,12 +1265,12 @@ def find_booking_page(page, target_url):
             return visibleInputs.length + visibleSelects.length;
         }""")
         if result and result >= 2:
-            print(f"  \u26a0\ufe0f Partial form found ({result} fields), proceeding anyway", flush=True)
+            print(f"  Partial form found ({result} fields), proceeding anyway", flush=True)
             return True
     except:
         pass
     
-    print(f"  \u274c No registration form found", flush=True)
+    print(f"  No registration form found", flush=True)
     return False
 
 
@@ -1317,7 +1330,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v27 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v28 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
