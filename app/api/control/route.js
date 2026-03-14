@@ -227,7 +227,8 @@ export async function POST(req) {
     } else if (action === 'stop-sesallameh' || action === 'stop-smart') {
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'kill -9 $(pgrep -f "sesallameh_bot.py") 2>/dev/null; kill -9 $(pgrep -f "smart_bot.py") 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; echo "Bot stopped"', 15000);
+          const killScript = 'screen -X -S smartbot quit 2>/dev/null; for p in smart_bot sesallameh_bot chromium patchright; do kill -9 $(pgrep -f $p) 2>/dev/null; done; sleep 1; for p in smart_bot chromium; do kill -9 $(pgrep -f $p) 2>/dev/null; done; echo Bot_stopped';
+          const r = await runSSHCommand(server, killScript, 15000);
           return { host: server.host, ...r };
         })
       );
