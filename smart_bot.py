@@ -1637,15 +1637,18 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         if filled < 3:
                             print(f"  ⚠️ Only {filled} fields filled", flush=True)
 
-                        # ===== REACT STATE SYNC: Re-trigger all field values via prototype setter =====
+                        # ===== REACT STATE SYNC: Re-trigger all input values via prototype setter =====
+                        # NOTE: Only sync INPUTS, not selects! Syncing selects triggers change events
+                        # which resets dependent dropdowns (e.g., region change resets center)
                         try:
                             sync_result = page.evaluate("""() => {
                                 const synced = [];
                                 
-                                // Sync ALL visible inputs
+                                // Sync ALL visible inputs only (NOT selects - they cause dependent resets)
                                 document.querySelectorAll('input').forEach((inp) => {
                                     if (inp.offsetParent === null) return;
                                     if (inp.type === 'submit' || inp.type === 'button' || inp.type === 'hidden') return;
+                                    if (inp.type === 'checkbox' || inp.type === 'radio') return;
                                     if (!inp.value || inp.value === '') return;
                                     
                                     const currentVal = inp.value;
@@ -1656,47 +1659,63 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     const protoSetter = Object.getOwnPropertyDescriptor(prototype, 'value');
                                     
                                     if (valueSetter && valueSetter.set && protoSetter && protoSetter.set && valueSetter.set !== protoSetter.set) {
-                                        // React has overridden the setter - use prototype setter
                                         protoSetter.set.call(inp, currentVal);
                                     } else if (protoSetter && protoSetter.set) {
                                         protoSetter.set.call(inp, currentVal);
                                     }
                                     
-                                    // Dispatch events React listens to
                                     inp.dispatchEvent(new Event('input', { bubbles: true }));
                                     inp.dispatchEvent(new Event('change', { bubbles: true }));
                                     inp.dispatchEvent(new Event('blur', { bubbles: true }));
                                     synced.push(inp.type + ':' + currentVal.substring(0, 15));
                                 });
                                 
-                                // Sync ALL visible selects
-                                document.querySelectorAll('select').forEach((sel) => {
-                                    if (sel.offsetParent === null) return;
-                                    if (!sel.value || sel.value === '' || sel.value === '-') return;
-                                    
-                                    const currentVal = sel.value;
-                                    
-                                    const valueSetter = Object.getOwnPropertyDescriptor(sel, 'value');
-                                    const prototype = Object.getPrototypeOf(sel);
-                                    const protoSetter = Object.getOwnPropertyDescriptor(prototype, 'value');
-                                    
-                                    if (valueSetter && valueSetter.set && protoSetter && protoSetter.set && valueSetter.set !== protoSetter.set) {
-                                        protoSetter.set.call(sel, currentVal);
-                                    } else if (protoSetter && protoSetter.set) {
-                                        protoSetter.set.call(sel, currentVal);
-                                    }
-                                    
-                                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                                    sel.dispatchEvent(new Event('input', { bubbles: true }));
-                                    synced.push('select:' + currentVal.substring(0, 15));
-                                });
-                                
                                 return synced;
                             }""")
                             if sync_result:
-                                print(f"  \U0001f504 React sync: {len(sync_result)} fields re-triggered", flush=True)
+                                print(f"  \U0001f504 React sync: {len(sync_result)} inputs re-triggered", flush=True)
                         except Exception as sync_err:
                             print(f"  \u26a0\ufe0f React sync error: {str(sync_err)[:60]}", flush=True)
+                        
+                        time.sleep(0.5)
+                        
+                        # Re-fill any empty selects that might have been reset
+                        try:
+                            empty_selects = page.evaluate("""() => {
+                                const empty = [];
+                                const allSel = document.querySelectorAll('select');
+                                let visIdx = 0;
+                                for (const sel of allSel) {
+                                    if (sel.offsetParent === null) continue;
+                                    if (!sel.value || sel.value === '' || sel.value === '-' || sel.value === '0') {
+                                        const opts = Array.from(sel.options).filter(o => o.value && o.value !== '' && o.value !== '-');
+                                        if (opts.length > 0) {
+                                            empty.push({ visIdx: visIdx, optCount: opts.length });
+                                        }
+                                    }
+                                    visIdx++;
+                                }
+                                return empty;
+                            }""")
+                            if empty_selects:
+                                print(f"  \u26a0\ufe0f {len(empty_selects)} empty selects after sync, re-filling...", flush=True)
+                                for es in empty_selects:
+                                    try:
+                                        sel_el = page.locator('select:visible').nth(es['visIdx'])
+                                        opts = sel_el.evaluate("""(sel) => {
+                                            return Array.from(sel.options)
+                                                .filter(o => o.value && o.value !== '' && o.value !== '-')
+                                                .map(o => ({ value: o.value, text: o.text.trim() }));
+                                        }""")
+                                        if opts:
+                                            chosen = random.choice(opts)
+                                            sel_el.select_option(value=chosen['value'])
+                                            print(f"    \u2705 Re-filled select#{es['visIdx']}: {chosen['text'][:25]}", flush=True)
+                                            time.sleep(0.5)
+                                    except Exception as re_err:
+                                        print(f"    \u274c Re-fill error: {str(re_err)[:50]}", flush=True)
+                        except:
+                            pass
                         
                         time.sleep(1)  # Give React time to process state updates
 
