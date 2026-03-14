@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v28 - Fully Dynamic Field Detection
+Smart Universal Form Bot v29 - Fully Dynamic Field Detection
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -379,6 +379,74 @@ def bypass_cloudflare(page, max_wait=90):
 
 # ============ DYNAMIC FORM FILLING ============
 
+def fill_all_empty_fields(page):
+    """Fill ALL empty visible inputs and selects on the current page using JS"""
+    try:
+        result = page.evaluate("""() => {
+            let filled = 0;
+            
+            // Fill empty inputs
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue;
+                if (inp.value && inp.value.trim() !== '') continue;
+                
+                const type = inp.getAttribute('type') || 'text';
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                
+                if (type === 'date') {
+                    const d = new Date();
+                    d.setDate(d.getDate() + Math.floor(Math.random() * 14) + 1);
+                    const val = d.toISOString().split('T')[0];
+                    setter.call(inp, val);
+                } else if (type === 'email') {
+                    setter.call(inp, 'test' + Math.floor(Math.random()*9999) + '@gmail.com');
+                } else if (type === 'tel' || type === 'number') {
+                    setter.call(inp, '05' + Math.floor(Math.random()*90000000 + 10000000));
+                } else {
+                    const ph = (inp.getAttribute('placeholder') || '').toLowerCase();
+                    const parent = inp.closest('.mb-4, .mb-3, .mb-2, .form-group, [class*="form"]');
+                    const lbl = parent ? (parent.querySelector('label') || {}).innerText || '' : '';
+                    const clue = ph + ' ' + lbl.toLowerCase();
+                    
+                    if (clue.includes('\u062a\u0627\u0631\u064a\u062e') || clue.includes('date') || clue.includes('\u0645\u0648\u0639\u062f')) {
+                        const d = new Date();
+                        d.setDate(d.getDate() + Math.floor(Math.random() * 14) + 1);
+                        setter.call(inp, d.toISOString().split('T')[0]);
+                    } else {
+                        setter.call(inp, 'test' + Math.floor(Math.random()*9999));
+                    }
+                }
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                inp.dispatchEvent(new Event('change', { bubbles: true }));
+                filled++;
+            }
+            
+            // Fill empty selects
+            const selects = document.querySelectorAll('select');
+            for (const sel of selects) {
+                if (sel.offsetParent === null) continue;
+                if (sel.value && sel.value !== '' && sel.value !== '-') {
+                    const currentOpt = sel.options[sel.selectedIndex];
+                    if (currentOpt && !currentOpt.text.includes('\u0627\u062e\u062a\u0631') && !currentOpt.text.includes('Select')) continue;
+                }
+                const opts = Array.from(sel.options).filter(o => 
+                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('\u0627\u062e\u062a\u0631') && !o.text.includes('Select'));
+                if (opts.length > 0) {
+                    const choice = opts[Math.floor(Math.random() * opts.length)];
+                    sel.value = choice.value;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    filled++;
+                }
+            }
+            
+            return filled;
+        }""")
+        return result or 0
+    except:
+        return 0
+
+
 def fill_form_dynamically(page):
     """Dynamically detect and fill ALL form fields on the current page"""
     print("  📝 Dynamic form detection starting...", flush=True)
@@ -738,67 +806,24 @@ def fill_form_dynamically(page):
         except:
             continue
     
-    # ===== STEP 5: Scroll down and check for more fields =====
+    # ===== STEP 5: Scroll down and fill ALL remaining empty fields =====
     try:
         page.evaluate("window.scrollTo(0, 600)")
         time.sleep(1)
-        
-        # Re-check for any unfilled visible inputs after scroll
-        unfilled = page.evaluate("""() => {
-            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
-            let count = 0;
-            for (const inp of inputs) {
-                if (inp.offsetParent === null) continue;
-                if (!inp.value || inp.value.trim() === '') count++;
-            }
-            return count;
-        }""")
-        if unfilled > 0:
-            print(f"    ⚠️ {unfilled} unfilled inputs remaining after first pass", flush=True)
     except:
         pass
     
-    # ===== STEP 6: Fill any remaining empty selects (second pass after dependencies loaded) =====
-    try:
-        time.sleep(1)
-        page.evaluate("""() => {
-            const selects = document.querySelectorAll('select');
-            for (const sel of selects) {
-                if (sel.offsetParent === null) continue;
-                if (sel.value && sel.value !== '' && sel.value !== '-') continue;
-                const opts = Array.from(sel.options).filter(o => 
-                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                if (opts.length > 0) {
-                    const choice = opts[Math.floor(Math.random() * opts.length)];
-                    sel.value = choice.value;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }
-        }""")
-        print(f"    ✅ Second pass: remaining selects filled", flush=True)
-    except:
-        pass
-    
-    # Wait for any dependent fields to load, then do a third pass
-    time.sleep(2)
-    try:
-        page.evaluate("""() => {
-            const selects = document.querySelectorAll('select');
-            for (const sel of selects) {
-                if (sel.offsetParent === null) continue;
-                if (sel.value && sel.value !== '' && sel.value !== '-') continue;
-                const opts = Array.from(sel.options).filter(o => 
-                    o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                if (opts.length > 0) {
-                    const choice = opts[Math.floor(Math.random() * opts.length)];
-                    sel.value = choice.value;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }
-        }""")
-        print(f"    ✅ Third pass: final selects filled", flush=True)
-    except:
-        pass
+    # ===== STEP 6: Multiple passes to fill dependent fields =====
+    # After selecting region/area, new selects appear (like inspection center)
+    # We need to keep filling until nothing is empty
+    for pass_num in range(4):
+        time.sleep(1.5)
+        extra = fill_all_empty_fields(page)
+        if extra > 0:
+            print(f"    Pass {pass_num+2}: filled {extra} more fields", flush=True)
+            filled += extra
+        else:
+            break
     
     print(f"  📊 Total fields filled: {filled}", flush=True)
     return filled, data
@@ -1057,59 +1082,54 @@ def fill_payment(page):
 
 # ============ HANDLE NEXT PAGES ============
 
-def handle_next_pages(page, max_pages=5):
+def handle_next_pages(page, max_pages=8):
     """Handle multi-step form pages after initial registration"""
+    retry_count = 0
+    max_retries = 2
+    
     for step in range(max_pages):
         time.sleep(random.uniform(2, 4))
         url = page.url.lower()
         title = page.title()
-        print(f"\n  📄 Step {step+1}: {page.url[:60]} | {title}", flush=True)
+        print(f"\n  Step {step+1}: {page.url[:60]} | {title}", flush=True)
         
         # Check for payment page
         if any(kw in url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
-            print("  💳 PAYMENT PAGE DETECTED!", flush=True)
+            print("  PAYMENT PAGE DETECTED!", flush=True)
             return 'payment'
         
         # Check page content for payment indicators
         try:
             has_payment = page.evaluate("""() => {
                 const text = document.body.innerText;
-                return text.includes('بطاقة ائتمان') || text.includes('طريقة الدفع') || 
-                       text.includes('ملخص الدفع') || text.includes('المبلغ') ||
+                return text.includes('\u0628\u0637\u0627\u0642\u0629 \u0627\u0626\u062a\u0645\u0627\u0646') || text.includes('\u0637\u0631\u064a\u0642\u0629 \u0627\u0644\u062f\u0641\u0639') || 
+                       text.includes('\u0645\u0644\u062e\u0635 \u0627\u0644\u062f\u0641\u0639') || text.includes('\u0627\u0644\u0645\u0628\u0644\u063a') ||
                        text.includes('Credit Card') || text.includes('Payment');
             }""")
             if has_payment:
-                print("  💳 PAYMENT CONTENT DETECTED!", flush=True)
+                print("  PAYMENT CONTENT DETECTED!", flush=True)
                 return 'payment'
         except:
             pass
         
-        # Fill any visible form fields on this page too (dynamic)
-        try:
-            page.evaluate("""() => {
-                const selects = document.querySelectorAll('select');
-                for (const sel of selects) {
-                    if (sel.value && sel.value !== '' && sel.value !== '-') continue;
-                    if (sel.offsetParent === null) continue;
-                    const opts = Array.from(sel.options).filter(o => 
-                        o.value && o.value !== '' && o.value !== '-' && !o.text.includes('اختر'));
-                    if (opts.length > 0) {
-                        const choice = opts[Math.floor(Math.random() * opts.length)];
-                        sel.value = choice.value;
-                        sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }
-            }""")
-        except:
-            pass
+        # Fill ALL empty fields on this page (inputs + selects)
+        extra_filled = fill_all_empty_fields(page)
+        if extra_filled > 0:
+            print(f"    Filled {extra_filled} empty fields", flush=True)
+            time.sleep(1)
+            # After filling selects, new dependent fields may appear
+            extra2 = fill_all_empty_fields(page)
+            if extra2 > 0:
+                print(f"    Filled {extra2} more dependent fields", flush=True)
+                time.sleep(1)
         
         # Click next button
         clicked = False
         for selector in [
-            'button:has-text("التالي")', 'button:has-text("متابعة الدفع")',
-            'button:has-text("متابعة")', 'button:has-text("تأكيد")',
+            'button:has-text("\u0627\u0644\u062a\u0627\u0644\u064a")', 'button:has-text("\u0645\u062a\u0627\u0628\u0639\u0629 \u0627\u0644\u062f\u0641\u0639")',
+            'button:has-text("\u0645\u062a\u0627\u0628\u0639\u0629")', 'button:has-text("\u062a\u0623\u0643\u064a\u062f")',
             'button:has-text("Next")', 'button:has-text("Continue")',
-            'button:has-text("إرسال")', 'button:has-text("Submit")',
+            'button:has-text("\u0625\u0631\u0633\u0627\u0644")', 'button:has-text("Submit")',
             'button[type="submit"]',
         ]:
             try:
@@ -1117,35 +1137,47 @@ def handle_next_pages(page, max_pages=5):
                 if btn.is_visible():
                     btn.click()
                     clicked = True
-                    print(f"    🔘 Clicked: {selector}", flush=True)
+                    print(f"    Clicked: {selector}", flush=True)
                     time.sleep(random.uniform(3, 5))
                     break
             except:
                 continue
         
         if not clicked:
-            print("    ⚠️ No button found", flush=True)
+            print("    No button found", flush=True)
             break
         
         new_url = page.url.lower()
         if any(kw in new_url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
-            print("  💳 PAYMENT PAGE DETECTED!", flush=True)
+            print("  PAYMENT PAGE DETECTED!", flush=True)
             return 'payment'
         
         if new_url != url:
-            print(f"    ✅ URL changed to: {page.url[:60]}", flush=True)
+            print(f"    URL changed to: {page.url[:60]}", flush=True)
+            retry_count = 0  # Reset retry counter on successful navigation
         else:
+            # URL didn't change - check for validation errors
+            retry_count += 1
             try:
                 errors = page.evaluate("""() => {
-                    const all = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"]');
+                    const all = document.querySelectorAll('.text-red-500, .text-red-600, .text-red-700, [class*="error"], [class*="invalid"], [class*="danger"]');
                     return Array.from(all).map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 100);
                 }""")
                 if errors:
-                    print(f"    ❌ Validation errors: {errors[:3]}", flush=True)
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    time.sleep(1)
+                    print(f"    Validation errors: {errors[:3]}", flush=True)
             except:
                 pass
+            
+            if retry_count <= max_retries:
+                # Try filling empty fields again and retry
+                print(f"    Retry {retry_count}/{max_retries}: filling empty fields...", flush=True)
+                fill_all_empty_fields(page)
+                time.sleep(1)
+                fill_all_empty_fields(page)
+                time.sleep(1)
+            else:
+                print(f"    Max retries reached, moving on", flush=True)
+                break
     
     return 'done'
 
@@ -1330,7 +1362,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v28 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v29 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
