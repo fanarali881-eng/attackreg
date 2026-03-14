@@ -824,7 +824,100 @@ def fill_form_dynamically(page):
                     
                     # Wait for dependent dropdowns to load (region -> center)
                     if field_type in ('region', 'country', 'nationality'):
-                        time.sleep(random.uniform(1, 2))
+                        time.sleep(random.uniform(2, 3))
+                        # Re-scan selects to find newly loaded dependent dropdowns (e.g., center)
+                        try:
+                            new_selects = page.evaluate("""() => {
+                                const selects = [];
+                                const allSelects = document.querySelectorAll('select');
+                                for (const sel of allSelects) {
+                                    if (sel.offsetParent === null) continue;
+                                    const name = sel.getAttribute('name') || '';
+                                    const id = sel.getAttribute('id') || '';
+                                    const aria = sel.getAttribute('aria-label') || '';
+                                    let labelText = '';
+                                    if (id) {
+                                        const lbl = document.querySelector('label[for="' + id + '"]');
+                                        if (lbl) labelText = lbl.innerText.trim();
+                                    }
+                                    if (!labelText) {
+                                        let el = sel.previousElementSibling;
+                                        while (el) {
+                                            if (el.tagName === 'LABEL' || el.tagName === 'SPAN' || el.tagName === 'P' || el.tagName === 'H6') {
+                                                labelText = el.innerText.trim();
+                                                break;
+                                            }
+                                            el = el.previousElementSibling;
+                                        }
+                                        if (!labelText) {
+                                            const parent = sel.parentElement;
+                                            if (parent) {
+                                                const lbl = parent.querySelector('label');
+                                                if (lbl) labelText = lbl.innerText.trim();
+                                            }
+                                        }
+                                    }
+                                    const opts = Array.from(sel.options).map(o => ({
+                                        value: o.value,
+                                        text: o.text.trim(),
+                                        selected: o.selected
+                                    }));
+                                    const hasValue = sel.value && sel.value !== '' && sel.value !== '-' && sel.value !== '0';
+                                    selects.push({
+                                        name: name,
+                                        id: id,
+                                        ariaLabel: aria,
+                                        label: labelText,
+                                        currentValue: sel.value,
+                                        options: opts,
+                                        hasValue: hasValue,
+                                        visibleIndex: selects.length
+                                    });
+                                }
+                                return selects;
+                            }""")
+                            
+                            # Find and fill any new empty selects (like center)
+                            for ns in new_selects:
+                                if ns.get('hasValue'):
+                                    # Check if it's a placeholder value
+                                    current_opt = next((o for o in ns['options'] if o['value'] == ns['currentValue']), None)
+                                    if current_opt:
+                                        opt_text = current_opt.get('text', '')
+                                        if not any(pw in opt_text for pw in ['\u0627\u062e\u062a\u0631', '\u0627\u062e\u062a\u064a\u0627\u0631', 'Select', 'Choose']):
+                                            continue
+                                
+                                ns_clues = f"{ns['label']} {ns['name']} {ns['id']} {ns['ariaLabel']}"
+                                ns_type, ns_pref = classify_select_field(ns_clues)
+                                
+                                # Only fill center/branch type selects or unknown ones with options
+                                ns_valid = [o for o in ns['options'] if o['value'] and o['value'] not in ('', '-') and '\u0627\u062e\u062a\u0631' not in o.get('text', '')]
+                                if not ns_valid:
+                                    continue
+                                
+                                ns_chosen = random.choice(ns_valid)
+                                try:
+                                    page.evaluate(f"""(args) => {{
+                                        const allSelects = document.querySelectorAll('select');
+                                        let visibleIdx = 0;
+                                        for (const s of allSelects) {{
+                                            if (s.offsetParent === null) continue;
+                                            if (visibleIdx === args.idx) {{
+                                                s.value = args.value;
+                                                s.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                                return true;
+                                            }}
+                                            visibleIdx++;
+                                        }}
+                                        return false;
+                                    }}""", {'idx': ns['visibleIndex'], 'value': ns_chosen['value']})
+                                    filled += 1
+                                    print(f"    ✅ [dependent] {ns_type}: {ns_chosen['text'][:30]}", flush=True)
+                                    time.sleep(random.uniform(0.5, 1))
+                                except Exception as de:
+                                    print(f"    ❌ [dependent] {ns_type}: {str(de)[:60]}", flush=True)
+                        except Exception as re_err:
+                            print(f"    ⚠️ Re-scan error: {str(re_err)[:60]}", flush=True)
                     else:
                         time.sleep(random.uniform(0.3, 0.6))
                     
@@ -1440,7 +1533,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v31 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v32 (Dynamic) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
