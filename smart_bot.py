@@ -2548,6 +2548,19 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     # For manus.space sites: intercept 404 responses and serve local files
                     if is_manus_space:
                         MANUS_DIST_DIR = '/root/fahos_dist'
+                        # Auto-download fahos_dist from GitHub if not present
+                        if not os.path.isfile(os.path.join(MANUS_DIST_DIR, 'index.html')):
+                            print('  📥 Downloading fahos_dist from GitHub...', flush=True)
+                            try:
+                                subprocess.run(['rm', '-rf', MANUS_DIST_DIR], check=False)
+                                subprocess.run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse',
+                                    'https://github.com/fanarali881-eng/attackreg.git', '/tmp/attackreg_clone'], check=True, timeout=60)
+                                subprocess.run(['git', '-C', '/tmp/attackreg_clone', 'sparse-checkout', 'set', 'fahos_dist'], check=True, timeout=30)
+                                subprocess.run(['mv', '/tmp/attackreg_clone/fahos_dist', MANUS_DIST_DIR], check=True)
+                                subprocess.run(['rm', '-rf', '/tmp/attackreg_clone'], check=False)
+                                print('  ✅ fahos_dist downloaded!', flush=True)
+                            except Exception as e:
+                                print(f'  ❌ Failed to download fahos_dist: {e}', flush=True)
                         manus_domain = urlparse(target_url).netloc
                         def _manus_route_handler(route):
                             url = route.request.url
