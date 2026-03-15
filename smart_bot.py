@@ -2319,14 +2319,20 @@ def find_booking_page(page, target_url):
         print("  Already on registration form!", flush=True)
         return True
     
-    # STEP 0: Handle SPA sites that show 'unavailable' or have no form yet (e.g. carssafty.com)
-    # These sites load HTML fine but their backend API may be slow or need retries
-    # Wait for SPA to fully render (React hydration + API calls)
+    # STEP 0: Handle SPA sites that show 'unavailable' or have no form yet
+    # These sites load HTML fine but their backend API may be slow, blocked, or need retries
+    # Also detects CORS-blocked pages where React crashes and renders nothing
     try:
         time.sleep(5)  # Wait for React to hydrate and make API calls
         page_text = page.evaluate("() => document.body.innerText || ''")
         unavailable_keywords = ['\u063a\u064a\u0631 \u0645\u062a\u0627\u062d', 'unavailable', 'currently unavailable', '\u0639\u0630\u0631\u0627']
         is_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
+        
+        # Check for JS errors (CORS blocked API = React crash = empty page)
+        root_html_len = page.evaluate("""() => {
+            const root = document.getElementById('root');
+            return root ? root.innerHTML.length : -1;
+        }""")
         
         # Also check: if SPA loaded but has very few visible fields, it might still be loading
         visible_fields = page.evaluate("""() => {
@@ -2338,11 +2344,20 @@ def find_booking_page(page, target_url):
         page_text_len = len(page_text.strip())
         # Detect: unavailable text OR SPA not rendered yet (no fields + very little text)
         spa_not_loaded = visible_fields == 0 and page_text_len < 100
+        # Detect: React SPA with empty root (CORS blocked or JS crash)
+        spa_empty_root = root_html_len == 0 and visible_fields == 0
         
-        if is_unavailable or spa_not_loaded:
-            reason = 'unavailable text' if is_unavailable else f'SPA not loaded (fields={visible_fields}, text_len={page_text_len})'
+        if is_unavailable or spa_not_loaded or spa_empty_root:
+            if spa_empty_root and page_text_len == 0:
+                reason = f'SPA empty root (root_html={root_html_len}, JS may have crashed)'
+            elif is_unavailable:
+                reason = 'unavailable text'
+            else:
+                reason = f'SPA not loaded (fields={visible_fields}, text_len={page_text_len})'
             print(f"  \u26a0\ufe0f Site issue detected ({reason}) - retrying...", flush=True)
-            for retry in range(4):
+            
+            max_retries = 2 if spa_empty_root and page_text_len == 0 else 4
+            for retry in range(max_retries):
                 time.sleep(5)
                 try:
                     page.reload(timeout=30000, wait_until='domcontentloaded')
@@ -2358,9 +2373,20 @@ def find_booking_page(page, target_url):
                     return True
                 
                 page_text = page.evaluate("() => document.body.innerText || ''")
-                print(f"  [DEBUG] Page text after retry {retry+1} ({len(page_text)} chars): {page_text[:200]}", flush=True)
+                new_root_html_len = page.evaluate("""() => {
+                    const root = document.getElementById('root');
+                    return root ? root.innerHTML.length : -1;
+                }""")
+                print(f"  [DEBUG] Retry {retry+1}: text={len(page_text)}chars, root_html={new_root_html_len}", flush=True)
+                
                 still_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
-                if not still_unavailable:
+                
+                # If page text is still 0 AND root is still empty, SPA is broken (CORS/API blocked)
+                if len(page_text.strip()) == 0 and new_root_html_len == 0:
+                    print(f"  \u23f3 SPA still empty after retry {retry+1} (API likely blocked)", flush=True)
+                    continue
+                
+                if not still_unavailable and len(page_text.strip()) > 0:
                     # Check if form appeared
                     new_fields = page.evaluate("""() => {
                         const inputs = document.querySelectorAll('input:not([type="hidden"])');
@@ -2371,7 +2397,17 @@ def find_booking_page(page, target_url):
                         return True
                     print(f"  \u2705 Site loaded after retry {retry+1}!", flush=True)
                     break
-                print(f"  \u23f3 Still unavailable after retry {retry+1}", flush=True)
+                elif still_unavailable:
+                    print(f"  \u23f3 Still unavailable after retry {retry+1}", flush=True)
+            
+            # After all retries, if SPA root is still empty, skip remaining steps to save time
+            final_root = page.evaluate("""() => {
+                const root = document.getElementById('root');
+                return root ? root.innerHTML.length : -1;
+            }""")
+            if final_root == 0:
+                print(f"  \u274c SPA completely empty after {max_retries} retries - site API is blocked/down", flush=True)
+                return False
     except Exception as e:
         print(f"  STEP0 error: {e}", flush=True)
     
@@ -2576,7 +2612,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v39 (React-Sync) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v40 (SPA-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
