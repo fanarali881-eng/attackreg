@@ -2335,8 +2335,12 @@ def find_booking_page(page, target_url):
             return visible.length;
         }""")
         
-        if is_unavailable or (visible_fields == 0 and 'socket' in page.evaluate("() => document.documentElement.innerHTML").lower()):
-            reason = 'unavailable text' if is_unavailable else 'SPA with no fields yet'
+        page_text_len = len(page_text.strip())
+        # Detect: unavailable text OR SPA not rendered yet (no fields + very little text)
+        spa_not_loaded = visible_fields == 0 and page_text_len < 100
+        
+        if is_unavailable or spa_not_loaded:
+            reason = 'unavailable text' if is_unavailable else f'SPA not loaded (fields={visible_fields}, text_len={page_text_len})'
             print(f"  \u26a0\ufe0f Site issue detected ({reason}) - retrying...", flush=True)
             for retry in range(4):
                 time.sleep(5)
