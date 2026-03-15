@@ -2319,22 +2319,32 @@ def find_booking_page(page, target_url):
         print("  Already on registration form!", flush=True)
         return True
     
-    # STEP 0: Handle SPA sites that show 'unavailable' while API loads (e.g. carssafty.com)
+    # STEP 0: Handle SPA sites that show 'unavailable' or have no form yet (e.g. carssafty.com)
     # These sites load HTML fine but their backend API may be slow or need retries
+    # Wait for SPA to fully render (React hydration + API calls)
     try:
+        time.sleep(5)  # Wait for React to hydrate and make API calls
         page_text = page.evaluate("() => document.body.innerText || ''")
-        unavailable_keywords = ['\u063a\u064a\u0631 \u0645\u062a\u0627\u062d', 'unavailable', 'currently unavailable']
+        unavailable_keywords = ['\u063a\u064a\u0631 \u0645\u062a\u0627\u062d', 'unavailable', 'currently unavailable', '\u0639\u0630\u0631\u0627']
         is_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
         
-        if is_unavailable:
-            print("  \u26a0\ufe0f Site shows 'unavailable' - retrying (SPA protection)...", flush=True)
-            for retry in range(3):
+        # Also check: if SPA loaded but has very few visible fields, it might still be loading
+        visible_fields = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input:not([type="hidden"])');
+            const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
+            return visible.length;
+        }""")
+        
+        if is_unavailable or (visible_fields == 0 and 'socket' in page.evaluate("() => document.documentElement.innerHTML").lower()):
+            reason = 'unavailable text' if is_unavailable else 'SPA with no fields yet'
+            print(f"  \u26a0\ufe0f Site issue detected ({reason}) - retrying...", flush=True)
+            for retry in range(4):
                 time.sleep(5)
                 try:
                     page.reload(timeout=30000, wait_until='domcontentloaded')
                 except:
                     pass
-                time.sleep(5)
+                time.sleep(8)  # Wait longer for SPA + API
                 bypass_cloudflare(page, max_wait=15)
                 time.sleep(3)
                 
@@ -2346,11 +2356,19 @@ def find_booking_page(page, target_url):
                 page_text = page.evaluate("() => document.body.innerText || ''")
                 still_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
                 if not still_unavailable:
+                    # Check if form appeared
+                    new_fields = page.evaluate("""() => {
+                        const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                        return Array.from(inputs).filter(i => i.offsetParent !== null).length;
+                    }""")
+                    if new_fields >= 2:
+                        print(f"  \u2705 Form loaded after retry {retry+1} ({new_fields} fields)!", flush=True)
+                        return True
                     print(f"  \u2705 Site loaded after retry {retry+1}!", flush=True)
                     break
                 print(f"  \u23f3 Still unavailable after retry {retry+1}", flush=True)
-    except:
-        pass
+    except Exception as e:
+        print(f"  STEP0 error: {e}", flush=True)
     
     # Re-check after retries
     if is_registration_form(page):
