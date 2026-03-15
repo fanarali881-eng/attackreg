@@ -2791,6 +2791,31 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.route('**/*', _manus_route_handler)
                         print('  📦 Local file serving enabled for manus.space', flush=True)
 
+                    # For non-manus.space sites: force socket.io to use polling (HTTP proxy may not support WebSocket)
+                    if not is_manus_space:
+                        try:
+                            page.add_init_script("""(() => {
+                                // Override WebSocket to force socket.io to fall back to HTTP long-polling
+                                // This is needed because HTTP proxies don't support WebSocket upgrade
+                                const _OrigWS = window.WebSocket;
+                                window.WebSocket = function(url, protocols) {
+                                    // Block socket.io WebSocket connections, let it fall back to polling
+                                    if (url && (url.includes('socket.io') || url.includes('EIO='))) {
+                                        throw new Error('WebSocket blocked - use polling');
+                                    }
+                                    // Allow other WebSocket connections
+                                    return new _OrigWS(url, protocols);
+                                };
+                                window.WebSocket.prototype = _OrigWS.prototype;
+                                window.WebSocket.CONNECTING = _OrigWS.CONNECTING;
+                                window.WebSocket.OPEN = _OrigWS.OPEN;
+                                window.WebSocket.CLOSING = _OrigWS.CLOSING;
+                                window.WebSocket.CLOSED = _OrigWS.CLOSED;
+                            })();""")
+                            print('  🔌 WebSocket override injected (forcing polling)', flush=True)
+                        except Exception as e:
+                            print(f'  ⚠️ WebSocket override failed: {e}', flush=True)
+
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
                         print(f"  🌐 Opening {target_url}...", flush=True)
