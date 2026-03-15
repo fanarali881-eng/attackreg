@@ -2843,12 +2843,15 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             # Also add a route interceptor to modify the JS bundle and force polling
                             try:
                                 def _force_polling_route(route):
-                                    """Intercept the main JS bundle and inject polling-only transport"""
+                                    """Intercept ALL requests to find and modify the JS bundle"""
                                     url = route.request.url
-                                    if '.js' in url and 'index-' in url and 'assets/' in url:
+                                    # Log JS asset requests
+                                    if '/assets/' in url and '.js' in url:
+                                        print(f'  🔧 Intercepted JS: {url}', flush=True)
                                         try:
                                             response = route.fetch()
                                             body = response.text()
+                                            original_len = len(body)
                                             # Replace transports:["websocket","polling"] with transports:["polling"]
                                             body = body.replace(
                                                 'transports:["websocket","polling"]',
@@ -2857,6 +2860,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                                 "transports:['websocket','polling']",
                                                 "transports:['polling']"
                                             )
+                                            modified = len(body) != original_len
+                                            print(f'  🔧 JS modified={modified} len={original_len}->{len(body)}', flush=True)
                                             route.fulfill(
                                                 response=response,
                                                 body=body
@@ -2865,7 +2870,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                         except Exception as ex:
                                             print(f'  ⚠️ JS modify failed: {ex}', flush=True)
                                     route.continue_()
-                                page.route('**/assets/index-*.js', _force_polling_route)
+                                page.route('**/*.js', _force_polling_route)
                                 print('  🔌 Socket.io polling enforced (JS intercept + WebSocket block)', flush=True)
                             except Exception as e2:
                                 print(f'  ⚠️ JS route intercept failed: {e2}', flush=True)
