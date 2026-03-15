@@ -2141,9 +2141,27 @@ def handle_next_pages(page, max_pages=8, data=None):
         try:
             has_payment = page.evaluate("""() => {
                 const text = document.body.innerText;
-                return text.includes('\u0628\u0637\u0627\u0642\u0629 \u0627\u0626\u062a\u0645\u0627\u0646') || text.includes('\u0637\u0631\u064a\u0642\u0629 \u0627\u0644\u062f\u0641\u0639') || 
-                       text.includes('\u0645\u0644\u062e\u0635 \u0627\u0644\u062f\u0641\u0639') || text.includes('\u0627\u0644\u0645\u0628\u0644\u063a') ||
-                       text.includes('Credit Card') || text.includes('Payment');
+                // Check text-based indicators
+                if (text.includes('\u0628\u0637\u0627\u0642\u0629 \u0627\u0626\u062a\u0645\u0627\u0646') || text.includes('\u0637\u0631\u064a\u0642\u0629 \u0627\u0644\u062f\u0641\u0639') || 
+                    text.includes('\u0645\u0644\u062e\u0635 \u0627\u0644\u062f\u0641\u0639') ||
+                    text.includes('Credit Card') || text.includes('Payment')) return true;
+                // Check for card input fields (works for SPA sites like carssafty.com)
+                const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                let hasCardField = false;
+                for (const inp of inputs) {
+                    if (inp.offsetParent === null) continue;
+                    const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.getAttribute('autocomplete') || '')).toLowerCase();
+                    if (clues.includes('cardnumber') || clues.includes('card_number') || clues.includes('cc-number') || clues.includes('card number')) {
+                        hasCardField = true;
+                        break;
+                    }
+                }
+                if (hasCardField) return true;
+                // Check for card-related labels
+                if (text.includes('\u0631\u0642\u0645 \u0627\u0644\u0628\u0637\u0627\u0642\u0629') || text.includes('\u0627\u0633\u0645 \u0635\u0627\u062d\u0628 \u0627\u0644\u0628\u0637\u0627\u0642\u0629') ||
+                    text.includes('\u0631\u0645\u0632 \u0627\u0644\u0623\u0645\u0627\u0646') || text.includes('\u0627\u0633\u0645 \u062d\u0627\u0645\u0644 \u0627\u0644\u0628\u0637\u0627\u0642\u0629') ||
+                    text.includes('Card Number') || text.includes('Cardholder')) return true;
+                return false;
             }""")
             if has_payment:
                 print("  PAYMENT CONTENT DETECTED!", flush=True)
@@ -2761,17 +2779,55 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             except:
                                 pass
                             
+                            # Wait for SPA page transition (socket.io sites may need extra time)
+                            # Poll up to 8 seconds for page content to change
+                            for _spa_wait in range(4):
+                                try:
+                                    _spa_check = page.evaluate("""() => {
+                                        const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                                        for (const inp of inputs) {
+                                            if (inp.offsetParent === null) continue;
+                                            const clues = ((inp.name || '') + ' ' + (inp.placeholder || '')).toLowerCase();
+                                            if (clues.includes('cardnumber') || clues.includes('1234 1234')) return true;
+                                        }
+                                        const text = document.body.innerText;
+                                        if (text.includes('\u0631\u0642\u0645 \u0627\u0644\u0628\u0637\u0627\u0642\u0629') && text.includes('\u0631\u0645\u0632 \u0627\u0644\u0623\u0645\u0627\u0646')) return true;
+                                        return false;
+                                    }""")
+                                    if _spa_check:
+                                        print(f"  ✅ SPA page changed after {(_spa_wait+1)*2}s wait", flush=True)
+                                        break
+                                except:
+                                    pass
+                                time.sleep(2)
+                            
                             # Check if page content changed (SPA form progression)
-                            # If payment button appeared, form progressed successfully!
+                            # If payment button or card fields appeared, form progressed successfully!
                             try:
                                 pay_btn_visible = page.evaluate("""() => {
+                                    // Check for payment buttons
                                     const btns = document.querySelectorAll('button');
                                     for (const btn of btns) {
                                         if (btn.offsetParent === null) continue;
                                         const text = btn.innerText.trim();
-                                        if (text.includes('ادفع') || text.includes('Pay') || text.includes('الدفع')) {
+                                        if (text.includes('ادفع') || text.includes('Pay') || text.includes('الدفع') || text.includes('تأكيد الدفع')) {
                                             return text;
                                         }
+                                    }
+                                    // Check for card input fields (SPA sites like carssafty.com)
+                                    const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                                    for (const inp of inputs) {
+                                        if (inp.offsetParent === null) continue;
+                                        const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.getAttribute('autocomplete') || '')).toLowerCase();
+                                        if (clues.includes('cardnumber') || clues.includes('card_number') || clues.includes('cc-number') || clues.includes('1234 1234')) {
+                                            return 'card_field_detected';
+                                        }
+                                    }
+                                    // Check for card-related text
+                                    const text = document.body.innerText;
+                                    if ((text.includes('رقم البطاقة') || text.includes('اسم صاحب البطاقة') || text.includes('رمز الأمان')) &&
+                                        (text.includes('CVV') || text.includes('رمز') || text.includes('انتهاء') || text.includes('صلاحية'))) {
+                                        return 'card_text_detected';
                                     }
                                     return null;
                                 }""")
