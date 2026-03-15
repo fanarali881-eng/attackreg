@@ -2294,32 +2294,78 @@ def is_registration_form(page):
 
 
 def find_booking_page(page, target_url):
-    """Navigate to the booking/registration form by clicking booking button first"""
+    """Navigate to the booking/registration form by clicking booking button first.
+    Works with ALL website types: URL-based routing, SPA, socket.io-driven apps."""
     
     # Check if already on a registration form
     if is_registration_form(page):
         print("  Already on registration form!", flush=True)
         return True
     
-    # STEP 1: Try clicking a booking button/link using Playwright (works with SPA routing)
+    # STEP 0: Wait for the page to fully render (socket.io apps need extra time)
     print("  Looking for booking button...", flush=True)
     
-    # Wait for React app to render (SPA needs time to hydrate)
-    try:
-        page.wait_for_selector('a, button', timeout=10000)
-        time.sleep(2)  # Extra wait for React hydration
-    except:
-        pass
+    # Detect if this is a socket.io/SPA app that needs time to connect and render
+    page_loaded = False
+    for wait_round in range(4):  # Wait up to ~20 seconds for app to render
+        try:
+            page_state = page.evaluate("""() => {
+                const root = document.getElementById('root');
+                if (!root) return { hasRoot: false, text: '', buttons: 0, inputs: 0, has404: false };
+                const text = root.innerText || '';
+                const buttons = root.querySelectorAll('button').length;
+                const links = root.querySelectorAll('a').length;
+                const inputs = root.querySelectorAll('input:not([type="hidden"])').length;
+                const has404 = text.includes('404') || text.includes('Not Found');
+                const hasContent = buttons > 2 || links > 2 || inputs > 0;
+                return { hasRoot: true, text: text.substring(0, 200), buttons: buttons, links: links, inputs: inputs, has404: has404, hasContent: hasContent };
+            }""")
+            
+            if page_state and page_state.get('hasContent') and not page_state.get('has404'):
+                page_loaded = True
+                print(f"  ✅ Page rendered ({page_state.get('buttons', 0)} buttons, {page_state.get('inputs', 0)} inputs)", flush=True)
+                break
+            elif page_state and page_state.get('has404') and wait_round < 3:
+                # Page shows 404 - might be loading (socket.io app)
+                print(f"  ⏳ Page shows 404, waiting for app to render... ({wait_round+1}/4)", flush=True)
+                time.sleep(5)
+                continue
+            elif page_state and page_state.get('hasContent'):
+                page_loaded = True
+                break
+        except:
+            pass
+        time.sleep(3)
     
-    # Try Playwright click first (better for SPA/React apps)
-    booking_texts = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز']
+    if not page_loaded:
+        # Extra wait for socket.io apps
+        time.sleep(5)
+        try:
+            page_state = page.evaluate("""() => {
+                const root = document.getElementById('root');
+                if (!root) return { buttons: 0, inputs: 0 };
+                return { buttons: root.querySelectorAll('button').length, inputs: root.querySelectorAll('input:not([type="hidden"])').length };
+            }""")
+            if page_state and (page_state.get('buttons', 0) > 0 or page_state.get('inputs', 0) > 0):
+                page_loaded = True
+        except:
+            pass
+    
+    # Check again after waiting
+    if is_registration_form(page):
+        print("  Registration form found after waiting!", flush=True)
+        return True
+    
+    # STEP 1: Try clicking booking buttons/links
+    booking_texts = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز',
+                     'Book Appointment', 'Book Now', 'New Appointment', 'Register', 'Book']
     
     # Method A: Playwright click on links with href containing appointment/booking
     try:
-        for href_kw in ['new-appointment', 'appointment', 'booking', 'register', 'book']:
+        for href_kw in ['new-appointment', 'appointment', 'booking', 'register', 'book', 'details']:
             link = page.locator(f'a[href*="{href_kw}"]').first
             try:
-                link.wait_for(state='visible', timeout=5000)
+                link.wait_for(state='visible', timeout=3000)
             except:
                 continue
             if link.count() > 0 and link.is_visible():
@@ -2333,31 +2379,52 @@ def find_booking_page(page, target_url):
     except:
         pass
     
-    # Method B: Playwright click on elements with booking text
+    # Method B: Playwright click on elements with booking text (try multiple times)
     if not is_registration_form(page):
         for text in booking_texts:
             try:
                 el = page.get_by_text(text, exact=False)
-                if el.count() > 0 and el.first.is_visible():
-                    el.first.click()
-                    print(f"  Clicked: {text}", flush=True)
-                    time.sleep(3)
-                    if is_registration_form(page):
-                        print(f"  Registration form found!", flush=True)
-                        return True
-                    break
+                if el.count() > 0:
+                    # Try clicking the first VISIBLE one
+                    for idx in range(min(el.count(), 5)):
+                        try:
+                            item = el.nth(idx)
+                            if item.is_visible():
+                                item.click()
+                                print(f"  Clicked: {text} (element {idx})", flush=True)
+                                time.sleep(5)  # Wait for SPA navigation + socket.io
+                                if is_registration_form(page):
+                                    print(f"  Registration form found!", flush=True)
+                                    return True
+                                # Check if page changed (internal navigation)
+                                try:
+                                    new_state = page.evaluate("""() => {
+                                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
+                                        return visible.length;
+                                    }""")
+                                    if new_state and new_state >= 2:
+                                        print(f"  Form detected ({new_state} inputs) after click!", flush=True)
+                                        return True
+                                except:
+                                    pass
+                                break  # Move to next text
+                        except:
+                            continue
             except:
                 continue
     
-    # Method C: JS click fallback
+    # Method C: JS click fallback - comprehensive search for clickable elements
     if not is_registration_form(page):
         try:
             clicked = page.evaluate("""() => {
-                const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632'];
-                const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book'];
+                const bookingWords = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز', 'Book Appointment', 'Book Now', 'Register'];
+                const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book', 'details'];
                 
+                // Check links first
                 const links = document.querySelectorAll('a');
                 for (const link of links) {
+                    if (link.offsetParent === null) continue;
                     const href = (link.getAttribute('href') || '').toLowerCase();
                     const text = link.innerText.trim();
                     
@@ -2375,13 +2442,28 @@ def find_booking_page(page, target_url):
                     }
                 }
                 
+                // Check buttons
                 const buttons = document.querySelectorAll('button');
                 for (const btn of buttons) {
+                    if (btn.offsetParent === null) continue;
                     const text = btn.innerText.trim();
                     for (const kw of bookingWords) {
                         if (text.includes(kw)) {
                             btn.click();
                             return 'button:' + text;
+                        }
+                    }
+                }
+                
+                // Check any clickable element (div, span with onClick)
+                const allClickable = document.querySelectorAll('[onclick], [role="button"], .btn, .button, [class*="btn"]');
+                for (const el of allClickable) {
+                    if (el.offsetParent === null) continue;
+                    const text = el.innerText.trim();
+                    for (const kw of bookingWords) {
+                        if (text.includes(kw)) {
+                            el.click();
+                            return 'clickable:' + text;
                         }
                     }
                 }
@@ -2392,35 +2474,137 @@ def find_booking_page(page, target_url):
             if clicked:
                 print(f"  Clicked (JS): {clicked}", flush=True)
                 time.sleep(5)
-                bypass_cloudflare(page, max_wait=30)
-                time.sleep(2)
+                # Don't try CF bypass for internal SPA navigation
+                time.sleep(3)
                 if is_registration_form(page):
                     print(f"  Registration form found!", flush=True)
                     return True
+                # Check for partial form
+                try:
+                    field_count = page.evaluate("""() => {
+                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
+                        return visible.length;
+                    }""")
+                    if field_count and field_count >= 2:
+                        print(f"  Form detected ({field_count} inputs) after JS click!", flush=True)
+                        return True
+                except:
+                    pass
+        except Exception as e:
+            print(f"  Method C error: {e}", flush=True)
+    
+    # STEP 1.5: For SPA apps - try dispatching custom navigation events
+    if not is_registration_form(page):
+        try:
+            nav_result = page.evaluate("""() => {
+                // Try dispatching popstate for SPA routing
+                try {
+                    window.history.pushState({}, '', '/details');
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                    return 'popstate:/details';
+                } catch(e) {
+                    return null;
+                }
+            }""")
+            if nav_result:
+                print(f"  SPA navigation: {nav_result}", flush=True)
+                time.sleep(5)
+                if is_registration_form(page):
+                    print(f"  Registration form found via SPA nav!", flush=True)
+                    return True
+                # Check for partial form
+                try:
+                    field_count = page.evaluate("""() => {
+                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
+                        return visible.length;
+                    }""")
+                    if field_count and field_count >= 2:
+                        print(f"  Form detected ({field_count} inputs) after SPA nav!", flush=True)
+                        return True
+                except:
+                    pass
         except:
             pass
     
     # STEP 2: Try common booking page paths directly
-    base_url = target_url.rstrip('/')
-    common_paths = [
-        '/new-appointment', '/appointment', '/booking', '/register',
-        '/book', '/reservation', '/form', '/apply',
-    ]
+    # BUT only if the page is NOT a working SPA (don't destroy socket.io state)
+    is_spa_app = False
+    try:
+        is_spa_app = page.evaluate("""() => {
+            // Detect if this is a socket.io/SPA app
+            return !!(window.io || document.querySelector('script[src*="socket"]') || 
+                     document.querySelector('[id="root"]') && document.querySelector('script[type="module"]'));
+        }""")
+    except:
+        pass
     
-    for path in common_paths:
+    if not is_spa_app:
+        base_url = target_url.rstrip('/')
+        common_paths = [
+            '/new-appointment', '/appointment', '/booking', '/register',
+            '/book', '/reservation', '/form', '/apply', '/details',
+        ]
+        
+        for path in common_paths:
+            try:
+                full_url = base_url + path
+                print(f"  Trying: {full_url}", flush=True)
+                page.goto(full_url, timeout=15000, wait_until='domcontentloaded')
+                time.sleep(3)
+                bypass_cloudflare(page, max_wait=30)
+                time.sleep(2)
+                
+                if is_registration_form(page):
+                    print(f"  Registration form found at: {full_url}", flush=True)
+                    return True
+            except:
+                continue
+    else:
+        print("  ⚡ SPA app detected - skipping URL navigation to preserve state", flush=True)
+        # For SPA apps, try additional internal navigation methods
+        spa_paths = ['/details', '/new-appointment', '/appointment', '/booking', '/register', '/book']
+        for spa_path in spa_paths:
+            try:
+                nav_ok = page.evaluate(f"""() => {{
+                    try {{
+                        // Method 1: pushState + popstate
+                        window.history.pushState({{}}, '', '{spa_path}');
+                        window.dispatchEvent(new PopStateEvent('popstate'));
+                        return true;
+                    }} catch(e) {{ return false; }}
+                }}""")
+                if nav_ok:
+                    print(f"  SPA nav to: {spa_path}", flush=True)
+                    time.sleep(4)
+                    if is_registration_form(page):
+                        print(f"  Registration form found via SPA nav: {spa_path}", flush=True)
+                        return True
+                    # Check for partial form
+                    try:
+                        fc = page.evaluate("""() => {
+                            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                            return Array.from(inputs).filter(i => i.offsetParent !== null).length;
+                        }""")
+                        if fc and fc >= 2:
+                            print(f"  Form detected ({fc} inputs) at {spa_path}!", flush=True)
+                            return True
+                    except:
+                        pass
+            except:
+                continue
+        
+        # Last resort for SPA: go back to home and try clicking harder
         try:
-            full_url = base_url + path
-            print(f"  Trying: {full_url}", flush=True)
-            page.goto(full_url, timeout=15000, wait_until='domcontentloaded')
+            page.evaluate("""() => {
+                window.history.pushState({}, '', '/');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+                window.dispatchEvent(new Event('app:navigateHome'));
+            }""")
             time.sleep(3)
-            bypass_cloudflare(page, max_wait=30)
-            time.sleep(2)
-            
-            if is_registration_form(page):
-                print(f"  Registration form found at: {full_url}", flush=True)
-                return True
         except:
-            continue
+            pass
     
     # STEP 3: If still no form, check if current page has at least some fields
     try:
