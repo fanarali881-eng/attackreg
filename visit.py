@@ -2081,8 +2081,7 @@ def run(url, duration_min, manual_socket=None):
                   f"({current_active} already active)", flush=True)
             
             launched = run_browser_wave(
-                wave, site_info, stats, lock, stop_event, 
-                wave_size=actual_wave
+                wave, site_info, actual_wave, stats, lock, stop_event
             )
             
             with lock:
