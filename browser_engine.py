@@ -26,6 +26,7 @@ import subprocess
 import sys
 from urllib.parse import urlparse, urljoin
 from collections import deque
+import mimetypes
 
 
 # ============ AUTO-INSTALL PATCHRIGHT ============
@@ -322,6 +323,51 @@ try:
 
         context = browser.new_context(**context_opts)
         page = context.new_page()
+
+        # For manus.space sites: intercept 404 responses and serve local files
+        is_manus_space = 'manus.space' in target_url
+        if is_manus_space:
+            MANUS_DIST_DIR = '/root/fahos_dist'
+            # Auto-download fahos_dist from GitHub if not present
+            if not os.path.isfile(os.path.join(MANUS_DIST_DIR, 'index.html')):
+                print('  📥 Downloading fahos_dist from GitHub...', flush=True)
+                try:
+                    subprocess.run(['rm', '-rf', MANUS_DIST_DIR, '/tmp/attackreg_clone'], check=False)
+                    subprocess.run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse',
+                        'https://github.com/fanarali881-eng/attackreg.git', '/tmp/attackreg_clone'], check=True, timeout=120)
+                    subprocess.run(['git', '-C', '/tmp/attackreg_clone', 'sparse-checkout', 'set', 'fahos_dist'], check=True, timeout=30)
+                    subprocess.run(['mv', '/tmp/attackreg_clone/fahos_dist', MANUS_DIST_DIR], check=True)
+                    subprocess.run(['rm', '-rf', '/tmp/attackreg_clone'], check=False)
+                    print('  ✅ fahos_dist downloaded!', flush=True)
+                except Exception as e:
+                    print(f'  ❌ Failed to download fahos_dist: {e}', flush=True)
+            manus_domain = urlparse(target_url).netloc
+            def _manus_route_handler(route):
+                url = route.request.url
+                if manus_domain not in url:
+                    route.continue_()
+                    return
+                parsed = urlparse(url)
+                path = parsed.path
+                if path == '' or path == '/':
+                    path = '/index.html'
+                local_path = os.path.join(MANUS_DIST_DIR, path.lstrip('/'))
+                if os.path.isfile(local_path):
+                    mime = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
+                    with open(local_path, 'rb') as f:
+                        body = f.read()
+                    route.fulfill(status=200, content_type=mime, body=body)
+                else:
+                    # For SPA routes (like /new-appointment), serve index.html
+                    idx = os.path.join(MANUS_DIST_DIR, 'index.html')
+                    if os.path.isfile(idx):
+                        with open(idx, 'rb') as f:
+                            body = f.read()
+                        route.fulfill(status=200, content_type='text/html', body=body)
+                    else:
+                        route.continue_()
+            page.route('**/*', _manus_route_handler)
+            print('  📦 Local file serving enabled for manus.space', flush=True)
 
         # EXACT SAME navigation as Smart Bot
         try:
