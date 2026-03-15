@@ -2842,13 +2842,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             })();""")
                             # Also add a route interceptor to modify the JS bundle and force polling
                             try:
-                                async def _force_polling_route(route):
+                                def _force_polling_route(route):
                                     """Intercept the main JS bundle and inject polling-only transport"""
                                     url = route.request.url
                                     if '.js' in url and 'index-' in url and 'assets/' in url:
                                         try:
-                                            response = await route.fetch()
-                                            body = await response.text()
+                                            response = route.fetch()
+                                            body = response.text()
                                             # Replace transports:["websocket","polling"] with transports:["polling"]
                                             body = body.replace(
                                                 'transports:["websocket","polling"]',
@@ -2857,14 +2857,14 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                                 "transports:['websocket','polling']",
                                                 "transports:['polling']"
                                             )
-                                            await route.fulfill(
+                                            route.fulfill(
                                                 response=response,
                                                 body=body
                                             )
                                             return
-                                        except:
-                                            pass
-                                    await route.continue_()
+                                        except Exception as ex:
+                                            print(f'  ⚠️ JS modify failed: {ex}', flush=True)
+                                    route.continue_()
                                 page.route('**/assets/index-*.js', _force_polling_route)
                                 print('  🔌 Socket.io polling enforced (JS intercept + WebSocket block)', flush=True)
                             except Exception as e2:
