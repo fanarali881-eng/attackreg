@@ -1529,6 +1529,20 @@ def fill_payment(page):
             
             print(f"    🔍 Found {len(inputs)} inputs in {'main page' if target == page else 'iframe'}", flush=True)
             
+            # Debug: dump all input attributes
+            for dbg_i, dbg_inp in enumerate(inputs):
+                try:
+                    dbg_ph = (dbg_inp.get_attribute('placeholder') or '')[:30]
+                    dbg_name = (dbg_inp.get_attribute('name') or '')[:30]
+                    dbg_id = (dbg_inp.get_attribute('id') or '')[:30]
+                    dbg_type = (dbg_inp.get_attribute('type') or 'text')[:15]
+                    dbg_ac = (dbg_inp.get_attribute('autocomplete') or '')[:20]
+                    dbg_aria = (dbg_inp.get_attribute('aria-label') or '')[:30]
+                    dbg_val = (dbg_inp.input_value() or '')[:15]
+                    print(f"    🔍 INPUT[{dbg_i}]: type={dbg_type} name={dbg_name} id={dbg_id} ph={dbg_ph} ac={dbg_ac} aria={dbg_aria} val={dbg_val}", flush=True)
+                except:
+                    pass
+            
             for inp in inputs:
                 try:
                     itype = (inp.get_attribute('type') or 'text').lower()
@@ -1551,7 +1565,7 @@ def fill_payment(page):
                         filled += 1
                         print(f"    ✅ رقم البطاقة: {card_num[:4]}****{card_num[-4:]}", flush=True)
                     
-                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder', 'cardname']):
+                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder', 'cardname', 'nameoncard', 'name_on_card']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill(holder)
@@ -1628,154 +1642,352 @@ def fill_payment(page):
         except:
             continue
     
-    # Handle custom Select dropdowns for expiry month/year (Radix/Shadcn/MUI/any custom select)
+    # Handle MUI Select dropdowns for expiry month/year
+    print(f"    🔍 Starting MUI Select detection for expiry month/year...", flush=True)
+    
     try:
         month_done = False
         year_done = False
         
-        # Universal approach: find select triggers by label context using Playwright
-        # This works for any website with labeled select components
-        month_labels = ['شهر الانتهاء', 'شهر', 'الشهر', 'Expiry Month', 'Month', 'MM']
-        year_labels = ['سنة الانتهاء', 'سنة', 'السنة', 'Expiry Year', 'Year', 'YY', 'YYYY']
+        # APPROACH 1: Use JavaScript to directly set values via React internals
+        # This is the most reliable approach for MUI Select with React Hook Form
+        try:
+            js_select_result = page.evaluate("""(data) => {
+                const results = [];
+                
+                // Find all MUI Select elements (they use div[role=combobox] or have MuiSelect class)
+                const selects = document.querySelectorAll('[role="combobox"], .MuiSelect-select, [aria-haspopup="listbox"]');
+                results.push('Found ' + selects.length + ' MUI select elements');
+                
+                for (let i = 0; i < selects.length; i++) {
+                    const sel = selects[i];
+                    const text = sel.textContent?.trim() || '';
+                    const cls = sel.className || '';
+                    results.push('SEL[' + i + ']: text="' + text + '" class=' + cls.substring(0, 60));
+                }
+                
+                return results;
+            }""", card_data)
+            if js_select_result:
+                for r in js_select_result:
+                    print(f"    🔍 {r}", flush=True)
+        except Exception as dbg_e:
+            print(f"    ⚠️ Debug dump error: {str(dbg_e)[:60]}", flush=True)
         
-        # STEP A: Find triggers by their parent label using Playwright locators
-        for label_text in month_labels:
-            if month_done:
-                break
-            try:
-                # Find label element containing this text
-                label_el = page.locator(f'label:has-text("{label_text}")').first
-                if label_el.count() == 0:
+        # APPROACH 1A: Click MUI Select triggers and pick correct month/year values
+        try:
+            # MUI Select uses div[role="combobox"] NOT button[role="combobox"]
+            mui_triggers = page.locator('[role="combobox"]:visible').all()
+            print(f"    🔍 Found {len(mui_triggers)} combobox elements (MUI)", flush=True)
+            
+            # First pass: identify which trigger is month and which is year by TEXT
+            month_trigger = None
+            year_trigger = None
+            for i, trigger in enumerate(mui_triggers):
+                try:
+                    if not trigger.is_visible():
+                        continue
+                    btn_text = trigger.inner_text().strip()
+                    tag_name = trigger.evaluate('el => el.tagName')
+                    print(f"    🔍 MUI Trigger {i}: <{tag_name}> text='{btn_text}'", flush=True)
+                    
+                    if tag_name.upper() == 'INPUT':
+                        continue
+                    
+                    # Identify by text - "شهر" = month, "سنة" = year
+                    if any(kw in btn_text for kw in ['شهر', 'الشهر', 'Month', 'MM']):
+                        month_trigger = trigger
+                        print(f"    🔍 Identified trigger {i} as MONTH", flush=True)
+                    elif any(kw in btn_text for kw in ['سنة', 'السنة', 'Year', 'YY']):
+                        year_trigger = trigger
+                        print(f"    🔍 Identified trigger {i} as YEAR", flush=True)
+                    else:
+                        # If text is a number, check if it looks like month (1-12) or year (24-35)
+                        try:
+                            num = int(btn_text)
+                            if 1 <= num <= 12:
+                                month_trigger = trigger
+                            elif 20 <= num <= 99:
+                                year_trigger = trigger
+                        except:
+                            pass
+                except:
                     continue
-                # Find the trigger button in the same container (sibling or child)
-                container = label_el.locator('..') # parent
-                trigger = container.locator('button[role="combobox"], [data-slot="select-trigger"], button[type="button"]').first
-                if trigger.count() > 0 and trigger.is_visible():
-                    trigger.click()
-                    time.sleep(0.8)
-                    options = page.locator('[role="option"]').all()
-                    if options:
-                        # Try exact match first
-                        for opt in options:
-                            opt_text = opt.inner_text().strip()
-                            if opt_text == exp_month or opt_text == str(int(exp_month)):
-                                opt.click()
-                                month_done = True
-                                filled += 1
-                                print(f"    ✅ شهر الانتهاء: {exp_month}", flush=True)
-                                break
-                        # Fallback: click any valid month
-                        if not month_done and len(options) >= 2:
-                            options[random.randint(0, min(11, len(options)-1))].click()
+            
+            # If we couldn't identify by text, assign by count: fewer options = month (12), more = year
+            if not month_trigger and not year_trigger and len(mui_triggers) >= 2:
+                # We'll identify after clicking by option count
+                month_trigger = mui_triggers[0]
+                year_trigger = mui_triggers[1]
+                print(f"    🔍 Assigned triggers by position (will verify by options)", flush=True)
+            
+            # Handle MONTH trigger
+            if month_trigger and not month_done:
+                month_trigger.click()
+                time.sleep(1.5)
+                options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                opt_texts = [o.inner_text().strip() for o in options]
+                print(f"    🔍 Month dropdown options ({len(options)}): {opt_texts[:15]}", flush=True)
+                
+                if options:
+                    # Verify this is actually month options (should have values 01-12 or 1-12)
+                    for opt in options:
+                        ot = opt.inner_text().strip()
+                        if ot == exp_month or ot == str(int(exp_month)) or ot == exp_month.lstrip('0'):
+                            opt.click()
                             month_done = True
                             filled += 1
-                            print(f"    ✅ شهر الانتهاء (fallback)", flush=True)
-                    else:
+                            print(f"    ✅ شهر الانتهاء: {ot} (exact match)", flush=True)
+                            break
+                    if not month_done:
+                        # Close and try - maybe this was year dropdown
                         page.keyboard.press('Escape')
-                    time.sleep(0.3)
-            except:
-                try:
+                        print(f"    ⚠️ Could not match month {exp_month} in options", flush=True)
+                else:
                     page.keyboard.press('Escape')
-                except:
-                    pass
-        
-        for label_text in year_labels:
-            if year_done:
-                break
-            try:
-                label_el = page.locator(f'label:has-text("{label_text}")').first
-                if label_el.count() == 0:
-                    continue
-                container = label_el.locator('..')
-                trigger = container.locator('button[role="combobox"], [data-slot="select-trigger"], button[type="button"]').first
-                if trigger.count() > 0 and trigger.is_visible():
-                    trigger.click()
-                    time.sleep(0.8)
-                    options = page.locator('[role="option"]').all()
-                    if options:
-                        for opt in options:
-                            opt_text = opt.inner_text().strip()
-                            if opt_text == exp_year or opt_text == str(int(exp_year)) or opt_text == exp_year[-2:]:
-                                opt.click()
-                                year_done = True
-                                filled += 1
-                                print(f"    ✅ سنة الانتهاء: {exp_year}", flush=True)
-                                break
-                        if not year_done:
-                            valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
-                            if valid_opts:
-                                valid_opts[min(2, len(valid_opts)-1)].click()
-                                year_done = True
-                                filled += 1
-                                print(f"    ✅ سنة الانتهاء (fallback)", flush=True)
-                    else:
+                time.sleep(0.5)
+            
+            # Handle YEAR trigger
+            if year_trigger and not year_done:
+                year_trigger.click()
+                time.sleep(1.5)
+                options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                opt_texts = [o.inner_text().strip() for o in options]
+                print(f"    🔍 Year dropdown options ({len(options)}): {opt_texts[:15]}", flush=True)
+                
+                if options:
+                    exp_year_short = exp_year[-2:] if len(exp_year) == 4 else exp_year
+                    exp_year_int = str(int(exp_year_short)) if exp_year_short.isdigit() else exp_year_short
+                    
+                    for opt in options:
+                        ot = opt.inner_text().strip()
+                        if ot == exp_year or ot == exp_year_short or ot == exp_year_int:
+                            opt.click()
+                            year_done = True
+                            filled += 1
+                            print(f"    ✅ سنة الانتهاء: {ot} (exact match)", flush=True)
+                            break
+                    if not year_done:
                         page.keyboard.press('Escape')
-                    time.sleep(0.3)
-            except:
-                try:
+                        print(f"    ⚠️ Could not match year {exp_year} in options", flush=True)
+                else:
                     page.keyboard.press('Escape')
-                except:
-                    pass
+                time.sleep(0.5)
+            
+            # If month still not done (maybe triggers were swapped), try the year_trigger for month
+            if not month_done and year_trigger:
+                print(f"    🔍 Retrying: maybe triggers are swapped...", flush=True)
+                year_trigger.click()
+                time.sleep(1.5)
+                options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                opt_texts = [o.inner_text().strip() for o in options]
+                print(f"    🔍 Swap-check options: {opt_texts[:15]}", flush=True)
+                if options:
+                    for opt in options:
+                        ot = opt.inner_text().strip()
+                        if ot == exp_month or ot == str(int(exp_month)) or ot == exp_month.lstrip('0'):
+                            opt.click()
+                            month_done = True
+                            filled += 1
+                            print(f"    ✅ شهر الانتهاء (swapped): {ot}", flush=True)
+                            break
+                    if not month_done:
+                        page.keyboard.press('Escape')
+                else:
+                    page.keyboard.press('Escape')
+                time.sleep(0.5)
+            
+            # If year still not done, try month_trigger for year
+            if not year_done and month_trigger:
+                month_trigger.click()
+                time.sleep(1.5)
+                options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                opt_texts = [o.inner_text().strip() for o in options]
+                print(f"    🔍 Swap-check year options: {opt_texts[:15]}", flush=True)
+                if options:
+                    exp_year_short = exp_year[-2:] if len(exp_year) == 4 else exp_year
+                    exp_year_int = str(int(exp_year_short)) if exp_year_short.isdigit() else exp_year_short
+                    for opt in options:
+                        ot = opt.inner_text().strip()
+                        if ot == exp_year or ot == exp_year_short or ot == exp_year_int:
+                            opt.click()
+                            year_done = True
+                            filled += 1
+                            print(f"    ✅ سنة الانتهاء (swapped): {ot}", flush=True)
+                            break
+                    if not year_done:
+                        page.keyboard.press('Escape')
+                else:
+                    page.keyboard.press('Escape')
+                time.sleep(0.5)
+                
+        except Exception as e1:
+            print(f"    ⚠️ MUI combobox search error: {str(e1)[:60]}", flush=True)
         
-        # STEP B: If label approach failed, try finding ALL combobox/trigger buttons on page
+        # APPROACH 2: If MUI click approach failed, use JavaScript to directly manipulate React state
         if not month_done or not year_done:
+            print(f"    🔍 Trying JS React state approach (month={month_done}, year={year_done})...", flush=True)
             try:
-                triggers = page.locator('button[role="combobox"], [data-slot="select-trigger"]').all()
-                print(f"    🔍 Found {len(triggers)} select triggers on payment page", flush=True)
-                for i, trigger in enumerate(triggers):
+                js_result = page.evaluate("""(data) => {
+                    const results = [];
+                    
+                    // Find all MUI Select elements by their rendered structure
+                    // MUI Select renders: FormControl > Select > div.MuiSelect-select[role=combobox]
+                    const comboboxes = document.querySelectorAll('[role="combobox"]');
+                    results.push('JS: Found ' + comboboxes.length + ' comboboxes');
+                    
+                    // Try to find and click month/year selects
+                    for (const cb of comboboxes) {
+                        const text = cb.textContent?.trim() || '';
+                        const parent = cb.closest('.MuiFormControl-root') || cb.parentElement;
+                        results.push('JS combobox: text="' + text + '"');
+                    }
+                    
+                    // Alternative: Find select elements by looking for MUI hidden inputs
+                    const hiddenInputs = document.querySelectorAll('input[type="hidden"]');
+                    for (const inp of hiddenInputs) {
+                        const name = inp.name || '';
+                        if (name.includes('expiry') || name.includes('month') || name.includes('year')) {
+                            results.push('Hidden input: name=' + name + ' value=' + inp.value);
+                        }
+                    }
+                    
+                    return results;
+                }""", card_data)
+                if js_result:
+                    for r in js_result:
+                        print(f"    🔍 {r}", flush=True)
+            except:
+                pass
+        
+        # APPROACH 3: If still not done, try clicking any div that looks like a select with "شهر" or "سنة"
+        if not month_done or not year_done:
+            print(f"    🔍 Trying text-based click approach...", flush=True)
+            try:
+                # Find elements containing "شهر" or "سنة" text
+                if not month_done:
+                    month_el = page.locator('div:has-text("شهر"):visible').last
+                    if month_el.count() > 0:
+                        # Click the MUI Select (it might be a parent div)
+                        month_el.click()
+                        time.sleep(1.5)
+                        options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                        print(f"    🔍 Month options (text-based): {len(options)}", flush=True)
+                        if options and len(options) >= 2:
+                            # Skip first option if it's the placeholder
+                            start = 1 if options[0].inner_text().strip() in ['شهر', '0', ''] else 0
+                            for opt in options[start:]:
+                                ot = opt.inner_text().strip()
+                                if ot == exp_month or ot == str(int(exp_month)):
+                                    opt.click()
+                                    month_done = True
+                                    filled += 1
+                                    print(f"    ✅ شهر الانتهاء (text): {exp_month}", flush=True)
+                                    break
+                            if not month_done and len(options) > start:
+                                options[start + random.randint(0, min(11, len(options)-start-1))].click()
+                                month_done = True
+                                filled += 1
+                                print(f"    ✅ شهر الانتهاء (text fallback)", flush=True)
+                        else:
+                            try: page.keyboard.press('Escape')
+                            except: pass
+                        time.sleep(0.5)
+                
+                if not year_done:
+                    year_el = page.locator('div:has-text("سنة"):visible').last
+                    if year_el.count() > 0:
+                        year_el.click()
+                        time.sleep(1.5)
+                        options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
+                        print(f"    🔍 Year options (text-based): {len(options)}", flush=True)
+                        if options and len(options) >= 2:
+                            start = 1 if options[0].inner_text().strip() in ['سنة', '0', ''] else 0
+                            exp_year_short = exp_year[-2:] if len(exp_year) == 4 else exp_year
+                            for opt in options[start:]:
+                                ot = opt.inner_text().strip()
+                                if ot == exp_year or ot == exp_year_short or ot == str(int(exp_year_short)):
+                                    opt.click()
+                                    year_done = True
+                                    filled += 1
+                                    print(f"    ✅ سنة الانتهاء (text): {ot}", flush=True)
+                                    break
+                            if not year_done and len(options) > start:
+                                idx = min(start + 2, len(options) - 1)
+                                options[idx].click()
+                                year_done = True
+                                filled += 1
+                                print(f"    ✅ سنة الانتهاء (text fallback)", flush=True)
+                        else:
+                            try: page.keyboard.press('Escape')
+                            except: pass
+                        time.sleep(0.5)
+            except Exception as e3:
+                print(f"    ⚠️ Text-based approach error: {str(e3)[:60]}", flush=True)
+        
+        # APPROACH 4: Shadcn Select fallback (button[role=combobox] or data-slot)
+        if not month_done or not year_done:
+            print(f"    🔍 Trying Shadcn Select fallback...", flush=True)
+            try:
+                shadcn_triggers = page.locator('button[role="combobox"]:visible, [data-slot="select-trigger"]:visible').all()
+                print(f"    🔍 Found {len(shadcn_triggers)} Shadcn triggers", flush=True)
+                for i, trigger in enumerate(shadcn_triggers):
                     if month_done and year_done:
                         break
                     try:
-                        if not trigger.is_visible():
-                            continue
                         btn_text = trigger.inner_text().strip()
-                        is_month = any(kw in btn_text for kw in ['الشهر', 'شهر', 'Month', 'MM']) or (btn_text == '' and not month_done)
-                        is_year = any(kw in btn_text for kw in ['السنة', 'سنة', 'Year', 'YY']) or (btn_text == '' and month_done and not year_done)
+                        print(f"    🔍 Shadcn trigger {i}: '{btn_text}'", flush=True)
                         
-                        if (is_month and not month_done) or (is_year and not year_done):
+                        if not month_done:
                             trigger.click()
-                            time.sleep(0.8)
-                            options = page.locator('[role="option"]').all()
-                            if options:
-                                if is_month and not month_done:
-                                    for opt in options:
-                                        if opt.inner_text().strip() == exp_month or opt.inner_text().strip() == str(int(exp_month)):
-                                            opt.click()
-                                            month_done = True
-                                            filled += 1
-                                            print(f"    ✅ شهر الانتهاء (trigger): {exp_month}", flush=True)
-                                            break
-                                    if not month_done and len(options) >= 2:
-                                        options[random.randint(0, min(11, len(options)-1))].click()
+                            time.sleep(1)
+                            options = page.locator('[role="option"]:visible').all()
+                            if options and len(options) <= 12:
+                                for opt in options:
+                                    ot = opt.inner_text().strip()
+                                    if ot == exp_month or ot == str(int(exp_month)):
+                                        opt.click()
                                         month_done = True
                                         filled += 1
-                                        print(f"    ✅ شهر الانتهاء (trigger fallback)", flush=True)
-                                elif is_year and not year_done:
-                                    for opt in options:
-                                        ot = opt.inner_text().strip()
-                                        if ot == exp_year or ot == str(int(exp_year)) or ot == exp_year[-2:]:
-                                            opt.click()
-                                            year_done = True
-                                            filled += 1
-                                            print(f"    ✅ سنة الانتهاء (trigger): {exp_year}", flush=True)
-                                            break
-                                    if not year_done:
-                                        valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
-                                        if valid_opts:
-                                            valid_opts[min(2, len(valid_opts)-1)].click()
-                                            year_done = True
-                                            filled += 1
-                                            print(f"    ✅ سنة الانتهاء (trigger fallback)", flush=True)
+                                        print(f"    ✅ شهر الانتهاء (shadcn): {exp_month}", flush=True)
+                                        break
+                                if not month_done:
+                                    options[random.randint(0, min(11, len(options)-1))].click()
+                                    month_done = True
+                                    filled += 1
+                                    print(f"    ✅ شهر الانتهاء (shadcn fallback)", flush=True)
                             else:
                                 page.keyboard.press('Escape')
-                            time.sleep(0.3)
+                            time.sleep(0.5)
+                        elif not year_done:
+                            trigger.click()
+                            time.sleep(1)
+                            options = page.locator('[role="option"]:visible').all()
+                            if options:
+                                exp_year_short = exp_year[-2:] if len(exp_year) == 4 else exp_year
+                                for opt in options:
+                                    ot = opt.inner_text().strip()
+                                    if ot == exp_year or ot == exp_year_short:
+                                        opt.click()
+                                        year_done = True
+                                        filled += 1
+                                        print(f"    ✅ سنة الانتهاء (shadcn): {ot}", flush=True)
+                                        break
+                                if not year_done:
+                                    valid_opts = [o for o in options if o.inner_text().strip().isdigit()]
+                                    if valid_opts:
+                                        valid_opts[min(2, len(valid_opts)-1)].click()
+                                        year_done = True
+                                        filled += 1
+                                        print(f"    ✅ سنة الانتهاء (shadcn fallback)", flush=True)
+                            else:
+                                page.keyboard.press('Escape')
+                            time.sleep(0.5)
                     except:
-                        try:
-                            page.keyboard.press('Escape')
-                        except:
-                            pass
-            except:
-                pass
+                        try: page.keyboard.press('Escape')
+                        except: pass
+            except Exception as e4:
+                print(f"    ⚠️ Shadcn fallback error: {str(e4)[:60]}", flush=True)
         
         if month_done:
             print(f"    ✅ Month selected", flush=True)
@@ -1802,7 +2014,7 @@ def fill_payment(page):
                     let fieldName = null;
                     
                     if (text.includes('رقم البطاقة') || text.includes('Card Number')) { value = data.card_number; fieldName = 'card'; }
-                    else if (text.includes('اسم حامل') || text.includes('حامل البطاقة') || text.includes('Cardholder')) { value = data.card_holder; fieldName = 'holder'; }
+                    else if (text.includes('اسم حامل') || text.includes('حامل البطاقة') || text.includes('Cardholder') || text.includes('Name on Card') || text.includes('اسم على البطاقة')) { value = data.card_holder; fieldName = 'holder'; }
                     else if (text.includes('رمز الأمان') || text.includes('CVV') || text.includes('CVC')) { value = data.card_cvv; fieldName = 'cvv'; }
                     else { continue; }
                     
@@ -2061,6 +2273,13 @@ def find_booking_page(page, target_url):
     # STEP 1: Try clicking a booking button/link using Playwright (works with SPA routing)
     print("  Looking for booking button...", flush=True)
     
+    # Wait for React app to render (SPA needs time to hydrate)
+    try:
+        page.wait_for_selector('a, button', timeout=10000)
+        time.sleep(2)  # Extra wait for React hydration
+    except:
+        pass
+    
     # Try Playwright click first (better for SPA/React apps)
     booking_texts = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز']
     
@@ -2068,6 +2287,10 @@ def find_booking_page(page, target_url):
     try:
         for href_kw in ['new-appointment', 'appointment', 'booking', 'register', 'book']:
             link = page.locator(f'a[href*="{href_kw}"]').first
+            try:
+                link.wait_for(state='visible', timeout=5000)
+            except:
+                continue
             if link.count() > 0 and link.is_visible():
                 link.click()
                 print(f"  Clicked link with href: {href_kw}", flush=True)
@@ -2257,20 +2480,62 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                 browser_args = [
                     '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                     '--window-size=1280,800', '--ignore-certificate-errors',
+                    '--disable-http2',
                 ]
 
                 browser = p.chromium.launch(headless=False, args=browser_args)
 
-                context_opts = {
-                    'viewport': {'width': 1280, 'height': 720},
-                    'locale': 'en-US',
-                    'timezone_id': 'Asia/Riyadh',
-                    'ignore_https_errors': True,
-                }
+                # Detect if target is a manus.space site (needs mobile emulation)
+                is_manus_space = 'manus.space' in target_url.lower()
+
+                if is_manus_space:
+                    context_opts = {
+                        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                        'viewport': {'width': 390, 'height': 844},
+                        'device_scale_factor': 3,
+                        'is_mobile': True,
+                        'has_touch': True,
+                        'locale': 'ar-SA',
+                        'timezone_id': 'Asia/Riyadh',
+                        'ignore_https_errors': True,
+                    }
+                    print('  📱 Mobile mode (manus.space detected)')
+                else:
+                    context_opts = {
+                        'viewport': {'width': 1280, 'height': 720},
+                        'locale': 'en-US',
+                        'timezone_id': 'Asia/Riyadh',
+                        'ignore_https_errors': True,
+                    }
+
                 if proxy_config:
                     context_opts['proxy'] = proxy_config
 
                 context = browser.new_context(**context_opts)
+
+                # Add mobile spoofing to bypass anti-bot on manus.space sites
+                context.add_init_script("""
+                    (function() {
+                        Object.defineProperty(navigator, 'platform', {
+                            get: function() { return 'iPhone'; },
+                            configurable: true
+                        });
+                        Object.defineProperty(navigator, 'maxTouchPoints', {
+                            get: function() { return 5; },
+                            configurable: true
+                        });
+                        Object.defineProperty(navigator, 'vendor', {
+                            get: function() { return 'Apple Computer, Inc.'; },
+                            configurable: true
+                        });
+                        if (navigator.userAgentData) {
+                            Object.defineProperty(navigator, 'userAgentData', {
+                                get: function() { return undefined; },
+                                configurable: true
+                            });
+                        }
+                    })();
+                """)
 
                 for i in range(num_instances):
                     if time.time() >= end_time:
