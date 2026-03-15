@@ -2358,6 +2358,7 @@ def find_booking_page(page, target_url):
                     return True
                 
                 page_text = page.evaluate("() => document.body.innerText || ''")
+                print(f"  [DEBUG] Page text after retry {retry+1} ({len(page_text)} chars): {page_text[:200]}", flush=True)
                 still_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
                 if not still_unavailable:
                     # Check if form appeared
