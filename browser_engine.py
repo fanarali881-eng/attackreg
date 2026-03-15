@@ -185,7 +185,7 @@ SA_GEOLOCATION = {"latitude": 24.7136, "longitude": 46.6753}
 
 # ============ VISITOR SUBPROCESS SCRIPT (EXACT SAME AS SMART BOT) ============
 VISITOR_SCRIPT = '''
-import sys, time, random, json, os, re
+import sys, time, random, json, os, re, subprocess, mimetypes
 from urllib.parse import urlparse, urljoin
 
 os.environ.setdefault('DISPLAY', ':99')
