@@ -2319,6 +2319,44 @@ def find_booking_page(page, target_url):
         print("  Already on registration form!", flush=True)
         return True
     
+    # STEP 0: Handle SPA sites that show 'unavailable' while API loads (e.g. carssafty.com)
+    # These sites load HTML fine but their backend API may be slow or need retries
+    try:
+        page_text = page.evaluate("() => document.body.innerText || ''")
+        unavailable_keywords = ['\u063a\u064a\u0631 \u0645\u062a\u0627\u062d', 'unavailable', 'currently unavailable']
+        is_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
+        
+        if is_unavailable:
+            print("  \u26a0\ufe0f Site shows 'unavailable' - retrying (SPA protection)...", flush=True)
+            for retry in range(3):
+                time.sleep(5)
+                try:
+                    page.reload(timeout=30000, wait_until='domcontentloaded')
+                except:
+                    pass
+                time.sleep(5)
+                bypass_cloudflare(page, max_wait=15)
+                time.sleep(3)
+                
+                # Check if content loaded now
+                if is_registration_form(page):
+                    print(f"  \u2705 Form appeared after retry {retry+1}!", flush=True)
+                    return True
+                
+                page_text = page.evaluate("() => document.body.innerText || ''")
+                still_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
+                if not still_unavailable:
+                    print(f"  \u2705 Site loaded after retry {retry+1}!", flush=True)
+                    break
+                print(f"  \u23f3 Still unavailable after retry {retry+1}", flush=True)
+    except:
+        pass
+    
+    # Re-check after retries
+    if is_registration_form(page):
+        print("  Registration form found after retry!", flush=True)
+        return True
+    
     # STEP 1: Try clicking a booking button/link using Playwright (works with SPA routing)
     print("  Looking for booking button...", flush=True)
     
