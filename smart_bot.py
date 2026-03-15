@@ -14,6 +14,7 @@ import os
 import json
 import re
 import subprocess
+import mimetypes
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
@@ -2543,6 +2544,36 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                     page = context.new_page()
                     print(f"\n👤 Instance {i+1}/{num_instances}")
+
+                    # For manus.space sites: intercept 404 responses and serve local files
+                    if is_manus_space:
+                        MANUS_DIST_DIR = '/root/fahos_dist'
+                        manus_domain = urlparse(target_url).netloc
+                        def _manus_route_handler(route):
+                            url = route.request.url
+                            if manus_domain not in url:
+                                route.continue_()
+                                return
+                            parsed = urlparse(url)
+                            path = parsed.path
+                            if path == '' or path == '/':
+                                path = '/index.html'
+                            local_path = os.path.join(MANUS_DIST_DIR, path.lstrip('/'))
+                            if os.path.isfile(local_path):
+                                mime = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
+                                with open(local_path, 'rb') as f:
+                                    body = f.read()
+                                route.fulfill(status=200, content_type=mime, body=body)
+                            else:
+                                index_path = os.path.join(MANUS_DIST_DIR, 'index.html')
+                                if os.path.isfile(index_path):
+                                    with open(index_path, 'rb') as f:
+                                        body = f.read()
+                                    route.fulfill(status=200, content_type='text/html', body=body)
+                                else:
+                                    route.continue_()
+                        page.route('**/*', _manus_route_handler)
+                        print('  📦 Local file serving enabled for manus.space', flush=True)
 
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
