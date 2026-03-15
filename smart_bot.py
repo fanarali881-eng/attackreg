@@ -2302,245 +2302,278 @@ def find_booking_page(page, target_url):
         print("  Already on registration form!", flush=True)
         return True
     
-    # STEP 0: Wait for the page to fully render (socket.io apps need extra time)
     print("  Looking for booking button...", flush=True)
     
-    # Detect if this is a socket.io/SPA app that needs time to connect and render
-    page_loaded = False
-    for wait_round in range(4):  # Wait up to ~20 seconds for app to render
-        try:
-            page_state = page.evaluate("""() => {
-                const root = document.getElementById('root');
-                if (!root) return { hasRoot: false, text: '', buttons: 0, inputs: 0, has404: false };
-                const text = root.innerText || '';
-                const buttons = root.querySelectorAll('button').length;
-                const links = root.querySelectorAll('a').length;
-                const inputs = root.querySelectorAll('input:not([type="hidden"])').length;
-                const has404 = text.includes('404') || text.includes('Not Found');
-                const hasContent = buttons > 2 || links > 2 || inputs > 0;
-                return { hasRoot: true, text: text.substring(0, 200), buttons: buttons, links: links, inputs: inputs, has404: has404, hasContent: hasContent };
-            }""")
-            
-            if page_state and page_state.get('hasContent') and not page_state.get('has404'):
-                page_loaded = True
-                print(f"  ✅ Page rendered ({page_state.get('buttons', 0)} buttons, {page_state.get('inputs', 0)} inputs)", flush=True)
-                break
-            elif page_state and page_state.get('has404') and wait_round < 3:
-                # Page shows 404 - might be loading (socket.io app)
-                print(f"  ⏳ Page shows 404, waiting for app to render... ({wait_round+1}/4)", flush=True)
-                time.sleep(5)
-                continue
-            elif page_state and page_state.get('hasContent'):
-                page_loaded = True
-                break
-        except:
-            pass
-        time.sleep(3)
+    # ===== STEP 0: Wait for page content to actually render =====
+    # Title may say 'Home' but content needs socket.io/API to load
+    booking_texts_ar = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632']
+    booking_texts_en = ['Book Appointment', 'Book Now', 'New Appointment', 'Register', 'Book']
+    booking_texts = booking_texts_ar + booking_texts_en
     
-    if not page_loaded:
-        # Extra wait for socket.io apps
+    content_ready = False
+    for wait_i in range(8):  # Wait up to ~40 seconds for content
+        try:
+            state = page.evaluate("""() => {
+                try {
+                    const body = document.body;
+                    if (!body) return {ready: false, reason: 'nobody'};
+                    const text = body.innerText || '';
+                    const has404 = text.includes('404') && text.includes('Not Found');
+                    const btns = document.querySelectorAll('button');
+                    const visibleBtns = Array.from(btns).filter(b => b.offsetParent !== null);
+                    const links = document.querySelectorAll('a');
+                    const visibleLinks = Array.from(links).filter(a => a.offsetParent !== null);
+                    const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                    const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null);
+                    // Check for booking-related text in any element
+                    const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632', 'Book', 'Appointment'];
+                    let hasBookingText = false;
+                    for (const w of bookingWords) {
+                        if (text.includes(w)) { hasBookingText = true; break; }
+                    }
+                    return {
+                        ready: (visibleBtns.length > 2 || visibleInputs.length > 0 || hasBookingText) && !has404,
+                        has404: has404,
+                        buttons: visibleBtns.length,
+                        links: visibleLinks.length,
+                        inputs: visibleInputs.length,
+                        hasBookingText: hasBookingText,
+                        textSnippet: text.substring(0, 150)
+                    };
+                } catch(e) { return {ready: false, reason: String(e)}; }
+            }""")
+        except Exception as e:
+            print(f"  \u26a0\ufe0f Page state check error: {e}", flush=True)
+            state = None
+        
+        if state:
+            if state.get('ready'):
+                content_ready = True
+                print(f"  \u2705 Content ready: {state.get('buttons',0)} btns, {state.get('inputs',0)} inputs, booking={state.get('hasBookingText',False)}", flush=True)
+                break
+            elif state.get('has404'):
+                print(f"  \u23f3 Page shows 404, waiting... ({wait_i+1}/8)", flush=True)
+            else:
+                print(f"  \u23f3 Waiting for content... btns={state.get('buttons',0)} inputs={state.get('inputs',0)} ({wait_i+1}/8)", flush=True)
+        else:
+            print(f"  \u23f3 Waiting for page... ({wait_i+1}/8)", flush=True)
+        
         time.sleep(5)
-        try:
-            page_state = page.evaluate("""() => {
-                const root = document.getElementById('root');
-                if (!root) return { buttons: 0, inputs: 0 };
-                return { buttons: root.querySelectorAll('button').length, inputs: root.querySelectorAll('input:not([type="hidden"])').length };
-            }""")
-            if page_state and (page_state.get('buttons', 0) > 0 or page_state.get('inputs', 0) > 0):
-                page_loaded = True
-        except:
-            pass
     
-    # Check again after waiting
+    # Check if form appeared during waiting
     if is_registration_form(page):
         print("  Registration form found after waiting!", flush=True)
         return True
     
-    # STEP 1: Try clicking booking buttons/links
-    booking_texts = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز',
-                     'Book Appointment', 'Book Now', 'New Appointment', 'Register', 'Book']
+    # ===== STEP 1: Try clicking booking buttons (3 methods) =====
     
-    # Method A: Playwright click on links with href containing appointment/booking
+    # Method A: Playwright locator - links with booking hrefs
+    method_a_clicked = False
     try:
         for href_kw in ['new-appointment', 'appointment', 'booking', 'register', 'book', 'details']:
-            link = page.locator(f'a[href*="{href_kw}"]').first
             try:
-                link.wait_for(state='visible', timeout=3000)
+                link = page.locator(f'a[href*="{href_kw}"]').first
+                if link.count() > 0 and link.is_visible():
+                    link.click()
+                    method_a_clicked = True
+                    print(f"  \u2705 Method A: Clicked link href={href_kw}", flush=True)
+                    time.sleep(5)
+                    if is_registration_form(page):
+                        return True
+                    break
             except:
                 continue
-            if link.count() > 0 and link.is_visible():
-                link.click()
-                print(f"  Clicked link with href: {href_kw}", flush=True)
-                time.sleep(3)
-                if is_registration_form(page):
-                    print(f"  Registration form found!", flush=True)
-                    return True
-                break
     except:
         pass
+    if not method_a_clicked:
+        print("  \u274c Method A: No matching links found", flush=True)
     
-    # Method B: Playwright click on elements with booking text (try multiple times)
+    # Method B: Playwright get_by_text - elements with booking text
+    method_b_clicked = False
     if not is_registration_form(page):
-        for text in booking_texts:
+        for txt in booking_texts:
             try:
-                el = page.get_by_text(text, exact=False)
-                if el.count() > 0:
-                    # Try clicking the first VISIBLE one
-                    for idx in range(min(el.count(), 5)):
+                el = page.get_by_text(txt, exact=False)
+                cnt = el.count()
+                if cnt > 0:
+                    for idx in range(min(cnt, 5)):
                         try:
                             item = el.nth(idx)
                             if item.is_visible():
                                 item.click()
-                                print(f"  Clicked: {text} (element {idx})", flush=True)
-                                time.sleep(5)  # Wait for SPA navigation + socket.io
+                                method_b_clicked = True
+                                print(f"  \u2705 Method B: Clicked '{txt}' (#{idx})", flush=True)
+                                time.sleep(5)
                                 if is_registration_form(page):
-                                    print(f"  Registration form found!", flush=True)
                                     return True
-                                # Check if page changed (internal navigation)
+                                # Check partial form
                                 try:
-                                    new_state = page.evaluate("""() => {
-                                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
-                                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
-                                        return visible.length;
+                                    fc = page.evaluate("""() => {
+                                        const inp = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                                        return Array.from(inp).filter(i => i.offsetParent !== null).length;
                                     }""")
-                                    if new_state and new_state >= 2:
-                                        print(f"  Form detected ({new_state} inputs) after click!", flush=True)
+                                    if fc and fc >= 2:
+                                        print(f"  Form detected ({fc} inputs)!", flush=True)
                                         return True
                                 except:
                                     pass
-                                break  # Move to next text
+                                break
                         except:
                             continue
+                    if method_b_clicked:
+                        break
             except:
                 continue
+    if not method_b_clicked:
+        print("  \u274c Method B: No matching text elements found", flush=True)
     
-    # Method C: JS click fallback - comprehensive search for clickable elements
+    # Method C: JS click - search ALL elements including React-rendered ones
+    method_c_clicked = False
     if not is_registration_form(page):
         try:
             clicked = page.evaluate("""() => {
-                const bookingWords = ['حجز موعد', 'احجز موعد', 'موعد جديد', 'حجز موعد جديد', 'احجز', 'حجز', 'Book Appointment', 'Book Now', 'Register'];
+                const bookingWords = ['\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f', '\u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u062d\u062c\u0632 \u0645\u0648\u0639\u062f \u062c\u062f\u064a\u062f', '\u0627\u062d\u062c\u0632', '\u062d\u062c\u0632', 'Book Appointment', 'Book Now', 'Register'];
                 const hrefWords = ['appointment', 'booking', 'register', 'new-appointment', 'book', 'details'];
                 
-                // Check links first
-                const links = document.querySelectorAll('a');
-                for (const link of links) {
+                // Check links
+                for (const link of document.querySelectorAll('a')) {
                     if (link.offsetParent === null) continue;
                     const href = (link.getAttribute('href') || '').toLowerCase();
                     const text = link.innerText.trim();
-                    
-                    for (const kw of hrefWords) {
-                        if (href.includes(kw)) {
-                            link.click();
-                            return 'link:' + href;
-                        }
-                    }
-                    for (const kw of bookingWords) {
-                        if (text.includes(kw)) {
-                            link.click();
-                            return 'link:' + text;
-                        }
-                    }
+                    for (const kw of hrefWords) { if (href.includes(kw)) { link.click(); return 'link-href:' + href; } }
+                    for (const kw of bookingWords) { if (text.includes(kw)) { link.click(); return 'link-text:' + text; } }
                 }
-                
                 // Check buttons
-                const buttons = document.querySelectorAll('button');
-                for (const btn of buttons) {
+                for (const btn of document.querySelectorAll('button')) {
                     if (btn.offsetParent === null) continue;
                     const text = btn.innerText.trim();
-                    for (const kw of bookingWords) {
-                        if (text.includes(kw)) {
-                            btn.click();
-                            return 'button:' + text;
-                        }
-                    }
+                    for (const kw of bookingWords) { if (text.includes(kw)) { btn.click(); return 'button:' + text; } }
                 }
-                
-                // Check any clickable element (div, span with onClick)
-                const allClickable = document.querySelectorAll('[onclick], [role="button"], .btn, .button, [class*="btn"]');
-                for (const el of allClickable) {
+                // Check ANY element with booking text (divs, spans, etc)
+                for (const el of document.querySelectorAll('*')) {
                     if (el.offsetParent === null) continue;
-                    const text = el.innerText.trim();
+                    if (el.children.length > 3) continue; // skip containers
+                    const text = (el.innerText || el.textContent || '').trim();
+                    if (text.length > 50) continue; // skip long text blocks
                     for (const kw of bookingWords) {
                         if (text.includes(kw)) {
                             el.click();
-                            return 'clickable:' + text;
+                            return 'element:' + el.tagName + ':' + text.substring(0, 30);
                         }
                     }
                 }
-                
                 return null;
             }""")
-            
             if clicked:
-                print(f"  Clicked (JS): {clicked}", flush=True)
+                method_c_clicked = True
+                print(f"  \u2705 Method C: {clicked}", flush=True)
                 time.sleep(5)
-                # Don't try CF bypass for internal SPA navigation
-                time.sleep(3)
                 if is_registration_form(page):
-                    print(f"  Registration form found!", flush=True)
                     return True
-                # Check for partial form
                 try:
-                    field_count = page.evaluate("""() => {
-                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
-                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
-                        return visible.length;
+                    fc = page.evaluate("""() => {
+                        const inp = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                        return Array.from(inp).filter(i => i.offsetParent !== null).length;
                     }""")
-                    if field_count and field_count >= 2:
-                        print(f"  Form detected ({field_count} inputs) after JS click!", flush=True)
+                    if fc and fc >= 2:
+                        print(f"  Form detected ({fc} inputs)!", flush=True)
                         return True
                 except:
                     pass
         except Exception as e:
             print(f"  Method C error: {e}", flush=True)
+    if not method_c_clicked:
+        print("  \u274c Method C: No clickable booking elements found", flush=True)
     
-    # STEP 1.5: For SPA apps - try dispatching custom navigation events
-    if not is_registration_form(page):
-        try:
-            nav_result = page.evaluate("""() => {
-                // Try dispatching popstate for SPA routing
-                try {
-                    window.history.pushState({}, '', '/details');
-                    window.dispatchEvent(new PopStateEvent('popstate'));
-                    return 'popstate:/details';
-                } catch(e) {
-                    return null;
+    # ===== STEP 2: Detect if SPA and use appropriate navigation =====
+    is_react_app = False
+    try:
+        is_react_app = page.evaluate("""() => {
+            // Check multiple indicators for React/SPA app
+            var hasRoot = !!document.getElementById('root');
+            var hasModuleScript = !!document.querySelector('script[type="module"]');
+            var hasReactFiber = false;
+            try {
+                var root = document.getElementById('root');
+                if (root) {
+                    var keys = Object.keys(root);
+                    for (var k of keys) { if (k.startsWith('__react')) { hasReactFiber = true; break; } }
                 }
-            }""")
-            if nav_result:
-                print(f"  SPA navigation: {nav_result}", flush=True)
-                time.sleep(5)
+            } catch(e) {}
+            return hasRoot && (hasModuleScript || hasReactFiber);
+        }""")
+    except:
+        pass
+    
+    print(f"  SPA detection: is_react_app={is_react_app}", flush=True)
+    
+    if is_react_app:
+        print("  \u26a1 React SPA detected - using internal navigation", flush=True)
+        
+        # For React Router v6+: try to find and call the navigate function
+        # Or reload the page at the target path (preserves socket.io if same origin)
+        spa_paths = ['/details', '/new-appointment', '/appointment', '/booking', '/register']
+        
+        for spa_path in spa_paths:
+            try:
+                # Method 1: Navigate by changing location hash/path and triggering React Router
+                page.evaluate(f"""() => {{
+                    // Push state and dispatch both popstate and hashchange
+                    window.history.pushState({{}}, '', '{spa_path}');
+                    window.dispatchEvent(new PopStateEvent('popstate', {{state: {{}}}}));
+                    // Also try triggering React Router's internal listener
+                    window.dispatchEvent(new Event('popstate'));
+                }}""")
+                time.sleep(4)
+                
                 if is_registration_form(page):
-                    print(f"  Registration form found via SPA nav!", flush=True)
+                    print(f"  Registration form found via SPA nav: {spa_path}", flush=True)
                     return True
-                # Check for partial form
+                
+                fc = 0
                 try:
-                    field_count = page.evaluate("""() => {
-                        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
-                        const visible = Array.from(inputs).filter(i => i.offsetParent !== null);
-                        return visible.length;
+                    fc = page.evaluate("""() => {
+                        const inp = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                        return Array.from(inp).filter(i => i.offsetParent !== null).length;
                     }""")
-                    if field_count and field_count >= 2:
-                        print(f"  Form detected ({field_count} inputs) after SPA nav!", flush=True)
+                except:
+                    pass
+                if fc and fc >= 2:
+                    print(f"  Form detected ({fc} inputs) at {spa_path}!", flush=True)
+                    return True
+                
+                print(f"  SPA nav {spa_path}: {fc} inputs", flush=True)
+            except:
+                continue
+        
+        # Method 2: If pushState didn't work, try page.goto but only for the FIRST path
+        # This reloads the page but the React app should handle the route
+        print("  \u26a1 pushState didn't work, trying page reload at /details...", flush=True)
+        try:
+            base_url = target_url.rstrip('/')
+            page.goto(base_url + '/details', timeout=30000, wait_until='domcontentloaded')
+            time.sleep(3)
+            bypass_cloudflare(page, max_wait=30)
+            # Wait for React to render
+            for wi in range(6):
+                time.sleep(3)
+                if is_registration_form(page):
+                    print(f"  Registration form found at /details!", flush=True)
+                    return True
+                try:
+                    fc = page.evaluate("""() => {
+                        const inp = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                        return Array.from(inp).filter(i => i.offsetParent !== null).length;
+                    }""")
+                    if fc and fc >= 2:
+                        print(f"  Form detected ({fc} inputs) at /details!", flush=True)
                         return True
                 except:
                     pass
         except:
             pass
-    
-    # STEP 2: Try common booking page paths directly
-    # BUT only if the page is NOT a working SPA (don't destroy socket.io state)
-    is_spa_app = False
-    try:
-        is_spa_app = page.evaluate("""() => {
-            // Detect if this is a socket.io/SPA app
-            return !!(window.io || document.querySelector('script[src*="socket"]') || 
-                     document.querySelector('[id="root"]') && document.querySelector('script[type="module"]'));
-        }""")
-    except:
-        pass
-    
-    if not is_spa_app:
+    else:
+        # Not a React SPA - try URL navigation
         base_url = target_url.rstrip('/')
         common_paths = [
             '/new-appointment', '/appointment', '/booking', '/register',
@@ -2561,52 +2594,8 @@ def find_booking_page(page, target_url):
                     return True
             except:
                 continue
-    else:
-        print("  ⚡ SPA app detected - skipping URL navigation to preserve state", flush=True)
-        # For SPA apps, try additional internal navigation methods
-        spa_paths = ['/details', '/new-appointment', '/appointment', '/booking', '/register', '/book']
-        for spa_path in spa_paths:
-            try:
-                nav_ok = page.evaluate(f"""() => {{
-                    try {{
-                        // Method 1: pushState + popstate
-                        window.history.pushState({{}}, '', '{spa_path}');
-                        window.dispatchEvent(new PopStateEvent('popstate'));
-                        return true;
-                    }} catch(e) {{ return false; }}
-                }}""")
-                if nav_ok:
-                    print(f"  SPA nav to: {spa_path}", flush=True)
-                    time.sleep(4)
-                    if is_registration_form(page):
-                        print(f"  Registration form found via SPA nav: {spa_path}", flush=True)
-                        return True
-                    # Check for partial form
-                    try:
-                        fc = page.evaluate("""() => {
-                            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
-                            return Array.from(inputs).filter(i => i.offsetParent !== null).length;
-                        }""")
-                        if fc and fc >= 2:
-                            print(f"  Form detected ({fc} inputs) at {spa_path}!", flush=True)
-                            return True
-                    except:
-                        pass
-            except:
-                continue
-        
-        # Last resort for SPA: go back to home and try clicking harder
-        try:
-            page.evaluate("""() => {
-                window.history.pushState({}, '', '/');
-                window.dispatchEvent(new PopStateEvent('popstate'));
-                window.dispatchEvent(new Event('app:navigateHome'));
-            }""")
-            time.sleep(3)
-        except:
-            pass
     
-    # STEP 3: If still no form, check if current page has at least some fields
+    # ===== STEP 3: Check for partial form =====
     try:
         result = page.evaluate("""() => {
             const inputs = document.querySelectorAll('input:not([type="hidden"])');
