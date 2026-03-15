@@ -343,7 +343,7 @@ def get_field_value(field_type, data):
         year = random.randint(1970, 2000)
         month = f"{random.randint(1, 12):02d}"
         day = f"{random.randint(1, 28):02d}"
-        return f"{month}/{day}/{year}"
+        return f"{year}-{month}-{day}"
     elif field_type == 'inspection_date':
         # Generate a date in the near future (next 1-14 days)
         future = datetime.now() + timedelta(days=random.randint(1, 14))
@@ -600,6 +600,13 @@ def fill_all_empty_fields(page, data=None):
                     
                     sel_el = page.locator('select:visible').nth(es['visIdx'])
                     sel_el.select_option(value=chosen['value'])
+                    # Trigger React onChange event
+                    sel_el.evaluate("""(el) => {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                        nativeSetter.call(el, el.value);
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }""")
                     filled += 1
                     print(f"    [refill] {field_type}: {chosen['text'][:30]}", flush=True)
                     time.sleep(random.uniform(0.3, 0.6))
@@ -951,6 +958,13 @@ def fill_form_dynamically(page):
                             choice = random.choice(valid_opts)
                             sel_el = page.locator('select:visible').nth(sel['index'])
                             sel_el.select_option(value=choice['value'])
+                            # Trigger React onChange
+                            sel_el.evaluate("""(el) => {
+                                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                                nativeSetter.call(el, el.value);
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                            }""")
                             plate_letter_count += 1
                             filled += 1
                             print(f"    ✅ حرف لوحة {plate_letter_count}: {choice['text'][:10]}", flush=True)
@@ -994,8 +1008,15 @@ def fill_form_dynamically(page):
                 try:
                     sel_el = page.locator('select:visible').nth(sel['index'])
                     sel_el.select_option(value=chosen['value'])
+                    # Trigger React onChange
+                    sel_el.evaluate("""(el) => {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                        nativeSetter.call(el, el.value);
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }""")
                     filled += 1
-                    print(f"    ✅ {field_type}: {chosen['text'][:30]}", flush=True)
+                    print(f"    \u2705 {field_type}: {chosen['text'][:30]}", flush=True)
                     
                     # Wait for dependent dropdowns to load (region -> center)
                     if field_type in ('region', 'country', 'nationality'):
@@ -1074,6 +1095,12 @@ def fill_form_dynamically(page):
                                 try:
                                     dep_sel = page.locator('select:visible').nth(ns['visibleIndex'])
                                     dep_sel.select_option(value=ns_chosen['value'])
+                                    dep_sel.evaluate("""(el) => {
+                                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                                        nativeSetter.call(el, el.value);
+                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    }""")
                                     filled += 1
                                     print(f"    ✅ [dependent] {ns_type}: {ns_chosen['text'][:30]}", flush=True)
                                     time.sleep(random.uniform(0.5, 1))
@@ -1612,6 +1639,7 @@ def fill_payment(page):
                                 txt = opt.inner_text().strip()
                                 if val == exp_month or txt == exp_month or val == str(int(exp_month)):
                                     sel.select_option(value=val)
+                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
                                     filled += 1
                                     month_done = True
                                     print(f"    ✅ شهر الانتهاء: {exp_month}", flush=True)
@@ -1622,6 +1650,7 @@ def fill_payment(page):
                                 txt = opt.inner_text().strip()
                                 if val == exp_year or txt == exp_year or val == exp_year[-2:] or txt == exp_year[-2:]:
                                     sel.select_option(value=val)
+                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
                                     filled += 1
                                     year_done = True
                                     print(f"    ✅ سنة الانتهاء: {exp_year}", flush=True)
@@ -1630,6 +1659,7 @@ def fill_payment(page):
                                 valid_years = [o for o in options if (o.get_attribute('value') or '').strip() and (o.get_attribute('value') or '').strip() not in ['', '-', '0']]
                                 if valid_years:
                                     sel.select_option(value=valid_years[min(2, len(valid_years)-1)].get_attribute('value'))
+                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
                                     filled += 1
                                     year_done = True
                                     print(f"    ✅ سنة الانتهاء (fallback)", flush=True)
