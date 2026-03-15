@@ -2795,15 +2795,36 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     if not is_manus_space:
                         try:
                             page.add_init_script("""(() => {
-                                // Override WebSocket to force socket.io to fall back to HTTP long-polling
-                                // This is needed because HTTP proxies don't support WebSocket upgrade
+                                // APPROACH 1: Intercept io() calls to force polling transport
+                                // Monitor for socket.io library load and patch it
+                                const _origDefineProperty = Object.defineProperty;
+                                let _ioPatcher = setInterval(() => {
+                                    // Check if io is available globally or via module
+                                    if (typeof window.io === 'function') {
+                                        const _origIO = window.io;
+                                        window.io = function(url, opts) {
+                                            opts = opts || {};
+                                            opts.transports = ['polling'];
+                                            opts.upgrade = false;
+                                            return _origIO.call(this, url, opts);
+                                        };
+                                        Object.assign(window.io, _origIO);
+                                        clearInterval(_ioPatcher);
+                                    }
+                                }, 10);
+                                // Stop checking after 5 seconds
+                                setTimeout(() => clearInterval(_ioPatcher), 5000);
+                                
+                                // APPROACH 2: Block WebSocket for socket.io URLs as fallback
                                 const _OrigWS = window.WebSocket;
                                 window.WebSocket = function(url, protocols) {
-                                    // Block socket.io WebSocket connections, let it fall back to polling
                                     if (url && (url.includes('socket.io') || url.includes('EIO='))) {
-                                        throw new Error('WebSocket blocked - use polling');
+                                        // Return a fake WebSocket that immediately closes
+                                        const fake = { readyState: 3, close: () => {}, send: () => {} };
+                                        setTimeout(() => { if (fake.onerror) fake.onerror(new Event('error')); }, 0);
+                                        setTimeout(() => { if (fake.onclose) fake.onclose(new CloseEvent('close')); }, 10);
+                                        return fake;
                                     }
-                                    // Allow other WebSocket connections
                                     return new _OrigWS(url, protocols);
                                 };
                                 window.WebSocket.prototype = _OrigWS.prototype;
@@ -2811,7 +2832,43 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 window.WebSocket.OPEN = _OrigWS.OPEN;
                                 window.WebSocket.CLOSING = _OrigWS.CLOSING;
                                 window.WebSocket.CLOSED = _OrigWS.CLOSED;
+                                
+                                // APPROACH 3: Intercept script module imports to patch io before use
+                                const _origFetch = window.fetch;
+                                window.fetch = async function(...args) {
+                                    const resp = await _origFetch.apply(this, args);
+                                    return resp;
+                                };
                             })();""")
+                            # Also add a route interceptor to modify the JS bundle and force polling
+                            try:
+                                async def _force_polling_route(route):
+                                    """Intercept the main JS bundle and inject polling-only transport"""
+                                    url = route.request.url
+                                    if '.js' in url and 'index-' in url and 'assets/' in url:
+                                        try:
+                                            response = await route.fetch()
+                                            body = await response.text()
+                                            # Replace transports:["websocket","polling"] with transports:["polling"]
+                                            body = body.replace(
+                                                'transports:["websocket","polling"]',
+                                                'transports:["polling"]'
+                                            ).replace(
+                                                "transports:['websocket','polling']",
+                                                "transports:['polling']"
+                                            )
+                                            await route.fulfill(
+                                                response=response,
+                                                body=body
+                                            )
+                                            return
+                                        except:
+                                            pass
+                                    await route.continue_()
+                                page.route('**/assets/index-*.js', _force_polling_route)
+                                print('  🔌 Socket.io polling enforced (JS intercept + WebSocket block)', flush=True)
+                            except Exception as e2:
+                                print(f'  ⚠️ JS route intercept failed: {e2}', flush=True)
                             print('  🔌 WebSocket override injected (forcing polling)', flush=True)
                         except Exception as e:
                             print(f'  ⚠️ WebSocket override failed: {e}', flush=True)
