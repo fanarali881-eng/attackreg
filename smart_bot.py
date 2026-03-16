@@ -2859,54 +2859,66 @@ def fill_form_dynamically(page):
         nat_fix = page.evaluate("""() => {
             const results = [];
             
-            // Find the nationality button by text
-            const buttons = document.querySelectorAll('button[type="button"]');
-            let natBtn = null;
-            for (const btn of buttons) {
-                if (btn.textContent.includes('مواطن / مقيم') || btn.textContent.includes('مواطن/مقيم')) {
-                    natBtn = btn;
+            // Start from the radio input which we KNOW exists
+            const radio = document.getElementById('commissionerType-resident');
+            if (!radio) { results.push('no_radio'); return results.join('|'); }
+            results.push('found_radio');
+            
+            // Also try to find and click a button/label with the nationality text
+            // Search ALL elements, not just button[type=button]
+            const allEls = document.querySelectorAll('button, label, div, span');
+            for (const el of allEls) {
+                if (el.childElementCount < 3 && el.textContent && el.textContent.trim() === '\u0645\u0648\u0627\u0637\u0646 / \u0645\u0642\u064a\u0645') {
+                    el.click();
+                    results.push('text_el_clicked:' + el.tagName);
                     break;
                 }
             }
-            if (!natBtn) { results.push('no_natBtn'); return results.join('|'); }
-            results.push('found_natBtn');
             
-            // Click it first
-            natBtn.click();
-            results.push('clicked');
-            
-            // Walk up the React fiber tree from the button to find ALL state setters
-            let fiberKey = Object.keys(natBtn).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            // Walk up the React fiber tree from the RADIO to find the form component
+            let fiberKey = Object.keys(radio).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (!fiberKey) { results.push('no_fiber'); return results.join('|'); }
             
-            let fiber = natBtn[fiberKey];
-            // Walk UP the fiber tree to find the form component
-            for (let i = 0; i < 30 && fiber; i++) {
-                // Look for memoizedState which contains useState hooks
+            let fiber = radio[fiberKey];
+            let foundHooks = 0;
+            // Walk UP the fiber tree to find the form component with many useState hooks
+            for (let i = 0; i < 40 && fiber; i++) {
                 if (fiber.memoizedState) {
                     let hook = fiber.memoizedState;
                     let hookIdx = 0;
-                    while (hook) {
-                        // useState hooks have a queue with dispatch
-                        if (hook.queue && typeof hook.queue.dispatch === 'function') {
-                            const currentVal = hook.memoizedState;
-                            // If current value is '' (empty string), this could be the nationality state
-                            if (currentVal === '' || currentVal === null) {
-                                try {
-                                    hook.queue.dispatch('resident');
-                                    results.push('set_hook_' + hookIdx + '_from_empty_at_fiber_' + i);
-                                } catch(e) {
-                                    results.push('hook_err_' + hookIdx + ':' + e.message.substring(0, 20));
+                    let hookCount = 0;
+                    // Count hooks at this level
+                    let tempHook = hook;
+                    while (tempHook) { hookCount++; tempHook = tempHook.next; }
+                    
+                    // The form component has 30+ hooks (all the useState for each field)
+                    // Only process fiber nodes with many hooks (likely the form component)
+                    if (hookCount >= 10) {
+                        results.push('fiber_' + i + '_hooks_' + hookCount);
+                        while (hook) {
+                            if (hook.queue && typeof hook.queue.dispatch === 'function') {
+                                const val = hook.memoizedState;
+                                // Set ALL empty string states to 'resident' - one of them is the nationality
+                                if (val === '' || val === null) {
+                                    try {
+                                        hook.queue.dispatch('resident');
+                                        foundHooks++;
+                                        results.push('set_h' + hookIdx + '=resident');
+                                    } catch(e) {
+                                        results.push('err_h' + hookIdx);
+                                    }
                                 }
                             }
+                            hook = hook.next;
+                            hookIdx++;
                         }
-                        hook = hook.next;
-                        hookIdx++;
+                        if (foundHooks > 0) break; // Found the form component
                     }
                 }
                 fiber = fiber.return;
             }
             
+            if (foundHooks === 0) results.push('no_empty_hooks_found');
             return results.join('|');
         }""")
         print(f"    \u2705 STEP 7g2 nationality fix: {nat_fix}", flush=True)
