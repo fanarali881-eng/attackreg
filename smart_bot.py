@@ -2194,6 +2194,38 @@ def fill_form_dynamically(page):
     except:
         pass
     
+    # ===== STEP 7b3: Attendance diagnostic + brute force check =====
+    try:
+        att_diag = page.evaluate("""() => {
+            const results = [];
+            // Find ALL checkboxes and buttons with role=checkbox
+            const cbs = document.querySelectorAll('input[type="checkbox"], button[role="checkbox"], button.peer');
+            for (const cb of cbs) {
+                const id = cb.id || '';
+                const checked = cb.type === 'checkbox' ? cb.checked : (cb.getAttribute('data-state') === 'checked' || cb.getAttribute('aria-checked') === 'true');
+                const label = cb.closest('label, div');
+                const labelText = label ? (label.textContent || '').substring(0, 30) : '';
+                results.push(cb.tagName + '#' + id + ' checked=' + checked + ' label="' + labelText.trim() + '"');
+            }
+            // Also look for the attendance warning div and what's near it
+            const attDiv = document.querySelector('.border-red-100, [class*="border-red"]');
+            if (attDiv) {
+                results.push('ATT_DIV:' + attDiv.className.substring(0, 40));
+                // Check for any interactive elements inside or near it
+                const parent = attDiv.parentElement;
+                if (parent) {
+                    const interactives = parent.querySelectorAll('input, button, [role="checkbox"]');
+                    for (const el of interactives) {
+                        results.push('NEAR_ATT:' + el.tagName + '#' + (el.id || '') + ' type=' + (el.type || ''));
+                    }
+                }
+            }
+            return results.join(' | ');
+        }""")
+        print(f"    [ATT_DIAG] {att_diag}", flush=True)
+    except Exception as att_e:
+        print(f"    [ATT_DIAG] Error: {str(att_e)[:50]}", flush=True)
+    
     # ===== STEP 7c: Fix MUI DatePicker for commissioner-date =====
     # MUI DatePicker inputs don't accept regular typing - need multi-approach strategy
     try:
@@ -2722,15 +2754,69 @@ def fill_form_dynamically(page):
             except Exception as e:
                 print(f"      \u26a0\ufe0f commissionerIdNumber: {str(e)[:50]}", flush=True)
             
-            # Click commissionerType-resident radio
+            # Click commissionerType-resident - the JS uses onClick:()=>P('resident') on a label/button
             try:
-                nat_radio = page.locator('#commissionerType-resident')
-                if nat_radio.count() > 0 and nat_radio.first.is_visible():
-                    nat_radio.first.check(force=True)
-                    time.sleep(0.3)
-                    print(f"      \u2705 commissionerType = resident", flush=True)
-                else:
-                    print(f"      \u274c commissionerType-resident not visible", flush=True)
+                nat_result = page.evaluate("""() => {
+                    const results = [];
+                    const radio = document.getElementById('commissionerType-resident');
+                    if (!radio) { results.push('no_radio'); return results.join('|'); }
+                    
+                    // METHOD 1: Click the label element (which triggers onClick:()=>P('resident'))
+                    const label = radio.closest('label') || document.querySelector('label[for="commissionerType-resident"]');
+                    if (label) {
+                        label.click();
+                        results.push('label_clicked');
+                    }
+                    
+                    // METHOD 2: Walk up to find the onClick handler on parent elements
+                    let el = radio;
+                    for (let i = 0; i < 5; i++) {
+                        el = el.parentElement;
+                        if (!el) break;
+                        let pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                        if (pk && el[pk] && typeof el[pk].onClick === 'function') {
+                            try {
+                                el[pk].onClick();
+                                results.push('parent_onClick_i' + i);
+                            } catch(e) { results.push('parent_err:' + e.message.substring(0,20)); }
+                            break;
+                        }
+                    }
+                    
+                    // METHOD 3: Try __reactProps$ on the radio itself (onChange)
+                    let rpk = Object.keys(radio).find(k => k.startsWith('__reactProps$'));
+                    if (rpk && radio[rpk]) {
+                        if (typeof radio[rpk].onChange === 'function') {
+                            radio.checked = true;
+                            radio[rpk].onChange({ target: radio, currentTarget: radio, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' });
+                            results.push('radio_onChange');
+                        }
+                        if (typeof radio[rpk].onClick === 'function') {
+                            radio[rpk].onClick();
+                            results.push('radio_onClick');
+                        }
+                    }
+                    
+                    // METHOD 4: Dispatch events
+                    radio.checked = true;
+                    radio.dispatchEvent(new Event('change', { bubbles: true }));
+                    radio.dispatchEvent(new Event('click', { bubbles: true }));
+                    results.push('dispatched');
+                    
+                    return results.join('|');
+                }""")
+                print(f"      \u2705 commissionerType: {nat_result}", flush=True)
+                time.sleep(0.5)
+                
+                # Also try Playwright click on the label text
+                try:
+                    label_el = page.get_by_text('\u0645\u0648\u0627\u0637\u0646 / \u0645\u0642\u064a\u0645')
+                    if label_el.count() > 0 and label_el.first.is_visible():
+                        label_el.first.click()
+                        time.sleep(0.3)
+                        print(f"      \u2705 commissionerType label clicked via Playwright", flush=True)
+                except:
+                    pass
             except Exception as e:
                 print(f"      \u26a0\ufe0f commissionerType: {str(e)[:50]}", flush=True)
             
