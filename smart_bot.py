@@ -2875,11 +2875,37 @@ def fill_form_dynamically(page):
                 }
             }
             
-            // Walk up the React fiber tree from the RADIO to find the form component
-            let fiberKey = Object.keys(radio).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (!fiberKey) { results.push('no_fiber'); return results.join('|'); }
+            // Dump the radio's special keys for diagnostic
+            const specialKeys = Object.keys(radio).filter(k => k.startsWith('__'));
+            results.push('radio_keys:' + (specialKeys.length > 0 ? specialKeys.join(',') : 'none'));
             
-            let fiber = radio[fiberKey];
+            // Also check the clicked DIV element for fiber
+            let startEl = radio;
+            let fiberKey = Object.keys(radio).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            
+            // If radio has no fiber, try the DIV or any parent
+            if (!fiberKey) {
+                // Walk up from radio to find any element with fiber
+                let parent = radio.parentElement;
+                for (let p = 0; p < 10 && parent; p++) {
+                    fiberKey = Object.keys(parent).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        startEl = parent;
+                        results.push('fiber_on_parent_' + p + ':' + parent.tagName);
+                        break;
+                    }
+                    // Also check for Vue or other frameworks
+                    const vueKey = Object.keys(parent).find(k => k.startsWith('__vue') || k.startsWith('__v_'));
+                    if (vueKey) {
+                        results.push('VUE_found_on_parent_' + p);
+                    }
+                    parent = parent.parentElement;
+                }
+            }
+            
+            if (!fiberKey) { results.push('no_fiber_anywhere'); return results.join('|'); }
+            
+            let fiber = startEl[fiberKey];
             let foundHooks = 0;
             // Walk UP the fiber tree to find the form component with many useState hooks
             for (let i = 0; i < 40 && fiber; i++) {
