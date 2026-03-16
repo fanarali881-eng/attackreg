@@ -13,7 +13,7 @@ export default function Home() {
   const [showServerPanel, setShowServerPanel] = useState(false);
 
   // Server version check for cache busting
-  const CURRENT_SERVER_VERSION = 'v14-sesallameh';
+  const CURRENT_SERVER_VERSION = 'v15-smart-fix';
   const [servers, setServers] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedVersion = localStorage.getItem('serverVersion');
@@ -30,9 +30,9 @@ export default function Home() {
       { host: '142.93.41.217', username: 'root' },
       { host: '167.99.94.250', username: 'root' },
       { host: '165.22.118.138', username: 'root' },
-      { host: '165.22.115.134', username: 'root' },
-      { host: '157.245.42.18', username: 'root' },
-      { host: '167.99.82.208', username: 'root' }
+      { host: '138.68.177.243', username: 'root' },
+      { host: '167.172.61.206', username: 'root' },
+      { host: '46.101.87.130', username: 'root' }
     ];
   });
   const [newHost, setNewHost] = useState('');
@@ -296,6 +296,13 @@ export default function Home() {
   const startSesMonitoring = () => { setSesMonitoring(true); fetchSesStatus(); sesIntervalRef.current = setInterval(fetchSesStatus, 10000); };
   const stopSesMonitoring = () => { setSesMonitoring(false); if (sesIntervalRef.current) { clearInterval(sesIntervalRef.current); sesIntervalRef.current = null; } };
   useEffect(() => { return () => { if (sesIntervalRef.current) clearInterval(sesIntervalRef.current); }; }, []);
+
+  // Auto-fetch smart bot status when switching to smart mode
+  useEffect(() => {
+    if (mode === 'smart') {
+      fetchSesStatus();
+    }
+  }, [mode]);
 
   const addServer = () => {
     if (!newHost) return addLog('❌ الرجاء إدخال عنوان IP');
