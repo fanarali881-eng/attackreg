@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v58 - Use Playwright fill() + React fiber for all fields (including selects)
+Smart Universal Form Bot v59 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1763,6 +1763,63 @@ def fill_form_dynamically(page):
     except:
         pass
     
+    # ===== STEP 3c: Fill commissioner fields if visible (in case delegateInspection stays checked) =====
+    try:
+        commissioner_filled = page.evaluate("""(data) => {
+            const results = [];
+            const fields = [
+                { id: 'commissionerName', value: data.name, type: 'text' },
+                { id: 'commissionerPhone', value: data.phone, type: 'tel' },
+                { id: 'commissionerIdNumber', value: data.national_id, type: 'tel' }
+            ];
+            for (const f of fields) {
+                const el = document.getElementById(f.id);
+                if (!el || el.offsetParent === null) continue;
+                if (el.value && el.value.trim() !== '') continue;
+                
+                // LAYER 1: React fiber onChange
+                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (fiberKey) {
+                    let fiber = el[fiberKey];
+                    for (let i = 0; i < 15 && fiber; i++) {
+                        const props = fiber.memoizedProps || fiber.pendingProps;
+                        if (props && typeof props.onChange === 'function') {
+                            try {
+                                props.onChange({
+                                    target: { value: f.value, name: el.name || '', type: f.type },
+                                    currentTarget: { value: f.value, name: el.name || '', type: f.type },
+                                    preventDefault: () => {}, stopPropagation: () => {},
+                                    nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
+                                });
+                                break;
+                            } catch(e) {}
+                        }
+                        fiber = fiber.return;
+                    }
+                }
+                
+                // LAYER 2: nativeInputValueSetter + events
+                if (el._valueTracker) el._valueTracker.setValue('');
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                setter.call(el, f.value);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // LAYER 3: __reactProps$ onChange
+                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                    try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
+                }
+                
+                results.push(f.id);
+            }
+            return results;
+        }""", {'name': data.get('name', gen_name()), 'phone': data.get('phone', gen_saudi_phone()), 'national_id': data.get('national_id', gen_saudi_id())})
+        if commissioner_filled:
+            print(f"    \u2705 STEP 3c: Filled commissioner fields: {commissioner_filled}", flush=True)
+    except Exception as cf_e:
+        print(f"    \u26a0\ufe0f STEP 3c commissioner fill: {str(cf_e)[:60]}", flush=True)
+    
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
         try:
@@ -1928,22 +1985,53 @@ def fill_form_dynamically(page):
         # Try finding the attendance text and clicking the nearest checkbox via Playwright
         attendance_label = page.locator('text=الحضور على الموعد').first
         if attendance_label.is_visible():
-            # Look for a peer button or checkbox in the parent
-            parent = attendance_label.locator('xpath=ancestor::div[1]')
-            peer_btn = parent.locator('button.peer, button[role="checkbox"]')
-            if peer_btn.count() > 0:
-                state = peer_btn.first.get_attribute('data-state') or ''
-                if state != 'checked':
-                    peer_btn.first.click()
-                    time.sleep(0.3)
-                    print(f"    \u2705 Attendance checkbox clicked via Playwright (peer btn)", flush=True)
-            else:
-                # Try input checkbox
+            # Look for a peer button or checkbox in the parent - try multiple ancestor levels
+            for ancestor_level in range(1, 6):
+                parent = attendance_label.locator(f'xpath=ancestor::div[{ancestor_level}]')
+                if parent.count() == 0:
+                    continue
+                peer_btn = parent.locator('button.peer, button[role="checkbox"]')
+                if peer_btn.count() > 0:
+                    state = peer_btn.first.get_attribute('data-state') or ''
+                    if state != 'checked':
+                        peer_btn.first.click()
+                        time.sleep(0.3)
+                        print(f"    \u2705 Attendance checkbox clicked via Playwright (peer btn lvl{ancestor_level})", flush=True)
+                    break
                 cb = parent.locator('input[type="checkbox"]')
-                if cb.count() > 0 and not cb.first.is_checked():
-                    cb.first.click()
-                    time.sleep(0.3)
-                    print(f"    \u2705 Attendance checkbox clicked via Playwright (input)", flush=True)
+                if cb.count() > 0:
+                    if not cb.first.is_checked():
+                        cb.first.check()
+                        time.sleep(0.3)
+                        # Also trigger React onChange via JS
+                        cb.first.evaluate("""(el) => {
+                            let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                            if (fiberKey) {
+                                let fiber = el[fiberKey];
+                                for (let i = 0; i < 15 && fiber; i++) {
+                                    const props = fiber.memoizedProps || fiber.pendingProps;
+                                    if (props && typeof props.onChange === 'function') {
+                                        try {
+                                            props.onChange({
+                                                target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                                currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                                preventDefault: () => {}, stopPropagation: () => {},
+                                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                            });
+                                            break;
+                                        } catch(e) {}
+                                    }
+                                    fiber = fiber.return;
+                                }
+                            }
+                            // Also try __reactProps$
+                            let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                            if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                try { el[propsKey].onChange({ target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' }, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
+                            }
+                        }""")
+                        print(f"    \u2705 Attendance checkbox clicked via Playwright + React (input lvl{ancestor_level})", flush=True)
+                    break
     except:
         pass
     
