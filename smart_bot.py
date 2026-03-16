@@ -675,13 +675,39 @@ def fill_all_empty_fields(page, data=None):
                         else:
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            # KEY FIX: Reset React _valueTracker then set value
+                            # COMPREHENSIVE FIX: 3-layer React state update (same as main fill)
                             el.evaluate("""(el, val) => {
+                                // LAYER 1: Walk React fiber tree to call onChange directly
+                                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                if (fiberKey) {
+                                    let fiber = el[fiberKey];
+                                    for (let i = 0; i < 15 && fiber; i++) {
+                                        const props = fiber.memoizedProps || fiber.pendingProps;
+                                        if (props && typeof props.onChange === 'function') {
+                                            try {
+                                                props.onChange({
+                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    preventDefault: () => {}, stopPropagation: () => {},
+                                                    nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
+                                                });
+                                                break;
+                                            } catch(e) {}
+                                        }
+                                        fiber = fiber.return;
+                                    }
+                                }
+                                // LAYER 2: Reset _valueTracker + native setter + dispatch events
                                 if (el._valueTracker) el._valueTracker.setValue('');
                                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                 nativeInputValueSetter.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
+                                // LAYER 3: Try __reactProps$ onChange
+                                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                    try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
+                                }
                             }""", value)
                             time.sleep(0.3)
                         el.press('Tab')
@@ -1052,24 +1078,61 @@ def fill_form_dynamically(page):
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                             }""")
                         else:
-                            # Text inputs: click, clear, then set value with React _valueTracker reset
+                            # Text inputs: comprehensive React state update
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            # KEY FIX: Reset React's _valueTracker before setting value
-                            # React uses _valueTracker to detect if value changed.
-                            # If tracker.getValue() === el.value, React SKIPS onChange!
-                            # So we reset tracker to '' first, then set value, then dispatch event.
+                            # COMPREHENSIVE FIX: 3-layer approach to update React state
                             el.evaluate("""(el, val) => {
-                                // Step 1: Reset React's value tracker so it thinks value changed
-                                if (el._valueTracker) {
-                                    el._valueTracker.setValue('');
+                                // === LAYER 1: Walk React fiber tree to find and call onChange directly ===
+                                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                let onChangeCalled = false;
+                                if (fiberKey) {
+                                    let fiber = el[fiberKey];
+                                    // Walk UP the fiber tree (up to 15 levels for MUI/deep wrappers)
+                                    for (let i = 0; i < 15 && fiber; i++) {
+                                        const props = fiber.memoizedProps || fiber.pendingProps;
+                                        if (props && typeof props.onChange === 'function') {
+                                            try {
+                                                // Create a proper synthetic-like event object
+                                                const syntheticEvent = {
+                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    preventDefault: () => {},
+                                                    stopPropagation: () => {},
+                                                    nativeEvent: new Event('input', { bubbles: true }),
+                                                    bubbles: true,
+                                                    type: 'change'
+                                                };
+                                                props.onChange(syntheticEvent);
+                                                onChangeCalled = true;
+                                                break;
+                                            } catch(e) {}
+                                        }
+                                        fiber = fiber.return;
+                                    }
                                 }
-                                // Step 2: Set value via native setter (bypasses React's controlled input)
+                                
+                                // === LAYER 2: Reset _valueTracker + native setter + dispatch events ===
+                                if (el._valueTracker) el._valueTracker.setValue('');
                                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                 nativeInputValueSetter.call(el, val);
-                                // Step 3: Dispatch 'input' event - React listens for this to trigger onChange
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
+                                
+                                // === LAYER 3: Try React's internal event dispatch ===
+                                // Find __reactProps$ key which has React's event handlers
+                                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                    try {
+                                        el[propsKey].onChange({
+                                            target: el,
+                                            currentTarget: el,
+                                            preventDefault: () => {},
+                                            stopPropagation: () => {},
+                                            type: 'change'
+                                        });
+                                    } catch(e) {}
+                                }
                             }""", value)
                             time.sleep(0.3)
                         el.press('Tab')  # Trigger blur
@@ -1079,6 +1142,9 @@ def fill_form_dynamically(page):
                             actual_val = el.evaluate("(el) => el.value")
                             if actual_val != value:
                                 print(f"    ⚠️ {field_type}: value mismatch! Expected '{value[:15]}' got '{str(actual_val)[:15]}', re-filling...", flush=True)
+                                # Retry with el.fill() as last resort
+                                el.fill(value)
+                                time.sleep(0.2)
                                 el.evaluate("""(el, val) => {
                                     if (el._valueTracker) el._valueTracker.setValue('');
                                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -1870,22 +1936,45 @@ def fill_form_dynamically(page):
                     except Exception as pw_e:
                         print(f"    \u26a0\ufe0f Captcha fill attempt {cap_try+1}: {str(pw_e)[:50]}", flush=True)
                     
-                    # STEP 2: Also set via JS + React state to make sure React knows
+                    # STEP 2: Also set via JS + React state (3-layer approach)
                     page.evaluate("""(solvedText) => {
                         const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
                         if (!inp) return;
                         
-                        // KEY FIX: Reset React _valueTracker so React detects the change
-                        if (inp._valueTracker) inp._valueTracker.setValue('');
+                        // LAYER 1: Walk React fiber tree to call onChange directly
+                        let fiberKey = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                        if (fiberKey) {
+                            let fiber = inp[fiberKey];
+                            for (let i = 0; i < 15 && fiber; i++) {
+                                const props = fiber.memoizedProps || fiber.pendingProps;
+                                if (props && typeof props.onChange === 'function') {
+                                    try {
+                                        props.onChange({
+                                            target: { value: solvedText, name: inp.name || 'captcha', type: inp.type || 'text' },
+                                            currentTarget: { value: solvedText, name: inp.name || 'captcha', type: inp.type || 'text' },
+                                            preventDefault: () => {}, stopPropagation: () => {},
+                                            nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
+                                        });
+                                        break;
+                                    } catch(e) {}
+                                }
+                                fiber = fiber.return;
+                            }
+                        }
                         
-                        // Set value via nativeInputValueSetter
+                        // LAYER 2: Reset _valueTracker + native setter + dispatch events
+                        if (inp._valueTracker) inp._valueTracker.setValue('');
                         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                         nativeInputValueSetter.call(inp, solvedText);
-                        
-                        // Dispatch events - React listens for 'input' to trigger onChange
                         inp.dispatchEvent(new Event('input', { bubbles: true }));
                         inp.dispatchEvent(new Event('change', { bubbles: true }));
                         inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                        
+                        // LAYER 3: Try __reactProps$ onChange
+                        let propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && inp[propsKey] && typeof inp[propsKey].onChange === 'function') {
+                            try { inp[propsKey].onChange({ target: inp, currentTarget: inp, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
+                        }
                     }""", solved)
                     
                     time.sleep(0.4)
@@ -3324,7 +3413,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v51 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v52 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
