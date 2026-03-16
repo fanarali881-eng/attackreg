@@ -658,58 +658,12 @@ def fill_all_empty_fields(page, data=None):
                     
                     if el.is_visible():
                         if field_type == 'date_of_birth':
-                            # Fill date_of_birth using fill() + React sync
-                            try:
-                                el.click(timeout=3000)
-                                time.sleep(0.2)
-                                el.fill(value)
-                                time.sleep(0.2)
-                                el.evaluate("""(el, val) => {
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                    nativeInputValueSetter.call(el, val);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: el });
-                                    }
-                                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                                }""", value)
-                                el.press('Tab')
-                                time.sleep(0.3)
-                                filled += 1
-                                print(f"    [refill] {field_type}: {value}", flush=True)
-                            except Exception as dob_e:
-                                print(f"    [refill] {field_type} error: {str(dob_e)[:50]}", flush=True)
+                            # Skip - handled by STEP 7c with JS (MUI DatePicker)
+                            print(f"    [refill] {field_type}: skipped (handled by STEP 7c)", flush=True)
                             continue
                         elif field_type == 'captcha':
-                            # Re-solve and fill captcha
-                            try:
-                                solved = solve_captcha_image(page)
-                                if solved and len(solved) >= 2:
-                                    el.click(timeout=3000)
-                                    time.sleep(0.2)
-                                    el.fill(solved)
-                                    time.sleep(0.2)
-                                    el.evaluate("""(el, val) => {
-                                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                        nativeInputValueSetter.call(el, val);
-                                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                                        const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                        if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                            el[propsKey].onChange({ target: el });
-                                        }
-                                        el.dispatchEvent(new Event('blur', { bubbles: true }));
-                                    }""", solved)
-                                    el.press('Tab')
-                                    time.sleep(0.3)
-                                    filled += 1
-                                    print(f"    [refill] captcha: {solved}", flush=True)
-                                else:
-                                    print(f"    [refill] captcha: CapSolver failed", flush=True)
-                            except Exception as cap_e:
-                                print(f"    [refill] captcha error: {str(cap_e)[:50]}", flush=True)
+                            # Skip - handled by STEP 7d with CapSolver
+                            print(f"    [refill] {field_type}: skipped (handled by STEP 7d)", flush=True)
                             continue
                         elif field.get('type') == 'date':
                             el.focus()
@@ -1100,33 +1054,12 @@ def fill_form_dynamically(page):
                     
                     if el.is_visible():
                         if field_type == 'date_of_birth':
-                            # Fill date_of_birth directly with fill() + React sync
-                            try:
-                                el.click(timeout=3000)
-                                time.sleep(0.2)
-                                el.fill(value)
-                                time.sleep(0.2)
-                                el.evaluate("""(el, val) => {
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                    nativeInputValueSetter.call(el, val);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: el });
-                                    }
-                                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                                }""", value)
-                                el.press('Tab')
-                                time.sleep(0.3)
-                                filled += 1
-                                print(f"    \u2705 {field_type}: {value} (fill+React)", flush=True)
-                            except Exception as dob_e:
-                                print(f"    \u26a0\ufe0f {field_type}: fill failed ({str(dob_e)[:40]}), STEP 7c will handle", flush=True)
+                            # Skip - handled by STEP 7c with JS (MUI DatePicker)
+                            print(f"    ⏭️ {field_type}: skipped (handled by STEP 7c)", flush=True)
                             continue
                         elif field_type == 'captcha':
-                            # Skip initial fill - STEP 7d needs to solve captcha image first
-                            print(f"    ⏭️ {field_type}: skipped (STEP 7d will solve+fill)", flush=True)
+                            # Skip - handled by STEP 7d with CapSolver
+                            print(f"    ⏭️ {field_type}: skipped (handled by STEP 7d)", flush=True)
                             continue
                         elif field.get('type') == 'date':
                             # Date inputs: focus, clear, fill, then dispatch
@@ -1955,22 +1888,20 @@ def fill_form_dynamically(page):
             solved = solve_captcha_image(page)
             
             if solved and len(solved) >= 2:
-                # Try multiple approaches to fill captcha - React clears el.type()
-                captcha_filled = False
-                for captcha_attempt in range(3):
+                # STEP 1: Try fill() first (best for React), then type() as backup
+                captcha_ok = False
+                for cap_try in range(3):
                     try:
                         captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
                         if captcha_el.is_visible():
-                            # Approach 1: Playwright fill() - best for React
                             captcha_el.click(timeout=3000)
+                            time.sleep(0.2)
+                            captcha_el.fill(solved)  # fill() works better with React
                             time.sleep(0.3)
-                            captcha_el.fill(solved)
-                            time.sleep(0.3)
-                            print(f"    \u2705 Captcha fill() attempt {captcha_attempt+1}: '{solved}'", flush=True)
                     except Exception as pw_e:
-                        print(f"    \u26a0\ufe0f Captcha fill attempt {captcha_attempt+1}: {str(pw_e)[:50]}", flush=True)
+                        print(f"    \u26a0\ufe0f Captcha fill attempt {cap_try+1}: {str(pw_e)[:50]}", flush=True)
                     
-                    # Approach 2: JS + React state sync
+                    # STEP 2: Also set via JS + React state to make sure React knows
                     page.evaluate("""(solvedText) => {
                         const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
                         if (!inp) return;
@@ -1987,7 +1918,7 @@ def fill_form_dynamically(page):
                             inp[propsKey].onChange({ target: { value: solvedText, name: inp.name || inp.id } });
                         }
                         
-                        // React fiber approach - walk UP the tree to find onChange
+                        // React fiber approach - walk UP the tree
                         const fiberKey = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
                         if (fiberKey) {
                             let fiber = inp[fiberKey];
@@ -2000,17 +1931,14 @@ def fill_form_dynamically(page):
                             }
                         }
                         
-                        // Also try direct state setter via formData pattern
-                        // Many React forms use: setFormData(prev => ({...prev, captcha: value}))
-                        inp.dispatchEvent(new Event('blur', { bubbles: true }));
-                        
-                        // Force focus+input sequence that React listens to
+                        // Force InputEvent sequence
                         inp.focus();
                         inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: solvedText, inputType: 'insertText' }));
                         inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        inp.dispatchEvent(new Event('blur', { bubbles: true }));
                     }""", solved)
                     
-                    time.sleep(0.5)
+                    time.sleep(0.4)
                     
                     # Verify captcha was filled
                     captcha_val = page.evaluate("""() => {
@@ -2019,21 +1947,20 @@ def fill_form_dynamically(page):
                     }""")
                     
                     if captcha_val and len(captcha_val) >= 2:
-                        print(f"    \u2705 Captcha confirmed: '{captcha_val}' (attempt {captcha_attempt+1})", flush=True)
-                        captcha_filled = True
+                        print(f"    \u2705 Captcha confirmed: '{captcha_val}' (attempt {cap_try+1})", flush=True)
+                        captcha_ok = True
                         break
                     else:
-                        print(f"    \u26a0\ufe0f Captcha empty after attempt {captcha_attempt+1}, retrying...", flush=True)
-                        time.sleep(0.5)
+                        print(f"    \u26a0\ufe0f Captcha empty after attempt {cap_try+1}", flush=True)
+                        time.sleep(0.3)
                 
-                if not captcha_filled:
-                    # Last resort: use keyboard simulation
+                if not captcha_ok:
+                    # Last resort: keyboard press char by char
                     try:
                         captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
                         captcha_el.click(timeout=3000)
-                        time.sleep(0.2)
-                        captcha_el.press('Control+a')
                         time.sleep(0.1)
+                        captcha_el.press('Control+a')
                         for ch in solved:
                             captcha_el.press(ch)
                             time.sleep(0.05)
@@ -2043,9 +1970,9 @@ def fill_form_dynamically(page):
                             const inp = document.querySelector('input[name="captcha"], input[id="captcha"]');
                             return inp ? inp.value : '';
                         }""")
-                        print(f"    \U0001f50d Captcha keyboard result: '{captcha_val}'", flush=True)
-                    except Exception as kb_e:
-                        print(f"    \u274c Captcha keyboard fallback failed: {str(kb_e)[:50]}", flush=True)
+                        print(f"    \U0001f50d Captcha keyboard: '{captcha_val}'", flush=True)
+                    except:
+                        pass
                 
                 filled += 1
             else:
@@ -3456,7 +3383,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v49 (captcha+dob fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v50 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
