@@ -289,7 +289,7 @@ export async function POST(req) {
     } else if (action === 'logs-smart') {
       const results = await Promise.all(
         serverList.map(async (server) => {
-          const r = await runSSHCommand(server, 'grep -E 'STEP 3b|commissioner fill|PRE-SUBMIT|commissionerName|commissionerPhone|commissionerIdNumber|VALIDATION|reactProps|fiber_i|events:|NOT_FOUND|v62|Submission' /root/smart_bot.log | tail -100 2>/dev/null || echo "No log"; echo "---FILE_SIZE---"; wc -c /root/smart_bot.py 2>/dev/null || echo "0"; echo "---PY_CHECK---"; python3 -c "from playwright.sync_api import sync_playwright; print(\"PW_OK\")" 2>&1 | tail -1', 15000);
+          const r = await runSSHCommand(server, `grep -E "STEP 3b|commissioner fill|PRE-SUBMIT|commissionerName|commissionerPhone|commissionerIdNumber|VALIDATION|reactProps|fiber_i|events:|NOT_FOUND|v62|Submission" /root/smart_bot.log | tail -100 2>/dev/null || echo "No log"; echo "---FILE_SIZE---"; wc -c /root/smart_bot.py 2>/dev/null || echo "0"; echo "---PY_CHECK---"; python3 -c "from playwright.sync_api import sync_playwright; print('PW_OK')" 2>&1 | tail -1`, 15000);
           return { host: server.host, ...r };
         })
       );
