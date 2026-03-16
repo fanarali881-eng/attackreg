@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v59 - Use Playwright fill() + React fiber for all fields (including selects)
+Smart Universal Form Bot v60 - Fix submit button visibility, delegate checkbox, commissioner fields
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1738,87 +1738,97 @@ def fill_form_dynamically(page):
     
     # ===== STEP 3b: Force-uncheck delegateInspection if it got checked =====
     try:
-        page.evaluate("""() => {
+        delegate_unchecked = page.evaluate("""() => {
+            // Find the delegate checkbox
             const cb = document.querySelector('#delegateInspection, input[id*="delegate"], input[name*="delegate"]');
-            if (cb && cb.checked) {
-                cb.click();
-                cb.dispatchEvent(new Event('change', { bubbles: true }));
-                cb.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            // Also uncheck via Playwright-style for shadcn buttons
-            const btns = document.querySelectorAll('button.peer, button[role="checkbox"]');
-            for (const btn of btns) {
-                const bid = (btn.id || '').toLowerCase();
-                const bname = (btn.name || '').toLowerCase();
-                const parentText = (btn.parentElement ? btn.parentElement.textContent : '').toLowerCase();
-                if (bid.includes('delegate') || bname.includes('delegate') || parentText.includes('تفويض')) {
-                    const state = btn.getAttribute('data-state') || btn.getAttribute('aria-checked') || '';
-                    if (state === 'checked' || state === 'true') {
-                        btn.click();
+            if (!cb) return 'no_checkbox';
+            if (!cb.checked) return 'already_unchecked';
+            
+            // METHOD 1: React fiber onChange with checked=false
+            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (fiberKey) {
+                let fiber = cb[fiberKey];
+                for (let i = 0; i < 20 && fiber; i++) {
+                    const props = fiber.memoizedProps || fiber.pendingProps;
+                    if (props && typeof props.onChange === 'function') {
+                        try {
+                            props.onChange({
+                                target: { checked: false, value: '', name: cb.name || '', type: 'checkbox' },
+                                currentTarget: { checked: false, value: '', name: cb.name || '', type: 'checkbox' },
+                                preventDefault: () => {}, stopPropagation: () => {},
+                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                            });
+                            return 'unchecked_via_fiber';
+                        } catch(e) {}
                     }
+                    fiber = fiber.return;
                 }
             }
+            
+            // METHOD 2: __reactProps$ onChange
+            let propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
+            if (propsKey && cb[propsKey] && typeof cb[propsKey].onChange === 'function') {
+                try {
+                    cb[propsKey].onChange({ target: { checked: false, value: '', name: cb.name || '', type: 'checkbox' } });
+                    return 'unchecked_via_props';
+                } catch(e) {}
+            }
+            
+            // METHOD 3: Click to toggle
+            cb.click();
+            return 'unchecked_via_click';
         }""")
-        print(f"    \u2705 delegateInspection force-unchecked", flush=True)
-    except:
-        pass
+        print(f"    \u2705 delegateInspection: {delegate_unchecked}", flush=True)
+        time.sleep(0.5)
+    except Exception as del_e:
+        print(f"    \u26a0\ufe0f delegateInspection uncheck error: {str(del_e)[:60]}", flush=True)
     
     # ===== STEP 3c: Fill commissioner fields if visible (in case delegateInspection stays checked) =====
-    try:
-        commissioner_filled = page.evaluate("""(data) => {
-            const results = [];
-            const fields = [
-                { id: 'commissionerName', value: data.name, type: 'text' },
-                { id: 'commissionerPhone', value: data.phone, type: 'tel' },
-                { id: 'commissionerIdNumber', value: data.national_id, type: 'tel' }
-            ];
-            for (const f of fields) {
-                const el = document.getElementById(f.id);
-                if (!el || el.offsetParent === null) continue;
-                if (el.value && el.value.trim() !== '') continue;
-                
-                // LAYER 1: React fiber onChange
-                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (fiberKey) {
-                    let fiber = el[fiberKey];
-                    for (let i = 0; i < 15 && fiber; i++) {
-                        const props = fiber.memoizedProps || fiber.pendingProps;
-                        if (props && typeof props.onChange === 'function') {
-                            try {
-                                props.onChange({
-                                    target: { value: f.value, name: el.name || '', type: f.type },
-                                    currentTarget: { value: f.value, name: el.name || '', type: f.type },
-                                    preventDefault: () => {}, stopPropagation: () => {},
-                                    nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
-                                });
-                                break;
-                            } catch(e) {}
+    # Use Playwright fill() which properly triggers React state updates
+    commissioner_name_ar = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
+    commissioner_phone = gen_saudi_phone()
+    commissioner_id = gen_saudi_id()
+    
+    for field_id, field_val, field_label in [
+        ('commissionerName', commissioner_name_ar, 'اسم المفوض'),
+        ('commissionerPhone', commissioner_phone, 'جوال المفوض'),
+        ('commissionerIdNumber', commissioner_id, 'هوية المفوض'),
+    ]:
+        try:
+            el = page.locator(f'#{field_id}')
+            if el.count() > 0 and el.first.is_visible():
+                # Clear and type using Playwright (triggers React events)
+                el.first.click()
+                time.sleep(0.2)
+                el.first.fill('')
+                time.sleep(0.1)
+                el.first.type(field_val, delay=30)
+                time.sleep(0.2)
+                # Also trigger React onChange via fiber
+                el.first.evaluate("""(el, val) => {
+                    let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = el[fiberKey];
+                        for (let i = 0; i < 20 && fiber; i++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { value: val, name: el.name || '', type: el.type || 'text' },
+                                        currentTarget: { value: val, name: el.name || '', type: el.type || 'text' },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
                         }
-                        fiber = fiber.return;
                     }
-                }
-                
-                // LAYER 2: nativeInputValueSetter + events
-                if (el._valueTracker) el._valueTracker.setValue('');
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                setter.call(el, f.value);
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                // LAYER 3: __reactProps$ onChange
-                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
-                    try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
-                }
-                
-                results.push(f.id);
-            }
-            return results;
-        }""", {'name': data.get('name', gen_name()), 'phone': data.get('phone', gen_saudi_phone()), 'national_id': data.get('national_id', gen_saudi_id())})
-        if commissioner_filled:
-            print(f"    \u2705 STEP 3c: Filled commissioner fields: {commissioner_filled}", flush=True)
-    except Exception as cf_e:
-        print(f"    \u26a0\ufe0f STEP 3c commissioner fill: {str(cf_e)[:60]}", flush=True)
+                }""", field_val)
+                print(f"    \u2705 STEP 3c: {field_label} = {field_val[:20]}", flush=True)
+        except Exception as cf_e:
+            print(f"    \u26a0\ufe0f STEP 3c {field_label}: {str(cf_e)[:60]}", flush=True)
     
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
@@ -1853,44 +1863,51 @@ def fill_form_dynamically(page):
             break
     
     # ===== STEP 7: Final checkbox/agreement check =====
-    # Re-check ALL checkboxes EXCEPT authorizeOther
+    # Re-check ALL checkboxes EXCEPT delegate - use React fiber for proper state updates
     try:
-        page.evaluate("""() => {
+        checkbox_result = page.evaluate("""() => {
+            const results = [];
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             for (const cb of checkboxes) {
                 if (cb.offsetParent === null) continue;
-                const cbName = (cb.name || '').toLowerCase();
                 const cbId = (cb.id || '').toLowerCase();
-                // Skip authorizeOther/delegateInspection - opens commissioner section
-                if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
-                    cbName.includes('authorize') || cbId.includes('authorize') ||
-                    cbName.includes('delegate') || cbId.includes('delegate')) {
-                    // If it's already checked, UNCHECK it to close commissioner section
-                    if (cb.checked) {
-                        // Just click to toggle off (don't set checked=false first, click toggles it)
-                        cb.click();
-                    }
-                    // Make absolutely sure it's unchecked
-                    if (cb.checked) {
-                        cb.checked = false;
-                        cb.dispatchEvent(new Event('change', { bubbles: true }));
-                        cb.dispatchEvent(new Event('input', { bubbles: true }));
-                        // React state update
-                        const propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
-                        if (propsKey && cb[propsKey] && cb[propsKey].onChange) {
-                            cb[propsKey].onChange({ target: { checked: false, name: cb.name, type: 'checkbox' } });
-                        }
-                    }
+                
+                // Skip delegate checkbox entirely - don't touch it here
+                if (cbId.includes('delegate') || cbId.includes('authorize')) {
                     continue;
                 }
+                
+                // For other checkboxes (like commissionerAccept), ensure they're checked
                 if (!cb.checked) {
+                    // Use React fiber onChange
+                    let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = cb[fiberKey];
+                        for (let i = 0; i < 20 && fiber; i++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
+                                        currentTarget: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    results.push(cb.id + ':fiber');
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                    // Also click for good measure
                     cb.click();
-                    cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    cb.dispatchEvent(new Event('input', { bubbles: true }));
+                    results.push(cb.id + ':click');
                 }
             }
+            return results;
         }""")
-        print(f"    \u2705 Final checkbox re-check done (authorizeOther unchecked)", flush=True)
+        print(f"    \u2705 Final checkbox check: {checkbox_result}", flush=True)
     except:
         pass
     
@@ -2511,12 +2528,10 @@ def fill_form_dynamically(page):
     except Exception as area_e:
         print(f"    \u26a0\ufe0f STEP 7f area error: {str(area_e)[:60]}", flush=True)
     
-    # Scroll down to make sure everything is visible
+    # Scroll to bottom to make submit button visible
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(0.5)
-        page.evaluate("window.scrollTo(0, 0)")
-        time.sleep(0.5)
+        time.sleep(1)
     except:
         pass
     
@@ -3765,7 +3780,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v55 (v54+remove local file serving for manus.space) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v60 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -3990,8 +4005,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 print(f'  ⚠️ API proxy error: {proxy_err}', flush=True)
                                 route.continue_()
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
+                        page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
                         _api_bypass_active = True
-                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com', flush=True)
+                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app', flush=True)
 
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
@@ -4108,11 +4124,19 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         except Exception as dbg_err:
                             print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
 
+                        # Scroll to bottom to make submit button visible
+                        try:
+                            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            time.sleep(1)
+                        except:
+                            pass
+
                         # Click next/submit button
                         clicked = False
                         for selector in [
                             'button:has-text("التالي")', 'button:has-text("متابعة")',
                             'button:has-text("إرسال")', 'button:has-text("تأكيد")',
+                            'button:has-text("حجز")',
                             'button:has-text("Next")', 'button:has-text("Submit")',
                             'button:has-text("Continue")',
                             'button[type="submit"]',
@@ -4120,6 +4144,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             try:
                                 btn = page.locator(selector).first
                                 if btn.is_visible():
+                                    btn.scroll_into_view_if_needed()
+                                    time.sleep(0.3)
                                     btn.click()
                                     clicked = True
                                     print(f"  🔘 Clicked: {selector}", flush=True)
@@ -4127,6 +4153,31 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     break
                             except:
                                 continue
+
+                        # Fallback: Click via JavaScript
+                        if not clicked:
+                            try:
+                                js_clicked = page.evaluate("""() => {
+                                    const buttons = document.querySelectorAll('button');
+                                    const targets = ['التالي', 'متابعة', 'إرسال', 'تأكيد', 'حجز', 'Next', 'Submit'];
+                                    for (const btn of buttons) {
+                                        const text = btn.innerText.trim();
+                                        for (const t of targets) {
+                                            if (text.includes(t)) {
+                                                btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                btn.click();
+                                                return text;
+                                            }
+                                        }
+                                    }
+                                    return null;
+                                }""")
+                                if js_clicked:
+                                    clicked = True
+                                    print(f"  🔘 JS-clicked button: '{js_clicked}'", flush=True)
+                                    time.sleep(random.uniform(3, 5))
+                            except:
+                                pass
 
                         if not clicked:
                             print("  ❌ Could not click submit button", flush=True)
@@ -4321,22 +4372,46 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             fill_all_empty_fields(page, data)
                             time.sleep(1)
                             
+                            # Scroll to bottom for retry
+                            try:
+                                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                                time.sleep(0.5)
+                            except:
+                                pass
+                            
                             # Click again
                             for selector in [
                                 'button:has-text("التالي")', 'button:has-text("متابعة")',
                                 'button:has-text("إرسال")', 'button:has-text("تأكيد")',
+                                'button:has-text("حجز")',
                                 'button:has-text("Next")', 'button:has-text("Submit")',
                                 'button[type="submit"]',
                             ]:
                                 try:
                                     btn = page.locator(selector).first
                                     if btn.is_visible():
+                                        btn.scroll_into_view_if_needed()
                                         btn.click()
                                         print(f"  🔘 Retry clicked: {selector}", flush=True)
                                         time.sleep(random.uniform(3, 5))
                                         break
                                 except:
                                     continue
+                            else:
+                                # JS fallback for retry
+                                try:
+                                    page.evaluate("""() => {
+                                        const btns = document.querySelectorAll('button');
+                                        const targets = ['التالي', 'متابعة', 'إرسال', 'تأكيد', 'حجز'];
+                                        for (const btn of btns) {
+                                            const text = btn.innerText.trim();
+                                            for (const t of targets) {
+                                                if (text.includes(t)) { btn.click(); return; }
+                                            }
+                                        }
+                                    }""")
+                                except:
+                                    pass
                             
                             post_url2 = page.url
                             if post_url2 != pre_url:
