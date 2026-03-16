@@ -1,0 +1,33 @@
+V43 TEST ISSUES:
+
+1. CAPTCHA: CapSolver returned 'azzi' (letters) but the captcha is numbers!
+   - The image was captured (3624 chars base64) but CapSolver misread it
+   - Need to use module='common' or try 'number' module
+   - Also: captcha val='' at submit time! The Playwright typing worked but React state wasn't updated
+   - The captcha was typed AFTER the pre-submit state was captured
+
+2. NATIONAL_ID: val='08241988' - ONLY 8 DIGITS! Not 10!
+   - Generated ID was 1111004568 (10 digits) but at submit time it shows '08241988'
+   - This looks like a DATE (08/24/1988) leaked into the ID field!
+   - The commissioner-date fix (STEP 7c) might be writing to the wrong field
+   - The date picker calendar popup clicked day 1, and the date value went into the ID field
+
+3. AUTHORIZE_OTHER: val='on' - STILL CHECKED
+   - The fix says "Radio/Checkbox handled (skipped authorizeOther)" - it was skipped in STEP 3
+   - But "Final checkbox re-check done (authorizeOther unchecked)" - it was unchecked in STEP 7
+   - But at submit time it's still 'on'! Maybe the uncheck didn't work with React state
+
+4. PLATE_NUM: val='0577' - phone number digits
+   - The phone is 0577185268, plate_num got '0577' (first 4 digits of phone)
+   - The plate_num field has type=tel and label='تحمل رخصة سير' (not a proper label)
+   - The bot classified it as phone because type=tel
+
+5. REGISTRATION_TYPE: val='نقل عام' - not 'فردي'
+   - 'فردي' might not be an option. Need to check available options.
+
+FIXES NEEDED:
+A. Fix national_id: generate proper 10-digit ID starting with 1 or 2
+B. Fix plate_num: don't classify type=tel fields near plate area as phone
+C. Fix captcha: ensure React state is updated after typing
+D. Fix authorizeOther: use JS to uncheck and update React state
+E. Fix registration_type: check available options

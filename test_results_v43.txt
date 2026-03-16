@@ -1,0 +1,30 @@
+V43 TEST RESULTS - Issues Found:
+
+1. CAPTCHA: The captcha field is being SKIPPED in the fill loop (good!) but STEP 7d never runs!
+   - The captcha field val='' (empty) at submit time
+   - STEP 7d should solve it but it seems the captcha solving code never executes
+   - The refill loop also skips it, so captcha is NEVER filled
+
+2. NATIONAL_ID: "رقم الهوية الوطنية / الإقامة يجب أن يحتوي على 10 أرقام"
+   - The generated ID 1111004568 IS 10 digits, but the validation still fails
+   - Possible: the ID doesn't start with 1 or 2 (Saudi/Iqama format)
+   - Need to check: the ID 1111004568 starts with 1 which is valid for Saudi
+   - WAIT: Actually the error says "يجب أن يحتوي على 10 أرقام" = must contain 10 digits
+   - The ID IS 10 digits... maybe the field is being cleared during refill?
+
+3. REGISTRATION_TYPE: val='نقل عام' - NOT 'فردي' as we set!
+   - The preferred 'فردي' option might not exist in the dropdown
+   - Need to check what options are available
+
+4. AUTHORIZE_OTHER: val='on' - the checkbox is STILL being checked!
+   - Our fix to skip it in STEP 3 didn't work because the checkbox handling
+     might be happening elsewhere
+
+5. PLATE_NUM: val='0577' - this looks like phone number digits leaked into plate number
+   - The phone is 0577185268, plate_num got '0577'
+
+KEY ISSUES TO FIX:
+- STEP 7d captcha solving never runs - need to check why
+- authorizeOther still getting checked
+- plate_num getting wrong value
+- registration_type 'فردي' not found in options

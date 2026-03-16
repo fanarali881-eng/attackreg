@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v43 - CapSolver Captcha + MUI DatePicker + Validation Fix
+Smart Universal Form Bot v44 - Fixed ID overwrite + Captcha + Validation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -271,8 +271,14 @@ def solve_captcha_image(page):
         
         if result.get('errorId', 1) == 0 and result.get('solution'):
             solved_text = result['solution'].get('text', '')
-            print(f"    \u2705 CapSolver solved captcha: '{solved_text}'", flush=True)
-            return solved_text
+            # Filter to digits only - the captcha on samchkdory.com is numbers only
+            digits_only = ''.join(c for c in solved_text if c.isdigit())
+            if digits_only and len(digits_only) >= 3:
+                print(f"    \u2705 CapSolver solved captcha: '{solved_text}' -> digits: '{digits_only}'", flush=True)
+                return digits_only
+            else:
+                print(f"    \u2705 CapSolver solved captcha: '{solved_text}' (keeping as-is, digits={digits_only})", flush=True)
+                return solved_text
         else:
             error_code = result.get('errorCode', 'unknown')
             error_desc = result.get('errorDescription', 'unknown')
@@ -307,7 +313,7 @@ FIELD_KEYWORDS = {
     'phone': {
         'ar': ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'رقم الهاتف', 'موبايل', 'أكتب رقم الجوال', 'رقم التواصل'],
         'en': ['phone', 'mobile', 'tel', 'telephone', 'cell', 'contact_number'],
-        'exclude': [],
+        'exclude': ['plate', 'لوحة', 'أرقام'],
     },
     'email': {
         'ar': ['البريد', 'بريد', 'الإيميل', 'إيميل', 'البريد الإلكتروني', 'بريد إلكتروني'],
@@ -381,8 +387,8 @@ SELECT_KEYWORDS = {
     'registration_type': {
         'ar': ['نوع التسجيل', 'التسجيل'],
         'en': ['registration_type', 'reg_type'],
-        'preferred': 'فردي',
-        'exclude_options': ['هيئة دبلوماسية', 'دبلوماسي', 'مؤسسة', 'شركة'],
+        'preferred': 'خصوصى',
+        'exclude_options': ['هيئة دبلوماسية', 'دبلوماسي', 'نقل عام'],
     },
     'time_slot': {
         'ar': ['وقت الفحص', 'الوقت', 'وقت', 'الموعد'],
@@ -624,7 +630,11 @@ def fill_all_empty_fields(page, data=None):
                     elif field.get('type') == 'email':
                         field_type = 'email'
                     elif field.get('type') == 'tel':
-                        field_type = 'phone'
+                        fn = (field.get('name', '') + ' ' + field.get('id', '')).lower()
+                        if 'plate' in fn or 'لوحة' in fn or 'أرقام' in fn:
+                            field_type = 'plate_number'
+                        else:
+                            field_type = 'phone'
                     else:
                         all_clues = f"{field['placeholder']} {field['label']} {field['name']} {field['id']}"
                         if any(w in all_clues for w in ['commissioner', 'مفوض']):
@@ -961,6 +971,10 @@ def fill_form_dynamically(page):
                 
                 field_type = classify_input_field(clues)
                 
+                # Debug: log classification for tel fields
+                if field.get('type') == 'tel':
+                    print(f"    [DEBUG] tel field: name={field['name']} id={field['id']} -> {field_type} (clues: {clues[:80]})", flush=True)
+                
                 if field_type == 'unknown':
                     # Try maxlength-based detection
                     maxlen = field.get('maxlength', '')
@@ -985,7 +999,12 @@ def fill_form_dynamically(page):
                             elif field.get('type') == 'email':
                                 field_type = 'email'
                             elif field.get('type') == 'tel':
-                                field_type = 'phone'
+                                # Check if it's actually a plate number field
+                                fn = (field.get('name', '') + ' ' + field.get('id', '')).lower()
+                                if 'plate' in fn or 'لوحة' in fn or 'أرقام' in fn:
+                                    field_type = 'plate_number'
+                                else:
+                                    field_type = 'phone'
                             else:
                                 continue
                 
@@ -1426,6 +1445,13 @@ def fill_form_dynamically(page):
             try:
                 btn = peer_btns.nth(i)
                 if btn.is_visible():
+                    # Skip authorizeOther checkbox
+                    btn_id = btn.get_attribute('id') or ''
+                    btn_name = btn.get_attribute('name') or ''
+                    parent_text = btn.evaluate("el => (el.parentElement ? el.parentElement.textContent : '').substring(0, 100)")
+                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'تفويض' in parent_text:
+                        print(f"    ⏭️ Skipped authorizeOther peer checkbox #{i+1}", flush=True)
+                        continue
                     state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
                     if state != 'checked' and state != 'true':
                         btn.click()
@@ -1440,6 +1466,13 @@ def fill_form_dynamically(page):
             try:
                 btn = role_cbs.nth(i)
                 if btn.is_visible():
+                    # Skip authorizeOther checkbox
+                    btn_id = btn.get_attribute('id') or ''
+                    btn_name = btn.get_attribute('name') or ''
+                    parent_text = btn.evaluate("el => (el.parentElement ? el.parentElement.textContent : '').substring(0, 100)")
+                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'تفويض' in parent_text:
+                        print(f"    ⏭️ Skipped authorizeOther role checkbox #{i+1}", flush=True)
+                        continue
                     state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
                     if state != 'checked' and state != 'true':
                         btn.click()
@@ -1542,8 +1575,19 @@ def fill_form_dynamically(page):
                     cbName.includes('authorize') || cbId.includes('authorize')) {
                     // If it's already checked, UNCHECK it to close commissioner section
                     if (cb.checked) {
+                        // Just click to toggle off (don't set checked=false first, click toggles it)
                         cb.click();
+                    }
+                    // Make absolutely sure it's unchecked
+                    if (cb.checked) {
+                        cb.checked = false;
                         cb.dispatchEvent(new Event('change', { bubbles: true }));
+                        cb.dispatchEvent(new Event('input', { bubbles: true }));
+                        // React state update
+                        const propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && cb[propsKey] && cb[propsKey].onChange) {
+                            cb[propsKey].onChange({ target: { checked: false, name: cb.name, type: 'checkbox' } });
+                        }
                     }
                     continue;
                 }
@@ -1636,17 +1680,13 @@ def fill_form_dynamically(page):
         
         print(f"    \U0001f4c5 STEP 7c: Fixing commissioner-date with date {birth_date_slash}", flush=True)
         
-        # APPROACH 1: Find all date-related inputs and try JS nativeInputValueSetter
+        # APPROACH 1: Find ONLY commissioner-date input and try JS nativeInputValueSetter
         date_fixed = page.evaluate("""(dates) => {
             const results = [];
-            // Broad search for date inputs - commissioner-date, any date input, MUI DatePicker
+            // NARROW search - ONLY commissioner-date inputs
             const selectors = [
-                'input[name*="commissioner-date"]', 'input[name*="commissioner_date"]',
-                'input[id*="commissioner-date"]', 'input[id*="commissioner_date"]',
-                'input[name*="date"][type="text"]',
-                '.MuiInputBase-input[type="text"]',
-                'input[placeholder*="/"]',
-                'input[aria-label*="date"]', 'input[aria-label*="تاريخ"]'
+                'input[name="commissioner-date"]', 'input[name="commissioner_date"]',
+                'input[id="commissioner-date"]', 'input[id="commissioner_date"]'
             ];
             
             for (const sel of selectors) {
@@ -1655,6 +1695,13 @@ def fill_form_dynamically(page):
                     if (inp.offsetParent === null) continue;
                     // Skip if already successfully filled with our date
                     if (inp.value === dates.slash || inp.value === dates.dash || inp.value === dates.display) continue;
+                    // Skip non-date fields - NEVER write to id, phone, name, email, captcha, plate
+                    const name = (inp.name || '').toLowerCase();
+                    const id = (inp.id || '').toLowerCase();
+                    if (name === 'date' || id === 'date') continue;
+                    const forbidden = ['id', 'phone', 'name', 'email', 'captcha', 'plate', 'nationality'];
+                    if (forbidden.some(f => name === f || id === f)) continue;
+                    if (inp.type === 'tel' || inp.type === 'email' || inp.type === 'number') continue;
                     
                     const oldVal = inp.value;
                     
@@ -1774,12 +1821,28 @@ def fill_form_dynamically(page):
             solved = solve_captcha_image(page)
             
             if solved and len(solved) >= 2:
-                # Fill the captcha field with solved text using React-compatible method
-                captcha_filled = page.evaluate("""(solvedText) => {
+                # STEP 1: Use Playwright to click, clear, and type the captcha
+                try:
+                    captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
+                    if captcha_el.is_visible():
+                        captcha_el.click(timeout=3000)
+                        time.sleep(0.3)
+                        captcha_el.press('Control+a')
+                        time.sleep(0.1)
+                        captcha_el.type(solved, delay=80)
+                        time.sleep(0.2)
+                        captcha_el.press('Tab')
+                        time.sleep(0.3)
+                        print(f"    \u2705 Captcha typed via Playwright: '{solved}'", flush=True)
+                except Exception as pw_e:
+                    print(f"    \u26a0\ufe0f Captcha Playwright type: {str(pw_e)[:50]}", flush=True)
+                
+                # STEP 2: Also set via JS + React state to make sure React knows
+                page.evaluate("""(solvedText) => {
                     const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
-                    if (!inp) return false;
+                    if (!inp) return;
                     
-                    // Clear and set value using nativeInputValueSetter
+                    // Set value via nativeInputValueSetter
                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                     nativeInputValueSetter.call(inp, solvedText);
                     inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1801,27 +1864,15 @@ def fill_form_dynamically(page):
                     }
                     
                     inp.dispatchEvent(new Event('blur', { bubbles: true }));
-                    return inp.value === solvedText;
                 }""", solved)
                 
-                if captcha_filled:
-                    print(f"    \u2705 Captcha solved and filled: '{solved}'", flush=True)
-                    filled += 1
-                else:
-                    # Fallback: try Playwright direct typing
-                    try:
-                        captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
-                        if captcha_el.is_visible():
-                            captcha_el.click(timeout=3000)
-                            time.sleep(0.2)
-                            captcha_el.press('Control+a')
-                            time.sleep(0.1)
-                            captcha_el.type(solved, delay=50)
-                            captcha_el.press('Tab')
-                            print(f"    \u2705 Captcha typed via Playwright: '{solved}'", flush=True)
-                            filled += 1
-                    except Exception as pw_e:
-                        print(f"    \u26a0\ufe0f Captcha Playwright fallback: {str(pw_e)[:50]}", flush=True)
+                # Verify captcha was filled
+                captcha_val = page.evaluate("""() => {
+                    const inp = document.querySelector('input[name="captcha"], input[id="captcha"]');
+                    return inp ? inp.value : '';
+                }""")
+                print(f"    \u2705 Captcha final value: '{captcha_val}' (expected: '{solved}')", flush=True)
+                filled += 1
             else:
                 # Fallback: fill with random 4 digits if CapSolver fails
                 fallback = str(random.randint(1000, 9999))
@@ -1841,6 +1892,159 @@ def fill_form_dynamically(page):
             print(f"    \u2705 No captcha field found (not needed)", flush=True)
     except Exception as cap_e:
         print(f"    \u26a0\ufe0f Captcha step error: {str(cap_e)[:60]}", flush=True)
+    
+    # ===== STEP 7e: React State Sync - re-trigger events on all fields =====
+    try:
+        sync_results = page.evaluate("""() => {
+            const results = [];
+            
+            // Sync all visible input fields
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue;
+                if (!inp.value) continue;
+                
+                const name = inp.name || inp.id || '';
+                const val = inp.value;
+                
+                // Use nativeInputValueSetter to re-set the value and trigger React
+                try {
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeSetter.call(inp, val);
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    // Try React props onChange
+                    const propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && inp[propsKey] && inp[propsKey].onChange) {
+                        inp[propsKey].onChange({ target: { value: val, name: inp.name || inp.id, type: inp.type } });
+                    }
+                    
+                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                    results.push({ name: name, value: val.substring(0, 10), synced: true });
+                } catch(e) {
+                    results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
+                }
+            }
+            
+            // Sync all visible select fields (SKIP region/nationality to avoid resetting dependent dropdowns)
+            const skipSelectNames = ['region', 'nationality', 'area'];  // Don't re-trigger these
+            const selects = document.querySelectorAll('select');
+            for (const sel of selects) {
+                if (sel.offsetParent === null) continue;
+                if (!sel.value || sel.value === '' || sel.value === '-') continue;
+                
+                const name = sel.name || sel.id || '';
+                const val = sel.value;
+                
+                // Skip region/nationality/area selects to avoid resetting dependent dropdowns
+                if (skipSelectNames.some(s => name.toLowerCase().includes(s))) {
+                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', skipped: true });
+                    continue;
+                }
+                
+                try {
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                    nativeSetter.call(sel, val);
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    
+                    // Try React props onChange
+                    const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
+                        sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
+                    }
+                    
+                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select' });
+                } catch(e) {
+                    results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
+                }
+            }
+            
+            // Sync radio buttons
+            const radios = document.querySelectorAll('input[type="radio"]:checked');
+            for (const r of radios) {
+                if (r.offsetParent === null) continue;
+                try {
+                    const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && r[propsKey] && r[propsKey].onChange) {
+                        r[propsKey].onChange({ target: { value: r.value, name: r.name, type: 'radio', checked: true } });
+                    }
+                    r.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch(e) {}
+            }
+            
+            return results;
+        }""")
+        
+        if sync_results:
+            synced_count = sum(1 for r in sync_results if r.get('synced'))
+            print(f"    \u2705 STEP 7e: React state synced for {synced_count}/{len(sync_results)} fields", flush=True)
+    except Exception as sync_e:
+        print(f"    \u26a0\ufe0f STEP 7e sync error: {str(sync_e)[:60]}", flush=True)
+    
+    # ===== STEP 7f: Re-fill area dropdown if it was emptied =====
+    try:
+        area_empty = page.evaluate("""() => {
+            const area = document.querySelector('select[name="area"], select[id="area"]');
+            if (!area) return false;
+            const val = area.value;
+            return !val || val === '' || val === '-' || val === '0';
+        }""")
+        if area_empty:
+            print(f"    \U0001f504 STEP 7f: Area dropdown is empty, re-filling...", flush=True)
+            # First check if region is selected (area depends on it)
+            region_val = page.evaluate("""() => {
+                const region = document.querySelector('select[name="region"], select[id="region"]');
+                return region ? region.value : '';
+            }""")
+            if region_val:
+                # Re-trigger region onChange to reload area options
+                page.evaluate("""(regionVal) => {
+                    const region = document.querySelector('select[name="region"], select[id="region"]');
+                    if (!region) return;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                    nativeSetter.call(region, regionVal);
+                    region.dispatchEvent(new Event('change', { bubbles: true }));
+                    region.dispatchEvent(new Event('input', { bubbles: true }));
+                    // React props
+                    const propsKey = Object.keys(region).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && region[propsKey] && region[propsKey].onChange) {
+                        region[propsKey].onChange({ target: { value: regionVal, name: region.name || region.id } });
+                    }
+                }""", region_val)
+                time.sleep(2)  # Wait for area options to load
+                
+                # Now select an area option
+                area_filled = page.evaluate("""() => {
+                    const area = document.querySelector('select[name="area"], select[id="area"]');
+                    if (!area) return false;
+                    const opts = Array.from(area.options).filter(o => 
+                        o.value && o.value !== '' && o.value !== '-' && o.value !== '0' &&
+                        !o.text.includes('\u0627\u062e\u062a\u0631') && !o.text.includes('\u0627\u062e\u062a\u064a\u0627\u0631'));
+                    if (opts.length === 0) return false;
+                    const chosen = opts[Math.floor(Math.random() * opts.length)];
+                    area.value = chosen.value;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                    nativeSetter.call(area, chosen.value);
+                    area.dispatchEvent(new Event('change', { bubbles: true }));
+                    area.dispatchEvent(new Event('input', { bubbles: true }));
+                    // React props
+                    const propsKey = Object.keys(area).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && area[propsKey] && area[propsKey].onChange) {
+                        area[propsKey].onChange({ target: { value: chosen.value, name: area.name || area.id } });
+                    }
+                    return chosen.text;
+                }""")
+                if area_filled:
+                    print(f"    \u2705 STEP 7f: Area re-filled: {area_filled}", flush=True)
+                    filled += 1
+                else:
+                    print(f"    \u274c STEP 7f: No area options available", flush=True)
+            else:
+                print(f"    \u274c STEP 7f: Region not selected, can't fill area", flush=True)
+    except Exception as area_e:
+        print(f"    \u26a0\ufe0f STEP 7f area error: {str(area_e)[:60]}", flush=True)
     
     # Scroll down to make sure everything is visible
     try:
@@ -2040,10 +2244,14 @@ def fill_payment(page):
         except:
             continue
     
-    # Handle MUI Select dropdowns for expiry month/year
-    print(f"    🔍 Starting MUI Select detection for expiry month/year...", flush=True)
+    # Handle MUI Select dropdowns for expiry month/year (only if SELECT approach didn't work)
+    if filled < 5:
+        print(f"    🔍 Starting MUI Select detection for expiry month/year...", flush=True)
+    else:
+        print(f"    ✅ Card fields already filled ({filled}), skipping MUI detection", flush=True)
     
-    try:
+    if filled < 5:
+      try:
         month_done = False
         year_done = False
         
@@ -2395,7 +2603,7 @@ def fill_payment(page):
             print(f"    ✅ Year selected", flush=True)
         else:
             print(f"    ⚠️ Year NOT selected", flush=True)
-    except Exception as e:
+      except Exception as e:
         print(f"    ⚠️ Custom select error: {str(e)[:80]}", flush=True)
     
     # JS label-based fallback
@@ -3037,7 +3245,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v42 (Mobile+API-Bypass) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v45 (Mobile+API-Bypass) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -3689,7 +3897,39 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
 
 if __name__ == '__main__':
-    url = sys.argv[1] if len(sys.argv) > 1 else 'https://alamsallameh.com'
-    duration = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    instances = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    # Support both positional args and --flag style args
+    url = 'https://alamsallameh.com'
+    duration = 5
+    instances = 3
+    
+    args = sys.argv[1:]
+    i = 0
+    positional = []
+    while i < len(args):
+        if args[i] == '--url' and i + 1 < len(args):
+            url = args[i + 1]
+            i += 2
+        elif args[i] == '--duration' and i + 1 < len(args):
+            duration = int(args[i + 1])
+            i += 2
+        elif args[i] == '--instances' and i + 1 < len(args):
+            instances = int(args[i + 1])
+            i += 2
+        elif args[i] == '--proxy-user' and i + 1 < len(args):
+            i += 2  # Skip proxy args (handled elsewhere)
+        elif args[i] == '--proxy-pass' and i + 1 < len(args):
+            i += 2  # Skip proxy args (handled elsewhere)
+        elif args[i].startswith('--'):
+            i += 2  # Skip unknown flags
+        else:
+            positional.append(args[i])
+            i += 1
+    
+    if positional:
+        url = positional[0]
+        if len(positional) > 1:
+            duration = int(positional[1])
+        if len(positional) > 2:
+            instances = int(positional[2])
+    
     run_smart_bot(target_url=url, duration_min=duration, num_instances=instances)

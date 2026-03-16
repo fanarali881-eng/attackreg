@@ -1,0 +1,34 @@
+V44 Test 2 Analysis:
+
+IMPROVED:
+- national_id: 1230802280 (correct, not overwritten!)
+- registration_type: خصوصى (correct!)
+- STEP 7e: React state synced for 16/16 fields (new!)
+
+STILL BROKEN:
+1. area (مركز الفحص): EMPTY - val='' text='أختر مركز الفحص'
+   - Region is الرياض but center wasn't selected
+   - The dependent dropdown loading might need more time
+
+2. plate_num: 0543 (phone is 0543069866 - first 4 digits!)
+   - The field name is plate_num but classify still sees it as phone
+   - Need to check: the field name IS 'plate_num' which contains 'plate'
+   - But the classify function might not reach the tel check because it's classified earlier
+
+3. captcha: val='87' but expected 'g8a7'
+   - CapSolver returned 'g8a7' (mixed letters+numbers)
+   - But the input field stripped the letters, only kept '87'
+   - The captcha image might have numbers only but CapSolver misread
+   - Need to filter captcha result to only digits
+
+4. authorizeOther: still 'on'
+   - The uncheck in STEP 7 doesn't persist
+
+5. ERRORS: all '*' - React state sync ran but validation still fails
+   - 16/16 fields synced but still errors
+   - Maybe the form validation runs on submit and checks its own state
+   - The React state might use a different mechanism (like Zustand/Redux)
+
+KEY INSIGHT: The form might not use React controlled components at all.
+It might use a form library like react-hook-form or formik that manages
+state internally. The '*' errors suggest the form's internal state is empty.

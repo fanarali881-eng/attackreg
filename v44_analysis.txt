@@ -1,0 +1,35 @@
+V44 Analysis - Why validation fails:
+
+GOOD NEWS:
+- national_id: 1093406625 (10 digits, correct, NOT overwritten!)
+- captcha: 5978 (filled correctly via Playwright + JS)
+- registration_type: خصوصى (correct!)
+- STEP 7c: JS approach found no date inputs (correct - no commissioner-date field since authorizeOther is unchecked)
+
+REMAINING ISSUES:
+1. plate_num=0505 - still getting phone digits (phone is 0505918264)
+   - The field name is "plate_num" which should match our 'plate' check
+   - But the classify function runs BEFORE the fix - need to check
+
+2. authorizeOther=on - still checked despite "skipped authorizeOther" and "unchecked"
+   - The checkbox is being skipped in STEP 3 (not clicked)
+   - But it's being unchecked in STEP 7 final check
+   - Yet at PRE-SUBMIT it's still 'on'
+   - This suggests the checkbox was already checked by default or by another step
+
+3. ALL fields show '*' validation errors
+   - This is the BIGGEST issue
+   - The fields have correct HTML values but React state is empty
+   - Playwright .type() should trigger React events
+   - BUT: the select dropdowns are being filled via JS page.evaluate()
+   - The select changes via JS might not trigger React state updates
+   - Need to use Playwright .select_option() instead of JS for selects
+   - Also need to trigger React onChange for each field after filling
+
+THEORY: The site uses React controlled components. When we type via Playwright,
+the input events fire and React picks them up. But for SELECT dropdowns,
+we use JS to change the value which doesn't trigger React's synthetic events.
+The '*' errors on ALL fields suggest something more fundamental is wrong.
+
+POSSIBLE FIX: After filling all fields, trigger a comprehensive React state sync
+by dispatching proper events on each field.

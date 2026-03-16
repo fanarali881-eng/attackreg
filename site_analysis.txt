@@ -1,0 +1,24 @@
+Site Analysis - samchkdory.com:
+
+CRITICAL FINDING: The site is a Vite + React SPA (Single Page Application)
+- Built with Vite (script src="/assets/index-CcTzIgzs.js")
+- Uses React (has __reactFiber, __reactProps on elements)
+- Uses MUI (Material UI) - has mui-rtl-global emotion styles
+- Uses Toastify for notifications
+- Uses Cairo font (Arabic)
+- Has Cloudflare protection
+- robots: noindex, nofollow
+
+The diagnostic showed 404 because the form page requires clicking "حجز موعد" button
+and the SPA needs to load properly with the right route.
+
+The form is a React SPA with controlled components. The validation '*' errors
+suggest that React's internal state is not being updated when we type.
+
+KEY QUESTION: Why does Playwright .type() not trigger React state updates?
+- Playwright .type() dispatches keyboard events (keydown, keypress, keyup, input)
+- React's synthetic event system should pick these up
+- BUT: if the site uses a custom input handler or debounced onChange, it might not work
+
+NEXT STEP: Need to modify the diagnostic to wait for the form to fully load,
+then check the React props on each input field to understand the onChange handler.
