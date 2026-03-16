@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v56 - Use Playwright fill() + React fiber for all fields (including selects)
+Smart Universal Form Bot v57 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -3684,8 +3684,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                     # Smart API bypass: intercept CORS-blocked API calls and proxy them server-side
                     # This is needed for SPA sites where the external API is behind Cloudflare
+                    # Also needed for manus.space sites where API calls must go through Saudi proxy
                     _api_bypass_active = False
-                    if not is_manus_space and proxy_config:
+                    if proxy_config:
                         def _setup_api_bypass(page, site_origin):
                             """Detect external API domain from page JS and set up route interception"""
                             nonlocal _api_bypass_active
@@ -3782,6 +3783,57 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             except Exception as e:
                                 print(f"  ⚠️ API bypass setup error: {e}", flush=True)
 
+                    # Pre-navigation API proxy for manus.space sites
+                    # The site's inline JS calls dataflowptech.com during page load (before DOM ready)
+                    # We must intercept these calls BEFORE navigation so they go through Saudi proxy
+                    if is_manus_space and proxy_config:
+                        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                        def _manus_api_handler(route):
+                            url = route.request.url
+                            method = route.request.method
+                            if method == 'OPTIONS':
+                                route.fulfill(status=204, headers={
+                                    'access-control-allow-origin': '*',
+                                    'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+                                    'access-control-allow-headers': '*',
+                                    'access-control-max-age': '86400',
+                                })
+                                return
+                            try:
+                                headers = dict(route.request.headers)
+                                body = route.request.post_data
+                                for h in list(headers.keys()):
+                                    if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
+                                        del headers[h]
+                                proxy_handler = urllib.request.ProxyHandler({
+                                    'http': proxy_url,
+                                    'https': proxy_url,
+                                })
+                                ctx = ssl.create_default_context()
+                                ctx.check_hostname = False
+                                ctx.verify_mode = ssl.CERT_NONE
+                                opener = urllib.request.build_opener(
+                                    proxy_handler,
+                                    urllib.request.HTTPSHandler(context=ctx)
+                                )
+                                data = body.encode('utf-8') if isinstance(body, str) else body
+                                req = urllib.request.Request(url, data=data, headers=headers, method=method)
+                                resp = opener.open(req, timeout=20)
+                                resp_body = resp.read()
+                                resp_status = resp.status
+                                resp_ct = resp.headers.get('content-type', 'application/json')
+                                route.fulfill(status=resp_status, headers={
+                                    'access-control-allow-origin': '*',
+                                    'content-type': resp_ct,
+                                }, body=resp_body)
+                                print(f'  🔌 API proxied: {method} {url[:80]} -> {resp_status}', flush=True)
+                            except Exception as proxy_err:
+                                print(f'  ⚠️ API proxy error: {proxy_err}', flush=True)
+                                route.continue_()
+                        page.route('**/dataflowptech.com/**', _manus_api_handler)
+                        _api_bypass_active = True
+                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com', flush=True)
+
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
                         # Add ?googleall=1 to bypass referrer checks on protected SPA sites
@@ -3809,7 +3861,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # Find the booking/form page dynamically
                         _api_bypass_ref = [_api_bypass_active]
                         find_booking_page(page, target_url, 
-                                        api_bypass_setup=_setup_api_bypass if (not is_manus_space and proxy_config) else None,
+                                        api_bypass_setup=_setup_api_bypass if proxy_config else None,
                                         api_bypass_active_ref=_api_bypass_ref)
                         _api_bypass_active = _api_bypass_ref[0]
                         time.sleep(3)
