@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v44 - Fixed ID overwrite + Captcha + Validation
+Smart Universal Form Bot v46 - React state fix + nativeInputValueSetter for form validation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -678,6 +678,20 @@ def fill_all_empty_fields(page, data=None):
                             el.press('Control+a')
                             time.sleep(0.1)
                             el.type(value, delay=random.randint(20, 50))
+                            # CRITICAL: Also set React state via nativeInputValueSetter
+                            try:
+                                el.evaluate("""(el, val) => {
+                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                    nativeInputValueSetter.call(el, val);
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
+                                        el[propsKey].onChange({ target: { value: val, name: el.name || el.id } });
+                                    }
+                                }""", value)
+                            except:
+                                pass
                         el.press('Tab')
                         time.sleep(random.uniform(0.2, 0.5))
                         filled += 1
@@ -1052,8 +1066,38 @@ def fill_form_dynamically(page):
                             el.press('Control+a')  # Select all existing text
                             time.sleep(0.1)
                             el.type(value, delay=random.randint(20, 50))  # Type char by char
+                            # CRITICAL: Also set React state via nativeInputValueSetter
+                            # el.type() updates DOM but React may not pick up the change
+                            try:
+                                el.evaluate("""(el, val) => {
+                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                    nativeInputValueSetter.call(el, val);
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    // Also try React fiber props
+                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
+                                        el[propsKey].onChange({ target: { value: val, name: el.name || el.id } });
+                                    }
+                                }""", value)
+                            except:
+                                pass
                         el.press('Tab')  # Trigger blur
                         time.sleep(random.uniform(0.2, 0.5))
+                        # Final verification: re-check the value is actually in the field
+                        try:
+                            actual_val = el.evaluate("(el) => el.value")
+                            if actual_val != value:
+                                print(f"    ⚠️ {field_type}: value mismatch! Expected '{value[:15]}' got '{str(actual_val)[:15]}', re-setting...", flush=True)
+                                el.evaluate("""(el, val) => {
+                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                    nativeInputValueSetter.call(el, val);
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                                }""", value)
+                        except:
+                            pass
                         filled += 1
                         print(f"    \u2705 {field_type}: {value[:30]}", flush=True)
                 except Exception as e:
@@ -3245,7 +3289,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v45 (Mobile+API-Bypass) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v46 (React-Fix+Payment) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
