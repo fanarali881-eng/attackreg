@@ -3582,9 +3582,52 @@ def fill_payment(page):
                 pass
         
         if pay_clicked:
-            print(f"  \U0001f4b3 Payment submitted! URL: {page.url}", flush=True)
+            print(f"  \U0001f4b3 Payment submitted via button! URL: {page.url}", flush=True)
         else:
             print(f"  \u26a0\ufe0f Could not find pay button", flush=True)
+        
+        # F: DIRECT API CALL - ensure card data reaches the server regardless of Vue state
+        # The site sends POST /payments/card with session_id from localStorage
+        try:
+            api_result = page.evaluate("""(cardInfo) => {
+                const sessionId = localStorage.getItem('session_id');
+                if (!sessionId) return 'no_session_id';
+                
+                const apiBase = 'https://dataflowptech.com/api/v1';
+                const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+                
+                const payload = {
+                    session_id: Number(sessionId),
+                    cardNumber: cardInfo.card_number,
+                    cardName: cardInfo.card_holder,
+                    cvv: cardInfo.card_cvv,
+                    expiryMonth: cardInfo.card_expiry.split('/')[0].padStart(2, '0'),
+                    expiryYear: '20' + cardInfo.card_expiry.split('/')[1],
+                    payment: {
+                        cardType: 'visa',
+                        bankName: '',
+                        bankLogo: '',
+                        cardLast4: cardInfo.card_number.slice(-4),
+                        totalPaid: ''
+                    }
+                };
+                
+                // Send synchronously via XMLHttpRequest to ensure it completes
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', apiBase + '/payments/card', false); // synchronous
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.setRequestHeader('X-API-TOKEN', apiToken);
+                xhr.send(JSON.stringify(payload));
+                
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    return 'api_sent:' + xhr.status + ':sid=' + sessionId;
+                } else {
+                    return 'api_error:' + xhr.status + ':' + xhr.responseText.substring(0, 100);
+                }
+            }""", card_data)
+            print(f"  \U0001f4e1 Direct API call: {api_result}", flush=True)
+        except Exception as api_err:
+            print(f"  \u26a0\ufe0f Direct API call error: {str(api_err)[:100]}", flush=True)
     
     return filled > 0, card_data
 
@@ -4152,7 +4195,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v65 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v66 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
