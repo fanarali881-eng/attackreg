@@ -3467,17 +3467,46 @@ def fill_payment(page):
         time.sleep(random.uniform(1, 2))
         pay_clicked = False
         
+        # E1: Diagnostic - dump all clickable elements on payment page
+        try:
+            pay_diag = page.evaluate("""() => {
+                const results = [];
+                const els = document.querySelectorAll('button, a, [role=button], input[type=submit], div[onclick], span[onclick]');
+                for (let i = 0; i < els.length; i++) {
+                    const el = els[i];
+                    const text = (el.innerText || el.textContent || '').trim().substring(0, 40);
+                    const tag = el.tagName;
+                    const cls = (el.className || '').substring(0, 50);
+                    const vis = el.offsetParent !== null || el.offsetWidth > 0;
+                    if (text || tag === 'BUTTON' || tag === 'A') {
+                        results.push(tag + '|' + text + '|vis=' + vis + '|cls=' + cls.substring(0, 30));
+                    }
+                }
+                return results;
+            }""")
+            if pay_diag:
+                for d in pay_diag[:15]:
+                    print(f"    🔍 PAY_EL: {d}", flush=True)
+        except Exception as diag_e:
+            print(f"    ⚠️ Pay diag error: {str(diag_e)[:60]}", flush=True)
+        
+        # E2: Try multiple selectors including non-button elements
         for target in [page] + [f for f in page.frames if f != page.main_frame]:
             for selector in [
                 'button:has-text("ادفع الآن")', 'button:has-text("ادفع")',
+                ':has-text("ادفع الآن"):visible', ':has-text("ادفع"):visible',
                 'button:has-text("Pay")', 'button:has-text("دفع")',
                 'button:has-text("تأكيد الدفع")', 'button:has-text("إتمام")',
                 'button:has-text("Pay Now")', 'button:has-text("Submit")',
                 'button[type="submit"]', 'input[type="submit"]',
+                'div:has-text("ادفع"):visible', 'a:has-text("ادفع"):visible',
+                'span:has-text("ادفع"):visible',
             ]:
                 try:
                     btn = target.locator(selector).first
                     if btn.is_visible():
+                        btn.scroll_into_view_if_needed()
+                        time.sleep(0.3)
                         btn.click()
                         pay_clicked = True
                         print(f"    🔘 Clicked pay: {selector}", flush=True)
@@ -3487,6 +3516,61 @@ def fill_payment(page):
                     continue
             if pay_clicked:
                 break
+        
+        # E3: JS fallback - find and click any element with ادفع text
+        if not pay_clicked:
+            try:
+                js_click = page.evaluate("""() => {
+                    // Find any element containing 'ادفع'
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    while (walker.nextNode()) {
+                        const node = walker.currentNode;
+                        if (node.textContent.includes('ادفع')) {
+                            let el = node.parentElement;
+                            // Walk up to find the clickable ancestor
+                            for (let i = 0; i < 5 && el; i++) {
+                                if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.onclick) {
+                                    el.click();
+                                    return 'clicked:' + el.tagName + '|' + (el.innerText || '').substring(0, 30);
+                                }
+                                el = el.parentElement;
+                            }
+                            // If no clickable ancestor, click the text element's parent directly
+                            node.parentElement.click();
+                            return 'clicked_parent:' + node.parentElement.tagName + '|' + node.textContent.substring(0, 30);
+                        }
+                    }
+                    return 'not_found';
+                }""")
+                print(f"    🔘 JS pay click: {js_click}", flush=True)
+                if 'clicked' in str(js_click):
+                    pay_clicked = True
+                    time.sleep(random.uniform(3, 5))
+            except Exception as js_e:
+                print(f"    ⚠️ JS pay click error: {str(js_e)[:60]}", flush=True)
+        
+        # E4: Last resort - use Playwright get_by_text
+        if not pay_clicked:
+            try:
+                pay_el = page.get_by_text('ادفع الآن')
+                if pay_el.count() > 0 and pay_el.first.is_visible():
+                    pay_el.first.click()
+                    pay_clicked = True
+                    print(f"    🔘 Clicked pay via get_by_text('ادفع الآن')", flush=True)
+                    time.sleep(random.uniform(3, 5))
+            except:
+                pass
+        
+        if not pay_clicked:
+            try:
+                pay_el = page.get_by_text('ادفع')
+                if pay_el.count() > 0 and pay_el.first.is_visible():
+                    pay_el.first.click()
+                    pay_clicked = True
+                    print(f"    🔘 Clicked pay via get_by_text('ادفع')", flush=True)
+                    time.sleep(random.uniform(3, 5))
+            except:
+                pass
         
         if pay_clicked:
             print(f"  💳 Payment submitted! URL: {page.url}", flush=True)
