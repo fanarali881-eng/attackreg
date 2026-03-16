@@ -501,6 +501,183 @@ def get_field_value(field_type, data):
     return None
 
 
+# ============ ANTI-DETECTION: HEARTBEAT + HUMAN SIMULATION ============
+
+def start_heartbeat(page, interval=15):
+    """Start the visitor heartbeat that the site expects every 15 seconds.
+    This mimics the site's own heartbeat system to avoid bot detection."""
+    page.evaluate("""
+        (interval) => {
+            if (window.__heartbeatRunning) return 'already_running';
+            window.__heartbeatRunning = true;
+            
+            const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
+            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+            
+            // Generate tab_id if not exists
+            if (!window.__tabId) {
+                window.__tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+            }
+            
+            const getVisitorId = () => localStorage.getItem('visitor_id') || '';
+            const getPath = () => window.location?.pathname || '/';
+            
+            // Track interaction
+            window.__lastInteraction = Date.now();
+            ['mousemove', 'keydown', 'touchstart', 'scroll', 'click', 'pointerdown'].forEach(evt => {
+                window.addEventListener(evt, () => { window.__lastInteraction = Date.now(); }, {passive: true, once: false});
+            });
+            
+            const sendHeartbeat = () => {
+                const visitorId = getVisitorId();
+                if (!visitorId) return;
+                
+                const hasInteraction = (Date.now() - window.__lastInteraction) < 30000;
+                const visibility = document.visibilityState === 'hidden' ? 'hidden' : 'visible';
+                
+                const data = {
+                    visitor_id: visitorId,
+                    visibility: visibility,
+                    interaction: hasInteraction,
+                    tab_id: window.__tabId,
+                    current_path: getPath()
+                };
+                
+                // Use sendBeacon (same as real site)
+                try {
+                    const params = new URLSearchParams({
+                        visitor_id: String(data.visitor_id),
+                        visibility: String(data.visibility),
+                        interaction: data.interaction ? '1' : '0',
+                        tab_id: String(data.tab_id),
+                        current_path: String(data.current_path),
+                        api_token: String(apiToken)
+                    });
+                    if (navigator.sendBeacon) {
+                        navigator.sendBeacon(apiBase + '/visitors/heartbeat', params);
+                    } else {
+                        fetch(apiBase + '/visitors/heartbeat', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
+                            body: JSON.stringify(data),
+                            keepalive: true
+                        }).catch(() => {});
+                    }
+                } catch(e) {}
+            };
+            
+            // Store active tab
+            try {
+                localStorage.setItem('visitor_active_tab', JSON.stringify({
+                    id: window.__tabId,
+                    expiresAt: Date.now() + 45000
+                }));
+            } catch(e) {}
+            
+            // Send first heartbeat immediately
+            sendHeartbeat();
+            
+            // Then every interval seconds
+            window.__heartbeatInterval = setInterval(() => {
+                sendHeartbeat();
+                // Refresh active tab
+                try {
+                    localStorage.setItem('visitor_active_tab', JSON.stringify({
+                        id: window.__tabId,
+                        expiresAt: Date.now() + 45000
+                    }));
+                } catch(e) {}
+            }, interval * 1000);
+            
+            return 'heartbeat_started';
+        }
+    """, interval)
+    print(f"  💓 Heartbeat started (every {interval}s)", flush=True)
+
+
+def simulate_human_interaction(page):
+    """Simulate realistic human interaction - mouse movements, scrolls, clicks.
+    This triggers the site's interaction tracking to mark us as a real user."""
+    try:
+        # Get viewport size
+        vp = page.viewport_size or {'width': 375, 'height': 812}
+        w, h = vp['width'], vp['height']
+        
+        # Random mouse movements
+        for _ in range(random.randint(3, 6)):
+            x = random.randint(50, w - 50)
+            y = random.randint(100, h - 100)
+            page.mouse.move(x, y)
+            time.sleep(random.uniform(0.1, 0.4))
+        
+        # Small scroll
+        page.mouse.wheel(0, random.randint(50, 200))
+        time.sleep(random.uniform(0.3, 0.8))
+        page.mouse.wheel(0, -random.randint(20, 100))
+        time.sleep(random.uniform(0.2, 0.5))
+        
+        # Random touch/click on empty area
+        page.mouse.click(random.randint(10, w-10), random.randint(10, 50))
+        time.sleep(random.uniform(0.1, 0.3))
+        
+    except Exception as e:
+        pass  # Don't fail on interaction simulation
+
+
+def register_visitor(page):
+    """Register as a visitor with the site's backend API.
+    This creates a visitor_id that the heartbeat system needs."""
+    result = page.evaluate("""
+        async () => {
+            const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
+            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+            
+            // Check if already registered
+            let visitorId = localStorage.getItem('visitor_id');
+            if (visitorId) return {status: 'existing', visitor_id: visitorId};
+            
+            try {
+                const resp = await fetch(apiBase + '/visitors/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-TOKEN': apiToken
+                    },
+                    body: JSON.stringify({
+                        current_path: window.location.pathname
+                    })
+                });
+                const data = await resp.json();
+                const vid = data?.data?.visitor_id || data?.visitor_id || '';
+                if (vid) {
+                    localStorage.setItem('visitor_id', vid);
+                    return {status: 'registered', visitor_id: vid};
+                }
+                return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
+            } catch(e) {
+                return {status: 'error', message: e.message};
+            }
+        }
+    """)
+    print(f"  👤 Visitor: {result}", flush=True)
+    return result
+
+
+def slow_type_field(page, element, text, min_delay=0.05, max_delay=0.15):
+    """Type text character by character with human-like delays."""
+    try:
+        element.click()
+        time.sleep(random.uniform(0.2, 0.5))
+        for char in str(text):
+            element.type(char, delay=random.randint(int(min_delay*1000), int(max_delay*1000)))
+            time.sleep(random.uniform(0.01, 0.05))
+    except:
+        try:
+            element.fill(str(text))
+        except:
+            pass
+
+
 # ============ CLOUDFLARE BYPASS ============
 
 def bypass_cloudflare(page, max_wait=90):
@@ -4195,7 +4372,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v66 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v67 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -4448,6 +4625,16 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         time.sleep(2)
 
+                        # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
+                        try:
+                            register_visitor(page)
+                            time.sleep(random.uniform(1, 2))
+                            start_heartbeat(page, interval=15)
+                            simulate_human_interaction(page)
+                            time.sleep(random.uniform(2, 4))  # Wait like a real user browsing
+                        except Exception as e:
+                            print(f"  ⚠️ Anti-detection setup: {e}", flush=True)
+
                         # Find the booking/form page dynamically
                         _api_bypass_ref = [_api_bypass_active]
                         find_booking_page(page, target_url, 
@@ -4455,6 +4642,10 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                         api_bypass_active_ref=_api_bypass_ref)
                         _api_bypass_active = _api_bypass_ref[0]
                         time.sleep(3)
+
+                        # Simulate human browsing before filling
+                        simulate_human_interaction(page)
+                        time.sleep(random.uniform(1, 3))
 
                         # Fill form dynamically
                         filled, data = fill_form_dynamically(page)
@@ -4538,6 +4729,10 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     print(f"    ERRORS: {form_state['errors'][:5]}", flush=True)
                         except Exception as dbg_err:
                             print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
+
+                        # Simulate human before submit
+                        simulate_human_interaction(page)
+                        time.sleep(random.uniform(1, 2))
 
                         # Scroll to bottom to make submit button visible
                         try:
