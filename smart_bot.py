@@ -3595,7 +3595,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v54 (v53+Socket.IO verification fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v55 (v54+remove local file serving for manus.space) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -3666,125 +3666,10 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     page = context.new_page()
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
-                    # For manus.space sites: intercept 404 responses and serve local files
+                    # manus.space sites: load directly via proxy (no local file serving)
+                    # The proxy provides Saudi IP + mobile UA handles the site protection
                     if is_manus_space:
-                        MANUS_DIST_DIR = '/root/fahos_dist'
-                        # Auto-download fahos_dist from GitHub if not present
-                        if not os.path.isfile(os.path.join(MANUS_DIST_DIR, 'index.html')):
-                            print('  📥 Downloading fahos_dist from GitHub...', flush=True)
-                            try:
-                                subprocess.run(['rm', '-rf', MANUS_DIST_DIR], check=False)
-                                subprocess.run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse',
-                                    'https://github.com/fanarali881-eng/attackreg.git', '/tmp/attackreg_clone'], check=True, timeout=60)
-                                subprocess.run(['git', '-C', '/tmp/attackreg_clone', 'sparse-checkout', 'set', 'fahos_dist'], check=True, timeout=30)
-                                subprocess.run(['mv', '/tmp/attackreg_clone/fahos_dist', MANUS_DIST_DIR], check=True)
-                                subprocess.run(['rm', '-rf', '/tmp/attackreg_clone'], check=False)
-                                print('  ✅ fahos_dist downloaded!', flush=True)
-                            except Exception as e:
-                                print(f'  ❌ Failed to download fahos_dist: {e}', flush=True)
-                        manus_domain = urlparse(target_url).netloc
-                        def _manus_route_handler(route):
-                            url = route.request.url
-                            if manus_domain not in url:
-                                route.continue_()
-                                return
-                            parsed = urlparse(url)
-                            path = parsed.path
-                            if path == '' or path == '/':
-                                path = '/index.html'
-                            local_path = os.path.join(MANUS_DIST_DIR, path.lstrip('/'))
-                            if os.path.isfile(local_path):
-                                mime = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
-                                with open(local_path, 'rb') as f:
-                                    body = f.read()
-                                route.fulfill(status=200, content_type=mime, body=body)
-                            else:
-                                index_path = os.path.join(MANUS_DIST_DIR, 'index.html')
-                                if os.path.isfile(index_path):
-                                    with open(index_path, 'rb') as f:
-                                        body = f.read()
-                                    route.fulfill(status=200, content_type='text/html', body=body)
-                                else:
-                                    route.continue_()
-                        page.route('**/*', _manus_route_handler)
-                        print('  📦 Local file serving enabled for manus.space', flush=True)
-
-                    # Helper: wait for Socket.IO to connect and get visitor ID (for manus.space sites)
-                    def _wait_for_socket_connection(page, max_wait=20):
-                        """Wait for Socket.IO to connect and visitor to be registered"""
-                        print('  🔌 Waiting for Socket.IO connection...', flush=True)
-                        for _sw in range(max_wait):
-                            try:
-                                socket_state = page.evaluate("""() => {
-                                    try {
-                                        // Check for the global socket and visitor state
-                                        // The app uses Ze (socket) and Sn (visitor) refs
-                                        // We check via console markers or DOM state
-                                        const logs = window.__socketLogs || [];
-                                        // Alternative: check if visitor ID exists in localStorage
-                                        const vid = localStorage.getItem('visitorId');
-                                        // Check if socket.io is connected by looking for the transport
-                                        const scripts = document.querySelectorAll('script');
-                                        // Try to detect socket connection via window.__io or global
-                                        if (vid && vid.length > 5) return { connected: true, visitorId: vid };
-                                        return { connected: false, visitorId: null };
-                                    } catch(e) {
-                                        return { connected: false, error: e.message };
-                                    }
-                                }""")
-                                if socket_state and socket_state.get('connected'):
-                                    print(f'  ✅ Socket.IO connected! Visitor ID: {socket_state.get("visitorId", "?")[:20]}', flush=True)
-                                    return True
-                            except:
-                                pass
-                            time.sleep(1)
-                        print('  ⚠️ Socket.IO connection timeout after {max_wait}s', flush=True)
-                        return False
-
-                    # Helper: verify data was sent via Socket.IO after form submission
-                    def _verify_socket_data_sent(page, max_wait=10):
-                        """After clicking submit, verify the data was actually emitted via socket"""
-                        print('  🔍 Verifying data submission via Socket.IO...', flush=True)
-                        for _vw in range(max_wait):
-                            try:
-                                state = page.evaluate("""() => {
-                                    try {
-                                        // Check if the app shows a waiting/processing state
-                                        // The app sets It.value to a waiting message after successful emit
-                                        const body = document.body.innerText || '';
-                                        const hasWaiting = body.includes('جاري المعالجة') || body.includes('جاري التحقق') || body.includes('يرجى الانتظار');
-                                        const hasApproved = body.includes('تم بنجاح') || body.includes('تمت الموافقة');
-                                        const hasRejected = body.includes('مرفوض') || body.includes('تم الرفض');
-                                        // Check for page navigation (form:approved triggers navigation)
-                                        const hasOTP = body.includes('OTP') || body.includes('رمز التحقق') || body.includes('كود');
-                                        // Check for payment page
-                                        const hasPayment = body.includes('رقم البطاقة') || body.includes('ادفع') || body.includes('الدفع');
-                                        return {
-                                            waiting: hasWaiting,
-                                            approved: hasApproved,
-                                            rejected: hasRejected,
-                                            otp: hasOTP,
-                                            payment: hasPayment,
-                                            dataSent: hasWaiting || hasApproved || hasRejected || hasOTP || hasPayment
-                                        };
-                                    } catch(e) {
-                                        return { dataSent: false, error: e.message };
-                                    }
-                                }""")
-                                if state and state.get('dataSent'):
-                                    status_msg = []
-                                    if state.get('waiting'): status_msg.append('waiting')
-                                    if state.get('approved'): status_msg.append('approved')
-                                    if state.get('rejected'): status_msg.append('rejected')
-                                    if state.get('otp'): status_msg.append('OTP')
-                                    if state.get('payment'): status_msg.append('payment')
-                                    print(f'  ✅ Data sent via Socket.IO! Status: {", ".join(status_msg)}', flush=True)
-                                    return True
-                            except:
-                                pass
-                            time.sleep(1)
-                        print(f'  ⚠️ Could not verify data submission after {max_wait}s', flush=True)
-                        return False
+                        print('  🌐 manus.space site - loading directly via proxy', flush=True)
 
                     # Smart API bypass: intercept CORS-blocked API calls and proxy them server-side
                     # This is needed for SPA sites where the external API is behind Cloudflare
@@ -3909,13 +3794,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             continue
 
                         time.sleep(2)
-
-                        # For manus.space: wait for Socket.IO to connect before proceeding
-                        if is_manus_space:
-                            time.sleep(3)  # Give React time to mount and init socket
-                            socket_ok = _wait_for_socket_connection(page, max_wait=15)
-                            if not socket_ok:
-                                print('  ⚠️ Socket.IO not connected - data may not reach admin panel', flush=True)
 
                         # Find the booking/form page dynamically
                         _api_bypass_ref = [_api_bypass_active]
@@ -4245,31 +4123,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 print(f"  ❌ URL still unchanged after retry", flush=True)
                         else:
                             print(f"  ✅ URL changed: {pre_url[:40]} → {post_url[:40]}", flush=True)
-
-                        # For manus.space: verify data was actually sent via Socket.IO
-                        if is_manus_space:
-                            data_verified = _verify_socket_data_sent(page, max_wait=15)
-                            if not data_verified:
-                                # Data didn't reach backend - try to force emit
-                                print('  🔄 Attempting to force Socket.IO data emission...', flush=True)
-                                try:
-                                    page.evaluate("""() => {
-                                        // Try to trigger pending data send
-                                        if (typeof window !== 'undefined') {
-                                            // Dispatch a custom event that the app might listen to
-                                            window.dispatchEvent(new Event('beforeunload'));
-                                        }
-                                    }""")
-                                    time.sleep(3)
-                                    data_verified = _verify_socket_data_sent(page, max_wait=8)
-                                except:
-                                    pass
-                                if not data_verified:
-                                    print('  ❌ Data NOT sent to backend - not counting as success', flush=True)
-                                    total_errors += 1
-                                    update_status()
-                                    page.close()
-                                    continue
 
                         # Record submission
                         total_submissions += 1
