@@ -1,0 +1,29 @@
+KEY FINDINGS FROM SERVER LOGS (138.68.141.40):
+
+1. CAPTCHA FIELD: input#15 name=captcha id=captcha type=text label='رمز التحقق *' val='6161'
+   - Field is type=text, name=captcha, id=captcha
+   - Label is 'رمز التحقق *' (verification code)
+   - Bot fills it with random numbers like '6161'
+   - There must be a captcha IMAGE somewhere on the page that needs to be read
+
+2. COMMISSIONER-DATE: input#10 name=commissioner-date id=commissioner-date type=text label='تاريخ ميلاد المفوض' val=''
+   - Field is EMPTY (val='') - the bot fails to fill it
+   - The refill loop tries to click it but times out at 30000ms
+   - This is the main blocker - "[refill] Error date_of_birth: Locator.click: Timeout 30000ms exceeded"
+
+3. VALIDATION ERRORS: 8-10 red asterisks (*) appear after clicking التالي
+   - First attempt: 5 errors, then 8 errors after retry
+   - After our fix: should reduce to ~3 errors (date + captcha + maybe 1 more)
+   - The errors are in elements with class "text-red-500 ms-1"
+
+4. DATE FIELD: input#14 name=date id=date type=text label='التاريخ *' val='03/16/2026'
+   - This date field IS filled correctly (format MM/DD/YYYY)
+   - Only commissioner-date fails
+
+5. REGISTRATION TYPE: select#2 val='هيئة دبلوماسية' - this might be wrong (diplomatic corps)
+   - Should probably be 'فردي' or something more common
+
+6. BOT FLOW:
+   - Fills form → clicks التالي → gets validation errors → retries → still fails
+   - date_of_birth click timeout is 30000ms (30 seconds!) - wastes time
+   - After max retries, moves on without fixing

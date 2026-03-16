@@ -1,0 +1,23 @@
+VALIDATION ISSUES ANALYSIS:
+
+FIELDS WITH PROBLEMS:
+1. commissioner-date (input#10): EMPTY - fixed in STEP 7c
+2. captcha (input#15): random numbers - fixed in STEP 7d with CapSolver
+3. registration_type (select#2): "هيئة دبلوماسية" - WRONG! Should be "فردي" or "خاص"
+4. plate_number: val='6161' - This is the CAPTCHA value being put in plate_number! 
+   The bot is confusing plate_number with captcha because both have similar patterns.
+5. authorizeOther checkbox is ON - this opens commissioner section which adds more required fields
+6. Two radio buttons checked for commissioner (مواطن / مقيم AND مواطن خليجي) - only one should be selected
+
+KEY ISSUES:
+- Registration type "هيئة دبلوماسية" (diplomatic corps) is likely invalid for regular users
+- The "authorizeOther" checkbox being checked opens a whole commissioner section with required fields
+  that are hard to fill (commissioner-date, commissioner-name, etc.)
+- Better approach: DON'T check authorizeOther checkbox to avoid commissioner section entirely
+- The plate_number field shows '6161' which looks like captcha numbers leaked into it
+
+FIXES NEEDED:
+1. Don't check "authorizeOther" checkbox - skip commissioner section entirely
+2. Fix registration_type selection - prefer "فردي" or first non-diplomatic option
+3. Ensure plate_number gets actual plate numbers not captcha values
+4. Ensure captcha field gets CapSolver solution

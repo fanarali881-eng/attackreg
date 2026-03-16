@@ -1,0 +1,21 @@
+CAPTCHA ANALYSIS FROM SCREENSHOT:
+
+The captcha is a simple IMAGE CAPTCHA with distorted numbers.
+- The image shows "6175" (with strikethrough lines for distortion)
+- The bot entered "6161" (random numbers, wrong!)
+- The captcha image is next to the input field
+- There's a refresh button (green arrows icon) between the input and image
+- Label: "رمز التحقق *" (Verification Code)
+- Sub-label: "أدخل الأرقام الظاهرة في الصورة أدناه" (Enter the numbers shown in the image below)
+
+CAPTCHA TYPE: Simple numeric image captcha (4 digits with line distortion)
+This is perfect for CapSolver's ImageToText task type.
+
+APPROACH:
+1. Find the captcha image element on the page
+2. Take a screenshot or get the image src/base64
+3. Send to CapSolver API (ImageToTextTask)
+4. Get the solved text and fill the captcha input field
+
+Also visible: The date field shows 03/16/2026 with a calendar icon (MUI DatePicker).
+The time dropdown shows "03:35 م" and is working.

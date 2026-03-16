@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v39 - React State Sync + Fixed Classification
+Smart Universal Form Bot v43 - CapSolver Captcha + MUI DatePicker + Validation Fix
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -154,6 +154,136 @@ def gen_card_expiry_year():
 def gen_cvv():
     return str(random.randint(100, 999))
 
+# ============ CAPSOLVER CAPTCHA SOLVING ============
+CAPSOLVER_API_KEY = os.environ.get('CAPSOLVER_KEY', 'CAP-96A43200A31AF2F850CBE659AFC4280C154409585ABA50AC7B1EA7F67A6E7B10')
+
+def solve_captcha_image(page):
+    """Find captcha image on page, send to CapSolver, return solved text"""
+    try:
+        # Try to get captcha image as base64
+        captcha_b64 = page.evaluate("""() => {
+            // Strategy 1: Find img near captcha input
+            const captchaInput = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
+            if (captchaInput) {
+                // Look for nearby img elements
+                const parent = captchaInput.closest('div') || captchaInput.parentElement;
+                let container = parent;
+                for (let i = 0; i < 5; i++) {
+                    if (!container) break;
+                    const imgs = container.querySelectorAll('img');
+                    for (const img of imgs) {
+                        if (img.src && (img.src.includes('captcha') || img.src.includes('data:image') || img.width > 50)) {
+                            // Convert to base64 using canvas
+                            try {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth || img.width;
+                                canvas.height = img.naturalHeight || img.height;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(img, 0, 0);
+                                return canvas.toDataURL('image/png').replace('data:image/png;base64,', '');
+                            } catch(e) {}
+                        }
+                    }
+                    container = container.parentElement;
+                }
+            }
+            
+            // Strategy 2: Find any captcha-like image on the page
+            const allImgs = document.querySelectorAll('img');
+            for (const img of allImgs) {
+                const src = (img.src || '').toLowerCase();
+                const alt = (img.alt || '').toLowerCase();
+                const cls = (img.className || '').toLowerCase();
+                if (src.includes('captcha') || alt.includes('captcha') || cls.includes('captcha') ||
+                    alt.includes('تحقق') || src.includes('verify') || src.includes('code')) {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth || img.width;
+                        canvas.height = img.naturalHeight || img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        return canvas.toDataURL('image/png').replace('data:image/png;base64,', '');
+                    } catch(e) {}
+                }
+            }
+            
+            // Strategy 3: Find canvas element (some captchas use canvas)
+            const canvases = document.querySelectorAll('canvas');
+            for (const canvas of canvases) {
+                if (canvas.width > 50 && canvas.width < 400) {
+                    return canvas.toDataURL('image/png').replace('data:image/png;base64,', '');
+                }
+            }
+            
+            // Strategy 4: Look for any img near text 'رمز التحقق' or 'captcha'
+            const labels = document.querySelectorAll('label, span, p, div');
+            for (const lbl of labels) {
+                const txt = lbl.textContent || '';
+                if (txt.includes('رمز التحقق') || txt.includes('captcha') || txt.includes('التحقق')) {
+                    const parent2 = lbl.closest('div') || lbl.parentElement;
+                    if (parent2) {
+                        const nearImgs = parent2.querySelectorAll('img');
+                        for (const img of nearImgs) {
+                            try {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth || img.width;
+                                canvas.height = img.naturalHeight || img.height;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(img, 0, 0);
+                                return canvas.toDataURL('image/png').replace('data:image/png;base64,', '');
+                            } catch(e) {}
+                        }
+                    }
+                }
+            }
+            
+            return null;
+        }""")
+        
+        if not captcha_b64:
+            print(f"    \u26a0\ufe0f No captcha image found on page", flush=True)
+            return None
+        
+        print(f"    \U0001f4f8 Captcha image captured ({len(captcha_b64)} chars base64)", flush=True)
+        
+        # Send to CapSolver API
+        payload = json.dumps({
+            'clientKey': CAPSOLVER_API_KEY,
+            'task': {
+                'type': 'ImageToTextTask',
+                'module': 'common',
+                'body': captcha_b64
+            }
+        }).encode('utf-8')
+        
+        req = urllib.request.Request(
+            'https://api.capsolver.com/createTask',
+            data=payload,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+        
+        if result.get('errorId', 1) == 0 and result.get('solution'):
+            solved_text = result['solution'].get('text', '')
+            print(f"    \u2705 CapSolver solved captcha: '{solved_text}'", flush=True)
+            return solved_text
+        else:
+            error_code = result.get('errorCode', 'unknown')
+            error_desc = result.get('errorDescription', 'unknown')
+            print(f"    \u274c CapSolver error: {error_code} - {error_desc}", flush=True)
+            return None
+            
+    except Exception as e:
+        print(f"    \u274c Captcha solve error: {str(e)[:80]}", flush=True)
+        return None
+
+
 def gen_cardholder_name():
     first_en = random.choice(['Mohammed', 'Abdullah', 'Fahad', 'Saud', 'Khalid', 'Sultan', 'Turki', 'Bandar', 'Faisal', 'Ahmad', 'Omar', 'Youssef', 'Ibrahim', 'Nasser', 'Saad', 'Majed', 'Nayef', 'Mishari', 'Hamad', 'Ali'])
     last_en = random.choice(['Alotaibi', 'Alharbi', 'Alqahtani', 'Alshamri', 'Aldosari', 'Almutairi', 'Alghamdi', 'Alzahrani', 'Alsubaie', 'Alshehri', 'Aljohani', 'Alanazi', 'Alrashidi', 'Almalki', 'Albulawi', 'Alsalmi'])
@@ -214,6 +344,11 @@ FIELD_KEYWORDS = {
         'en': ['delegate', 'representative', 'agent_name', 'authorized'],
         'exclude': ['date', 'تاريخ', 'phone', 'جوال', 'هوية', 'id'],
     },
+    'captcha': {
+        'ar': ['رمز التحقق', 'التحقق', 'كابتشا', 'رمز الأمان', 'رمز الصورة'],
+        'en': ['captcha', 'verification_code', 'security_code', 'verify_code', 'image_code'],
+        'exclude': [],
+    },
 }
 
 # Keywords for SELECT dropdowns
@@ -246,7 +381,8 @@ SELECT_KEYWORDS = {
     'registration_type': {
         'ar': ['نوع التسجيل', 'التسجيل'],
         'en': ['registration_type', 'reg_type'],
-        'preferred': None,
+        'preferred': 'فردي',
+        'exclude_options': ['هيئة دبلوماسية', 'دبلوماسي', 'مؤسسة', 'شركة'],
     },
     'time_slot': {
         'ar': ['وقت الفحص', 'الوقت', 'وقت', 'الموعد'],
@@ -353,6 +489,9 @@ def get_field_value(field_type, data):
     elif field_type == 'delegate_name':
         # Use the same person's name as delegate
         return data.get('name', gen_name())
+    elif field_type == 'captcha':
+        # Return placeholder - actual solving happens in STEP 7d
+        return 'CAPTCHA_PLACEHOLDER'
     return None
 
 
@@ -508,7 +647,15 @@ def fill_all_empty_fields(page, data=None):
                         el = page.locator('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['visibleIndex'])
                     
                     if el.is_visible():
-                        if field.get('type') == 'date':
+                        if field_type == 'date_of_birth':
+                            # Skip - handled by STEP 7c with JS (MUI DatePicker)
+                            print(f"    [refill] {field_type}: skipped (handled by STEP 7c)", flush=True)
+                            continue
+                        elif field_type == 'captcha':
+                            # Skip - handled by STEP 7d with CapSolver
+                            print(f"    [refill] {field_type}: skipped (handled by STEP 7d)", flush=True)
+                            continue
+                        elif field.get('type') == 'date':
                             el.focus()
                             el.fill(value)
                             el.evaluate("""(el) => {
@@ -516,7 +663,7 @@ def fill_all_empty_fields(page, data=None):
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                             }""")
                         else:
-                            el.click()
+                            el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
                             el.press('Control+a')
                             time.sleep(0.1)
@@ -591,14 +738,27 @@ def fill_all_empty_fields(page, data=None):
                     field_type, preferred = classify_select_field(clues)
                     
                     # Choose option: prefer the preferred value, else random
+                    # Also check exclude_options from SELECT_KEYWORDS
                     chosen = None
+                    exclude_opts = []
+                    for ft, kw in SELECT_KEYWORDS.items():
+                        if ft == field_type and 'exclude_options' in kw:
+                            exclude_opts = kw['exclude_options']
+                            break
+                    
                     if preferred:
                         for opt in es['options']:
                             if preferred in opt.get('text', '') or preferred in opt.get('value', ''):
                                 chosen = opt
                                 break
                     if not chosen:
-                        chosen = random.choice(es['options'])
+                        # Filter out excluded options
+                        valid_options = es['options']
+                        if exclude_opts:
+                            valid_options = [opt for opt in es['options'] if not any(exc in opt.get('text', '') for exc in exclude_opts)]
+                            if not valid_options:
+                                valid_options = es['options']  # Fallback if all excluded
+                        chosen = random.choice(valid_options)
                     
                     sel_el = page.locator('select:visible').nth(es['visIdx'])
                     sel_el.select_option(value=chosen['value'])
@@ -850,7 +1010,15 @@ def fill_form_dynamically(page):
                         el = page.locator(f'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):visible').nth(field['index'])
                     
                     if el.is_visible():
-                        if field.get('type') == 'date':
+                        if field_type == 'date_of_birth':
+                            # Skip - handled by STEP 7c with JS (MUI DatePicker)
+                            print(f"    ⏭️ {field_type}: skipped (handled by STEP 7c)", flush=True)
+                            continue
+                        elif field_type == 'captcha':
+                            # Skip - handled by STEP 7d with CapSolver
+                            print(f"    ⏭️ {field_type}: skipped (handled by STEP 7d)", flush=True)
+                            continue
+                        elif field.get('type') == 'date':
                             # Date inputs: focus, clear, fill, then dispatch
                             el.focus()
                             el.fill(value)
@@ -860,7 +1028,7 @@ def fill_form_dynamically(page):
                             }""")
                         else:
                             # Text inputs: click, select all, type char-by-char (most human-like)
-                            el.click()
+                            el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
                             el.press('Control+a')  # Select all existing text
                             time.sleep(0.1)
@@ -1005,7 +1173,15 @@ def fill_form_dynamically(page):
                             break
                 
                 if not chosen:
-                    chosen = random.choice(valid_opts)
+                    # Filter out excluded options (e.g., diplomatic for registration_type)
+                    filtered_opts = valid_opts
+                    for ft, kw in SELECT_KEYWORDS.items():
+                        if ft == field_type and 'exclude_options' in kw:
+                            filtered_opts = [opt for opt in valid_opts if not any(exc in opt.get('text', '') for exc in kw['exclude_options'])]
+                            if not filtered_opts:
+                                filtered_opts = valid_opts  # Fallback
+                            break
+                    chosen = random.choice(filtered_opts)
                 
                 try:
                     sel_el = page.locator('select:visible').nth(sel['index'])
@@ -1298,18 +1474,25 @@ def fill_form_dynamically(page):
                     choice.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             }
-            
-            // Check unchecked required checkboxes (terms, agreements)
+                    // Check unchecked required checkboxes (terms, agreements)
+            // BUT SKIP authorizeOther - it opens commissioner section with hard-to-fill fields
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             for (const cb of checkboxes) {
                 if (cb.offsetParent === null) continue;
+                const cbName = (cb.name || '').toLowerCase();
+                const cbId = (cb.id || '').toLowerCase();
+                // Skip authorizeOther checkbox - it opens commissioner section
+                if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
+                    cbName.includes('authorize') || cbId.includes('authorize')) {
+                    continue;
+                }
                 if (!cb.checked) {
                     cb.click();
                     cb.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             }
         }""")
-        print(f"    ✅ Radio/Checkbox handled", flush=True)
+        print(f"    \u2705 Radio/Checkbox handled (skipped authorizeOther)", flush=True)
     except:
         pass
     
@@ -1346,13 +1529,24 @@ def fill_form_dynamically(page):
             break
     
     # ===== STEP 7: Final checkbox/agreement check =====
-    # Some checkboxes (like delegation terms) only appear after delegation is enabled
-    # Re-check ALL checkboxes and check any unchecked ones
+    # Re-check ALL checkboxes EXCEPT authorizeOther
     try:
         page.evaluate("""() => {
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             for (const cb of checkboxes) {
                 if (cb.offsetParent === null) continue;
+                const cbName = (cb.name || '').toLowerCase();
+                const cbId = (cb.id || '').toLowerCase();
+                // Skip authorizeOther - opens commissioner section
+                if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
+                    cbName.includes('authorize') || cbId.includes('authorize')) {
+                    // If it's already checked, UNCHECK it to close commissioner section
+                    if (cb.checked) {
+                        cb.click();
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    continue;
+                }
                 if (!cb.checked) {
                     cb.click();
                     cb.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1360,7 +1554,7 @@ def fill_form_dynamically(page):
                 }
             }
         }""")
-        print(f"    \u2705 Final checkbox re-check done", flush=True)
+        print(f"    \u2705 Final checkbox re-check done (authorizeOther unchecked)", flush=True)
     except:
         pass
     
@@ -1431,51 +1625,222 @@ def fill_form_dynamically(page):
         pass
     
     # ===== STEP 7c: Fix MUI DatePicker for commissioner-date =====
-    # MUI DatePicker inputs don't accept regular typing - use JS to set value directly
+    # MUI DatePicker inputs don't accept regular typing - need multi-approach strategy
     try:
         birth_year = random.randint(1970, 2000)
-        birth_month = f"{random.randint(1, 12):02d}"
-        birth_day = f"{random.randint(1, 28):02d}"
-        birth_date = f"{birth_month}/{birth_day}/{birth_year}"
+        birth_month = random.randint(1, 12)
+        birth_day = random.randint(1, 28)
+        birth_date_slash = f"{birth_month:02d}/{birth_day:02d}/{birth_year}"  # MM/DD/YYYY
+        birth_date_dash = f"{birth_year}-{birth_month:02d}-{birth_day:02d}"  # YYYY-MM-DD
+        birth_date_display = f"{birth_day:02d}/{birth_month:02d}/{birth_year}"  # DD/MM/YYYY (Arabic format)
         
-        date_fixed = page.evaluate("""(birthDate) => {
+        print(f"    \U0001f4c5 STEP 7c: Fixing commissioner-date with date {birth_date_slash}", flush=True)
+        
+        # APPROACH 1: Find all date-related inputs and try JS nativeInputValueSetter
+        date_fixed = page.evaluate("""(dates) => {
             const results = [];
-            // Find commissioner-date input
-            const dateInputs = document.querySelectorAll('input[name*="commissioner-date"], input[name*="commissioner_date"]');
-            for (const inp of dateInputs) {
-                if (inp.offsetParent === null) continue;
-                const currentVal = inp.value;
-                if (currentVal.includes('2026') || currentVal.includes('2025') || currentVal.includes('2024')) {
-                    // Use React's nativeInputValueSetter to bypass read-only
-                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    nativeInputValueSetter.call(inp, birthDate);
-                    inp.dispatchEvent(new Event('input', { bubbles: true }));
-                    inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+            // Broad search for date inputs - commissioner-date, any date input, MUI DatePicker
+            const selectors = [
+                'input[name*="commissioner-date"]', 'input[name*="commissioner_date"]',
+                'input[id*="commissioner-date"]', 'input[id*="commissioner_date"]',
+                'input[name*="date"][type="text"]',
+                '.MuiInputBase-input[type="text"]',
+                'input[placeholder*="/"]',
+                'input[aria-label*="date"]', 'input[aria-label*="تاريخ"]'
+            ];
+            
+            for (const sel of selectors) {
+                const inputs = document.querySelectorAll(sel);
+                for (const inp of inputs) {
+                    if (inp.offsetParent === null) continue;
+                    // Skip if already successfully filled with our date
+                    if (inp.value === dates.slash || inp.value === dates.dash || inp.value === dates.display) continue;
                     
-                    // Also try React fiber approach
-                    const key = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                    if (key) {
-                        const fiber = inp[key];
-                        if (fiber && fiber.memoizedProps && fiber.memoizedProps.onChange) {
-                            fiber.memoizedProps.onChange({ target: { value: birthDate } });
-                        }
+                    const oldVal = inp.value;
+                    
+                    // Try multiple date formats
+                    const formats = [dates.slash, dates.dash, dates.display];
+                    for (const fmt of formats) {
+                        try {
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(inp, fmt);
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                            
+                            // React fiber approach
+                            const key = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$') || k.startsWith('__reactProps$'));
+                            if (key) {
+                                const obj = inp[key];
+                                if (obj && obj.onChange) {
+                                    obj.onChange({ target: { value: fmt, name: inp.name || inp.id } });
+                                } else if (obj && obj.memoizedProps && obj.memoizedProps.onChange) {
+                                    obj.memoizedProps.onChange({ target: { value: fmt, name: inp.name || inp.id } });
+                                }
+                            }
+                            
+                            // Also try __reactProps$ directly
+                            const propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
+                            if (propsKey && inp[propsKey] && inp[propsKey].onChange) {
+                                inp[propsKey].onChange({ target: { value: fmt, name: inp.name || inp.id } });
+                            }
+                            
+                            inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                            
+                            if (inp.value && inp.value.length >= 6) {
+                                results.push({ selector: sel, old: oldVal, new: inp.value, format: fmt, name: inp.name || inp.id });
+                                break;  // This format worked
+                            }
+                        } catch(e) {}
                     }
-                    
-                    results.push({ old: currentVal, new: inp.value, birthDate: birthDate });
                 }
             }
             return results;
-        }""", birth_date)
+        }""", {'slash': birth_date_slash, 'dash': birth_date_dash, 'display': birth_date_display})
         
         if date_fixed and len(date_fixed) > 0:
             for df in date_fixed:
-                print(f"    \u2705 Commissioner date: {df.get('old','')} -> {df.get('new','')} (target: {birth_date})", flush=True)
+                print(f"    \u2705 Date JS fix: {df.get('name','')} {df.get('old','')} -> {df.get('new','')} (fmt: {df.get('format','')})", flush=True)
                 filled += 1
         else:
-            print(f"    \u26a0\ufe0f No commissioner-date inputs found to fix", flush=True)
+            print(f"    \u26a0\ufe0f JS approach found no date inputs, trying Playwright click approach...", flush=True)
+        
+        # APPROACH 2: Try clicking the calendar icon/button to open MUI DatePicker popup
+        try:
+            # Look for calendar icon buttons near date inputs
+            calendar_btns = page.locator('button[aria-label*="calendar"], button[aria-label*="Choose date"], button[aria-label*="تقويم"], button.MuiIconButton-root svg[data-testid="CalendarIcon"], .MuiInputAdornment-root button, button[aria-label*="date"]')
+            cal_count = calendar_btns.count()
+            if cal_count > 0:
+                print(f"    \U0001f4c5 Found {cal_count} calendar buttons, clicking first one...", flush=True)
+                calendar_btns.first.click(timeout=3000)
+                time.sleep(1)
+                
+                # Now look for day cells in the popup and click a random valid day
+                day_cells = page.locator('button.MuiPickersDay-root:not(.Mui-disabled), td[role="gridcell"] button:not([disabled]), .MuiDayCalendar-weekContainer button:not(.Mui-disabled)')
+                day_count = day_cells.count()
+                if day_count > 0:
+                    random_day = random.randint(0, min(day_count - 1, 20))
+                    day_cells.nth(random_day).click(timeout=2000)
+                    print(f"    \u2705 Clicked day {random_day} in calendar popup", flush=True)
+                    filled += 1
+                    time.sleep(0.5)
+                    
+                    # Click OK/Accept button if present
+                    try:
+                        ok_btn = page.locator('button:has-text("OK"), button:has-text("موافق"), button:has-text("Accept"), .MuiDialogActions-root button')
+                        if ok_btn.count() > 0:
+                            ok_btn.first.click(timeout=2000)
+                            time.sleep(0.3)
+                    except:
+                        pass
+                else:
+                    print(f"    \u26a0\ufe0f Calendar popup opened but no day cells found", flush=True)
+                    # Close popup by pressing Escape
+                    page.keyboard.press('Escape')
+            else:
+                print(f"    \u26a0\ufe0f No calendar buttons found", flush=True)
+        except Exception as cal_e:
+            print(f"    \u26a0\ufe0f Calendar click approach: {str(cal_e)[:60]}", flush=True)
+        
+        # APPROACH 3: Try direct Playwright interaction with the date input
+        try:
+            date_input = page.locator('input[name*="commissioner-date"], input[name*="commissioner_date"], input[id*="commissioner-date"]').first
+            if date_input.count() > 0 and date_input.is_visible():
+                # Try triple-click to select all, then type
+                date_input.click(click_count=3, timeout=3000)
+                time.sleep(0.3)
+                page.keyboard.type(birth_date_slash, delay=50)
+                page.keyboard.press('Tab')
+                time.sleep(0.3)
+                print(f"    \u2705 Date typed via Playwright: {birth_date_slash}", flush=True)
+                filled += 1
+        except Exception as pw_e:
+            print(f"    \u26a0\ufe0f Playwright type approach: {str(pw_e)[:60]}", flush=True)
+            
     except Exception as de:
         print(f"    \u26a0\ufe0f Commissioner date error: {str(de)[:60]}", flush=True)
+    
+    # ===== STEP 7d: Solve captcha using CapSolver =====
+    try:
+        # Check if there's a captcha field on the page
+        has_captcha = page.evaluate("""() => {
+            const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
+            return inp ? { name: inp.name, id: inp.id, value: inp.value } : null;
+        }""")
+        
+        if has_captcha:
+            print(f"    \U0001f510 STEP 7d: Captcha field found (name={has_captcha.get('name','')}, current='{has_captcha.get('value','')}')", flush=True)
+            
+            # Solve the captcha image
+            solved = solve_captcha_image(page)
+            
+            if solved and len(solved) >= 2:
+                # Fill the captcha field with solved text using React-compatible method
+                captcha_filled = page.evaluate("""(solvedText) => {
+                    const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
+                    if (!inp) return false;
+                    
+                    // Clear and set value using nativeInputValueSetter
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeInputValueSetter.call(inp, solvedText);
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    // React props approach
+                    const propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && inp[propsKey] && inp[propsKey].onChange) {
+                        inp[propsKey].onChange({ target: { value: solvedText, name: inp.name || inp.id } });
+                    }
+                    
+                    // React fiber approach
+                    const fiberKey = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        const fiber = inp[fiberKey];
+                        if (fiber && fiber.memoizedProps && fiber.memoizedProps.onChange) {
+                            fiber.memoizedProps.onChange({ target: { value: solvedText, name: inp.name || inp.id } });
+                        }
+                    }
+                    
+                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return inp.value === solvedText;
+                }""", solved)
+                
+                if captcha_filled:
+                    print(f"    \u2705 Captcha solved and filled: '{solved}'", flush=True)
+                    filled += 1
+                else:
+                    # Fallback: try Playwright direct typing
+                    try:
+                        captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
+                        if captcha_el.is_visible():
+                            captcha_el.click(timeout=3000)
+                            time.sleep(0.2)
+                            captcha_el.press('Control+a')
+                            time.sleep(0.1)
+                            captcha_el.type(solved, delay=50)
+                            captcha_el.press('Tab')
+                            print(f"    \u2705 Captcha typed via Playwright: '{solved}'", flush=True)
+                            filled += 1
+                    except Exception as pw_e:
+                        print(f"    \u26a0\ufe0f Captcha Playwright fallback: {str(pw_e)[:50]}", flush=True)
+            else:
+                # Fallback: fill with random 4 digits if CapSolver fails
+                fallback = str(random.randint(1000, 9999))
+                print(f"    \u26a0\ufe0f CapSolver failed, using random fallback: {fallback}", flush=True)
+                try:
+                    captcha_el = page.locator('input[name="captcha"], input[id="captcha"]').first
+                    if captcha_el.is_visible():
+                        captcha_el.click(timeout=3000)
+                        time.sleep(0.2)
+                        captcha_el.press('Control+a')
+                        time.sleep(0.1)
+                        captcha_el.type(fallback, delay=50)
+                        captcha_el.press('Tab')
+                except:
+                    pass
+        else:
+            print(f"    \u2705 No captcha field found (not needed)", flush=True)
+    except Exception as cap_e:
+        print(f"    \u26a0\ufe0f Captcha step error: {str(cap_e)[:60]}", flush=True)
     
     # Scroll down to make sure everything is visible
     try:
