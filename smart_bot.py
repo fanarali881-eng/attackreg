@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v57 - Use Playwright fill() + React fiber for all fields (including selects)
+Smart Universal Form Bot v58 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1736,6 +1736,33 @@ def fill_form_dynamically(page):
     except:
         pass
     
+    # ===== STEP 3b: Force-uncheck delegateInspection if it got checked =====
+    try:
+        page.evaluate("""() => {
+            const cb = document.querySelector('#delegateInspection, input[id*="delegate"], input[name*="delegate"]');
+            if (cb && cb.checked) {
+                cb.click();
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                cb.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            // Also uncheck via Playwright-style for shadcn buttons
+            const btns = document.querySelectorAll('button.peer, button[role="checkbox"]');
+            for (const btn of btns) {
+                const bid = (btn.id || '').toLowerCase();
+                const bname = (btn.name || '').toLowerCase();
+                const parentText = (btn.parentElement ? btn.parentElement.textContent : '').toLowerCase();
+                if (bid.includes('delegate') || bname.includes('delegate') || parentText.includes('تفويض')) {
+                    const state = btn.getAttribute('data-state') || btn.getAttribute('aria-checked') || '';
+                    if (state === 'checked' || state === 'true') {
+                        btn.click();
+                    }
+                }
+            }
+        }""")
+        print(f"    \u2705 delegateInspection force-unchecked", flush=True)
+    except:
+        pass
+    
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
         try:
@@ -1830,49 +1857,93 @@ def fill_form_dynamically(page):
         page.evaluate("""() => {
             // Find any element containing attendance confirmation text
             const allElements = document.querySelectorAll('*');
+            let found = false;
             for (const el of allElements) {
                 const text = el.innerText || el.textContent || '';
                 if (text.includes('الحضور على الموعد') || text.includes('الحضور علي الموعد')) {
-                    // Try to find and click a checkbox near this element
-                    const parent = el.closest('label, div, span');
-                    if (parent) {
+                    // Try multiple parent levels to find the checkbox
+                    let searchEl = el;
+                    for (let i = 0; i < 5 && !found; i++) {
+                        const parent = searchEl.closest('label, div, span, fieldset, li');
+                        if (!parent) break;
+                        // Try input checkbox
                         const cb = parent.querySelector('input[type="checkbox"]');
                         if (cb && !cb.checked) {
                             cb.click();
                             cb.dispatchEvent(new Event('change', { bubbles: true }));
                             cb.dispatchEvent(new Event('input', { bubbles: true }));
-                            break;
+                            found = true; break;
                         }
-                        // Maybe the parent itself is clickable
-                        const clickable = parent.querySelector('[role="checkbox"], .checkbox, .MuiCheckbox-root, svg');
+                        // Try shadcn button.peer checkbox
+                        const peerBtn = parent.querySelector('button.peer, button[role="checkbox"]');
+                        if (peerBtn) {
+                            const state = peerBtn.getAttribute('data-state') || peerBtn.getAttribute('aria-checked') || '';
+                            if (state !== 'checked' && state !== 'true') {
+                                peerBtn.click();
+                                found = true; break;
+                            }
+                        }
+                        // Try any clickable checkbox-like element
+                        const clickable = parent.querySelector('[role="checkbox"], .checkbox, .MuiCheckbox-root, svg.lucide-check, svg.lucide-square');
                         if (clickable) {
                             clickable.click();
-                            break;
+                            found = true; break;
                         }
+                        searchEl = parent.parentElement;
+                        if (!searchEl) break;
                     }
-                    // Try clicking the element itself or its parent
-                    el.click();
+                    if (!found) {
+                        // Last resort: click the text element itself
+                        el.click();
+                    }
                     break;
                 }
             }
             // Also try: find any unchecked checkbox near red error text
-            const errors = document.querySelectorAll('.text-red-500, .text-red-600');
+            const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-destructive');
             for (const err of errors) {
-                const parent = err.closest('div, label, fieldset');
+                const errText = err.innerText || '';
+                if (!errText.includes('الحضور')) continue;
+                const parent = err.closest('div, label, fieldset, li');
                 if (parent) {
                     const cb = parent.querySelector('input[type="checkbox"]:not(:checked)');
                     if (cb) {
                         cb.click();
                         cb.dispatchEvent(new Event('change', { bubbles: true }));
                     }
-                    const muiCb = parent.querySelector('[role="checkbox"], .MuiCheckbox-root');
-                    if (muiCb) {
-                        muiCb.click();
+                    const peerBtn = parent.querySelector('button.peer, button[role="checkbox"]');
+                    if (peerBtn) {
+                        const state = peerBtn.getAttribute('data-state') || '';
+                        if (state !== 'checked') peerBtn.click();
                     }
                 }
             }
         }""")
         print(f"    \u2705 Attendance confirmation check done", flush=True)
+    except:
+        pass
+    
+    # ===== STEP 7b2: Use Playwright to click attendance checkbox directly =====
+    try:
+        # Try finding the attendance text and clicking the nearest checkbox via Playwright
+        attendance_label = page.locator('text=الحضور على الموعد').first
+        if attendance_label.is_visible():
+            # Look for a peer button or checkbox in the parent
+            parent = attendance_label.locator('xpath=ancestor::div[1]')
+            peer_btn = parent.locator('button.peer, button[role="checkbox"]')
+            if peer_btn.count() > 0:
+                state = peer_btn.first.get_attribute('data-state') or ''
+                if state != 'checked':
+                    peer_btn.first.click()
+                    time.sleep(0.3)
+                    print(f"    \u2705 Attendance checkbox clicked via Playwright (peer btn)", flush=True)
+            else:
+                # Try input checkbox
+                cb = parent.locator('input[type="checkbox"]')
+                if cb.count() > 0 and not cb.first.is_checked():
+                    cb.first.click()
+                    time.sleep(0.3)
+                    print(f"    \u2705 Attendance checkbox clicked via Playwright (input)", flush=True)
     except:
         pass
     
