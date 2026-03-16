@@ -2670,6 +2670,101 @@ def fill_form_dynamically(page):
     except Exception as area_e:
         print(f"    \u26a0\ufe0f STEP 7f area error: {str(area_e)[:60]}", flush=True)
     
+    # ===== STEP 7g: Fill commissioner fields (they appear late in the form) =====
+    try:
+        delegate_cb = page.locator('#delegateInspection')
+        if delegate_cb.count() > 0 and delegate_cb.first.is_checked():
+            print(f"    \U0001f465 STEP 7g: Delegate is checked - filling commissioner fields...", flush=True)
+            
+            comm_name = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
+            comm_phone = gen_saudi_phone()
+            comm_id = gen_saudi_id()
+            
+            # Fill commissionerName
+            try:
+                name_el = page.locator('#commissionerName')
+                if name_el.count() > 0 and name_el.first.is_visible():
+                    name_el.first.click()
+                    time.sleep(0.2)
+                    name_el.first.fill(comm_name)
+                    time.sleep(0.3)
+                    print(f"      \u2705 commissionerName = {comm_name}", flush=True)
+                else:
+                    print(f"      \u274c commissionerName not visible", flush=True)
+            except Exception as e:
+                print(f"      \u26a0\ufe0f commissionerName: {str(e)[:50]}", flush=True)
+            
+            # Fill commissionerPhone
+            try:
+                phone_el = page.locator('#commissionerPhone')
+                if phone_el.count() > 0 and phone_el.first.is_visible():
+                    phone_el.first.click()
+                    time.sleep(0.2)
+                    phone_el.first.fill(comm_phone)
+                    time.sleep(0.3)
+                    print(f"      \u2705 commissionerPhone = {comm_phone}", flush=True)
+                else:
+                    print(f"      \u274c commissionerPhone not visible", flush=True)
+            except Exception as e:
+                print(f"      \u26a0\ufe0f commissionerPhone: {str(e)[:50]}", flush=True)
+            
+            # Fill commissionerIdNumber
+            try:
+                id_el = page.locator('#commissionerIdNumber')
+                if id_el.count() > 0 and id_el.first.is_visible():
+                    id_el.first.click()
+                    time.sleep(0.2)
+                    id_el.first.fill(comm_id)
+                    time.sleep(0.3)
+                    print(f"      \u2705 commissionerIdNumber = {comm_id}", flush=True)
+                else:
+                    print(f"      \u274c commissionerIdNumber not visible", flush=True)
+            except Exception as e:
+                print(f"      \u26a0\ufe0f commissionerIdNumber: {str(e)[:50]}", flush=True)
+            
+            # Click commissionerType-resident radio
+            try:
+                nat_radio = page.locator('#commissionerType-resident')
+                if nat_radio.count() > 0 and nat_radio.first.is_visible():
+                    nat_radio.first.check(force=True)
+                    time.sleep(0.3)
+                    print(f"      \u2705 commissionerType = resident", flush=True)
+                else:
+                    print(f"      \u274c commissionerType-resident not visible", flush=True)
+            except Exception as e:
+                print(f"      \u26a0\ufe0f commissionerType: {str(e)[:50]}", flush=True)
+            
+            # Check commissionerAcceptInput
+            try:
+                accept_cb = page.locator('#commissionerAcceptInput')
+                if accept_cb.count() > 0 and accept_cb.first.is_visible():
+                    if not accept_cb.first.is_checked():
+                        accept_cb.first.check(force=True)
+                        time.sleep(0.3)
+                    print(f"      \u2705 commissionerAcceptInput = checked", flush=True)
+                else:
+                    print(f"      \u274c commissionerAcceptInput not visible", flush=True)
+            except Exception as e:
+                print(f"      \u26a0\ufe0f commissionerAcceptInput: {str(e)[:50]}", flush=True)
+            
+            # Verify values stuck
+            try:
+                verify = page.evaluate("""() => {
+                    const n = document.getElementById('commissionerName');
+                    const p = document.getElementById('commissionerPhone');
+                    const i = document.getElementById('commissionerIdNumber');
+                    return 'name=' + (n ? n.value.substring(0, 10) : 'N/A') + 
+                           ' phone=' + (p ? p.value.substring(0, 10) : 'N/A') + 
+                           ' id=' + (i ? i.value.substring(0, 10) : 'N/A');
+                }""")
+                print(f"      [VERIFY] {verify}", flush=True)
+            except:
+                pass
+        else:
+            print(f"    \U0001f465 STEP 7g: Delegate not checked - skipping commissioner", flush=True)
+    except Exception as comm_e:
+        print(f"    \u26a0\ufe0f STEP 7g commissioner error: {str(comm_e)[:60]}", flush=True)
+    
     # Scroll to bottom to make submit button visible
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
