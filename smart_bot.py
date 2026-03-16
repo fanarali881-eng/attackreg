@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v53 - Use Playwright fill() + React fiber for all fields (including selects)
+Smart Universal Form Bot v56 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1655,8 +1655,8 @@ def fill_form_dynamically(page):
                     btn_id = btn.get_attribute('id') or ''
                     btn_name = btn.get_attribute('name') or ''
                     parent_text = btn.evaluate("el => (el.parentElement ? el.parentElement.textContent : '').substring(0, 100)")
-                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'تفويض' in parent_text:
-                        print(f"    ⏭️ Skipped authorizeOther peer checkbox #{i+1}", flush=True)
+                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'delegate' in btn_id.lower() or 'delegate' in btn_name.lower() or 'تفويض' in parent_text:
+                        print(f"    ⏭️ Skipped authorizeOther/delegate peer checkbox #{i+1}", flush=True)
                         continue
                     state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
                     if state != 'checked' and state != 'true':
@@ -1676,8 +1676,8 @@ def fill_form_dynamically(page):
                     btn_id = btn.get_attribute('id') or ''
                     btn_name = btn.get_attribute('name') or ''
                     parent_text = btn.evaluate("el => (el.parentElement ? el.parentElement.textContent : '').substring(0, 100)")
-                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'تفويض' in parent_text:
-                        print(f"    ⏭️ Skipped authorizeOther role checkbox #{i+1}", flush=True)
+                    if 'authorize' in btn_id.lower() or 'authorize' in btn_name.lower() or 'delegate' in btn_id.lower() or 'delegate' in btn_name.lower() or 'تفويض' in parent_text:
+                        print(f"    ⏭️ Skipped authorizeOther/delegate role checkbox #{i+1}", flush=True)
                         continue
                     state = btn.get_attribute('data-state') or btn.get_attribute('aria-checked') or ''
                     if state != 'checked' and state != 'true':
@@ -1720,9 +1720,10 @@ def fill_form_dynamically(page):
                 if (cb.offsetParent === null) continue;
                 const cbName = (cb.name || '').toLowerCase();
                 const cbId = (cb.id || '').toLowerCase();
-                // Skip authorizeOther checkbox - it opens commissioner section
+                // Skip authorizeOther/delegateInspection checkbox - it opens commissioner section
                 if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
-                    cbName.includes('authorize') || cbId.includes('authorize')) {
+                    cbName.includes('authorize') || cbId.includes('authorize') ||
+                    cbName.includes('delegate') || cbId.includes('delegate')) {
                     continue;
                 }
                 if (!cb.checked) {
@@ -1776,9 +1777,10 @@ def fill_form_dynamically(page):
                 if (cb.offsetParent === null) continue;
                 const cbName = (cb.name || '').toLowerCase();
                 const cbId = (cb.id || '').toLowerCase();
-                // Skip authorizeOther - opens commissioner section
+                // Skip authorizeOther/delegateInspection - opens commissioner section
                 if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
-                    cbName.includes('authorize') || cbId.includes('authorize')) {
+                    cbName.includes('authorize') || cbId.includes('authorize') ||
+                    cbName.includes('delegate') || cbId.includes('delegate')) {
                     // If it's already checked, UNCHECK it to close commissioner section
                     if (cb.checked) {
                         // Just click to toggle off (don't set checked=false first, click toggles it)
@@ -1892,7 +1894,9 @@ def fill_form_dynamically(page):
             // NARROW search - ONLY commissioner-date inputs
             const selectors = [
                 'input[name="commissioner-date"]', 'input[name="commissioner_date"]',
-                'input[id="commissioner-date"]', 'input[id="commissioner_date"]'
+                'input[id="commissioner-date"]', 'input[id="commissioner_date"]',
+                'input[id="commissionerDob"]', 'input[name="commissionerDob"]',
+                'input[id*="commissioner"][type="date"]'
             ];
             
             for (const sel of selectors) {
@@ -1997,7 +2001,7 @@ def fill_form_dynamically(page):
         
         # APPROACH 3: Try direct Playwright interaction with the date input
         try:
-            date_input = page.locator('input[name*="commissioner-date"], input[name*="commissioner_date"], input[id*="commissioner-date"]').first
+            date_input = page.locator('input[name*="commissioner-date"], input[name*="commissioner_date"], input[id*="commissioner-date"], input[id="commissionerDob"], input[id*="commissioner"][type="date"]').first
             if date_input.count() > 0 and date_input.is_visible():
                 # Try triple-click to select all, then type
                 date_input.click(click_count=3, timeout=3000)
@@ -3170,10 +3174,17 @@ def handle_next_pages(page, max_pages=8, data=None):
                 # Re-check attendance confirmation and any unchecked checkboxes
                 try:
                     page.evaluate("""() => {
-                        // Check all unchecked checkboxes
+                        // Check all unchecked checkboxes (skip delegate/authorize)
                         const checkboxes = document.querySelectorAll('input[type="checkbox"]');
                         for (const cb of checkboxes) {
                             if (cb.offsetParent === null) continue;
+                            const cbName = (cb.name || '').toLowerCase();
+                            const cbId = (cb.id || '').toLowerCase();
+                            if (cbName.includes('authorize') || cbId.includes('authorize') ||
+                                cbName.includes('delegate') || cbId.includes('delegate')) {
+                                if (cb.checked) { cb.click(); cb.dispatchEvent(new Event('change', { bubbles: true })); }
+                                continue;
+                            }
                             if (!cb.checked) {
                                 cb.click();
                                 cb.dispatchEvent(new Event('change', { bubbles: true }));
