@@ -2612,7 +2612,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v40 (SPA-Fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v41 (Mobile-Mode) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -2631,28 +2631,21 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                 browser = p.chromium.launch(headless=False, args=browser_args)
 
-                # Detect if target is a manus.space site (needs mobile emulation)
+                # Detect if target is a manus.space site (needs local file serving)
                 is_manus_space = 'manus.space' in target_url.lower()
 
-                if is_manus_space:
-                    context_opts = {
-                        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                        'viewport': {'width': 390, 'height': 844},
-                        'device_scale_factor': 3,
-                        'is_mobile': True,
-                        'has_touch': True,
-                        'locale': 'ar-SA',
-                        'timezone_id': 'Asia/Riyadh',
-                        'ignore_https_errors': True,
-                    }
-                    print('  📱 Mobile mode (manus.space detected)')
-                else:
-                    context_opts = {
-                        'viewport': {'width': 1280, 'height': 720},
-                        'locale': 'en-US',
-                        'timezone_id': 'Asia/Riyadh',
-                        'ignore_https_errors': True,
-                    }
+                # Always use mobile emulation - most target sites require mobile UA
+                context_opts = {
+                    'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                    'viewport': {'width': 390, 'height': 844},
+                    'device_scale_factor': 3,
+                    'is_mobile': True,
+                    'has_touch': True,
+                    'locale': 'ar-SA',
+                    'timezone_id': 'Asia/Riyadh',
+                    'ignore_https_errors': True,
+                }
+                print('  📱 Mobile mode enabled')
 
                 if proxy_config:
                     context_opts['proxy'] = proxy_config
@@ -3164,4 +3157,3 @@ if __name__ == '__main__':
     duration = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     instances = int(sys.argv[3]) if len(sys.argv) > 3 else 3
     run_smart_bot(target_url=url, duration_min=duration, num_instances=instances)
-// v40.1
