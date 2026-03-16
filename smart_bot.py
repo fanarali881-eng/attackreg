@@ -16,7 +16,9 @@ import re
 import subprocess
 import mimetypes
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
+import urllib.request
+import ssl
 
 os.environ.setdefault('DISPLAY', ':99')
 os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
@@ -2311,8 +2313,11 @@ def is_registration_form(page):
         return False
 
 
-def find_booking_page(page, target_url):
-    """Navigate to the booking/registration form by clicking booking button first"""
+def find_booking_page(page, target_url, api_bypass_setup=None, api_bypass_active_ref=None):
+    """Navigate to the booking/registration form by clicking booking button first
+    api_bypass_setup: callable(page, site_origin) to set up API route interception
+    api_bypass_active_ref: list with single bool [True/False] to check if bypass is active
+    """
     
     # Check if already on a registration form
     if is_registration_form(page):
@@ -2356,13 +2361,42 @@ def find_booking_page(page, target_url):
                 reason = f'SPA not loaded (fields={visible_fields}, text_len={page_text_len})'
             print(f"  \u26a0\ufe0f Site issue detected ({reason}) - retrying...", flush=True)
             
-            max_retries = 2 if spa_empty_root and page_text_len == 0 else 4
+            # Smart: if SPA shows 404 or empty, try setting up API bypass and reload with ?googleall=1
+            _api_bypass_attempted = False
+            
+            max_retries = 4
             for retry in range(max_retries):
-                time.sleep(5)
-                try:
-                    page.reload(timeout=30000, wait_until='domcontentloaded')
-                except:
-                    pass
+                # On first retry: set up API bypass if available and reload with ?googleall=1
+                if retry == 0 and not _api_bypass_attempted:
+                    _api_bypass_attempted = True
+                    try:
+                        # Try to set up API route interception (defined in main loop)
+                        if '_setup_api_bypass' in dir() or '_setup_api_bypass' in locals().get('__builtins__', {}):
+                            pass  # Will be called from the outer scope
+                    except:
+                        pass
+                    # Reload with ?googleall=1 to bypass referrer checks
+                    current_url = page.url
+                    parsed_url = urlparse(current_url)
+                    if 'googleall' not in (parsed_url.query or ''):
+                        new_url = current_url.split('?')[0].rstrip('/') + '/?googleall=1'
+                        print(f"  \U0001f504 Retrying with ?googleall=1: {new_url}", flush=True)
+                        try:
+                            page.goto(new_url, timeout=30000, wait_until='domcontentloaded')
+                        except:
+                            pass
+                    else:
+                        try:
+                            page.reload(timeout=30000, wait_until='domcontentloaded')
+                        except:
+                            pass
+                else:
+                    time.sleep(5)
+                    try:
+                        page.reload(timeout=30000, wait_until='domcontentloaded')
+                    except:
+                        pass
+                
                 time.sleep(8)  # Wait longer for SPA + API
                 bypass_cloudflare(page, max_wait=15)
                 time.sleep(3)
@@ -2387,7 +2421,19 @@ def find_booking_page(page, target_url):
                     print(f"  \u23f3 SPA still empty after retry {retry+1} (API likely blocked)", flush=True)
                     continue
                 
-                if not still_unavailable and len(page_text.strip()) > 0:
+                # Check for 404 page - might need API bypass
+                is_404 = '404' in page_text and 'not found' in page_text.lower()
+                is_bypass_active = api_bypass_active_ref[0] if api_bypass_active_ref else False
+                if is_404 and not is_bypass_active and api_bypass_setup:
+                    print(f"  \u26a0\ufe0f 404 detected - SPA routing issue, trying API bypass...", flush=True)
+                    # Try to set up API bypass now that the page has loaded
+                    try:
+                        api_bypass_setup(page, target_url)
+                    except Exception as e:
+                        print(f"  \u26a0\ufe0f API bypass setup failed: {e}", flush=True)
+                    continue  # Retry with API bypass active
+                
+                if not still_unavailable and len(page_text.strip()) > 0 and not is_404:
                     # Check if form appeared
                     new_fields = page.evaluate("""() => {
                         const inputs = document.querySelectorAll('input:not([type="hidden"])');
@@ -2626,7 +2672,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v41 (Mobile-Mode) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v42 (Mobile+API-Bypass) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -2740,11 +2786,118 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.route('**/*', _manus_route_handler)
                         print('  📦 Local file serving enabled for manus.space', flush=True)
 
+                    # Smart API bypass: intercept CORS-blocked API calls and proxy them server-side
+                    # This is needed for SPA sites where the external API is behind Cloudflare
+                    _api_bypass_active = False
+                    if not is_manus_space and proxy_config:
+                        def _setup_api_bypass(page, site_origin):
+                            """Detect external API domain from page JS and set up route interception"""
+                            nonlocal _api_bypass_active
+                            try:
+                                # Find external API domains from the page's JS
+                                api_domains = page.evaluate("""() => {
+                                    const scripts = document.querySelectorAll('script[src]');
+                                    const domains = new Set();
+                                    // Check performance entries for external API calls
+                                    if (window.performance) {
+                                        performance.getEntriesByType('resource').forEach(e => {
+                                            try {
+                                                const u = new URL(e.name);
+                                                if (u.origin !== window.location.origin && 
+                                                    !u.hostname.includes('google') && 
+                                                    !u.hostname.includes('cloudflare') &&
+                                                    !u.hostname.includes('cdn') &&
+                                                    (u.pathname.includes('/api/') || u.pathname.includes('/user/'))) {
+                                                    domains.add(u.hostname);
+                                                }
+                                            } catch {}
+                                        });
+                                    }
+                                    return Array.from(domains);
+                                }""")
+                                if not api_domains:
+                                    # Fallback: scan page source for common API patterns
+                                    try:
+                                        html = page.content()
+                                        import re as _re
+                                        # Look for domains in JS that look like API servers
+                                        found = _re.findall(r'https?://([a-zA-Z0-9_-]+\.(?:cc|io|app|dev|xyz|com))', html)
+                                        for d in found:
+                                            if d != urlparse(site_origin).netloc and 'google' not in d and 'cloudflare' not in d:
+                                                api_domains.append(d)
+                                    except:
+                                        pass
+                                if api_domains:
+                                    print(f"  🔌 Detected external API domains: {api_domains}", flush=True)
+                                    proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                                    
+                                    def _api_route_handler(route):
+                                        url = route.request.url
+                                        method = route.request.method
+                                        # Handle OPTIONS preflight
+                                        if method == 'OPTIONS':
+                                            route.fulfill(status=204, headers={
+                                                'access-control-allow-origin': '*',
+                                                'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+                                                'access-control-allow-headers': '*',
+                                                'access-control-max-age': '86400',
+                                            })
+                                            return
+                                        # Proxy the actual request
+                                        try:
+                                            headers = dict(route.request.headers)
+                                            body = route.request.post_data
+                                            # Remove browser-only headers
+                                            for h in list(headers.keys()):
+                                                if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
+                                                    del headers[h]
+                                            
+                                            # Use urllib with proxy
+                                            proxy_handler = urllib.request.ProxyHandler({
+                                                'http': proxy_url,
+                                                'https': proxy_url,
+                                            })
+                                            ctx = ssl.create_default_context()
+                                            ctx.check_hostname = False
+                                            ctx.verify_mode = ssl.CERT_NONE
+                                            opener = urllib.request.build_opener(
+                                                proxy_handler,
+                                                urllib.request.HTTPSHandler(context=ctx)
+                                            )
+                                            data = body.encode('utf-8') if isinstance(body, str) else body
+                                            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+                                            resp = opener.open(req, timeout=20)
+                                            resp_body = resp.read()
+                                            resp_status = resp.status
+                                            resp_ct = resp.headers.get('content-type', 'application/json')
+                                            
+                                            route.fulfill(status=resp_status, headers={
+                                                'access-control-allow-origin': '*',
+                                                'content-type': resp_ct,
+                                            }, body=resp_body)
+                                        except Exception as proxy_err:
+                                            print(f"  ⚠️ API proxy error: {proxy_err}", flush=True)
+                                            route.continue_()
+                                    
+                                    for domain in api_domains:
+                                        page.route(f'**/{domain}/**', _api_route_handler)
+                                    _api_bypass_active = True
+                                    print(f"  🔌 API bypass enabled for {len(api_domains)} domain(s)", flush=True)
+                            except Exception as e:
+                                print(f"  ⚠️ API bypass setup error: {e}", flush=True)
+
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
-                        print(f"  🌐 Opening {target_url}...", flush=True)
+                        # Add ?googleall=1 to bypass referrer checks on protected SPA sites
+                        nav_url = target_url
+                        parsed = urlparse(target_url)
+                        if not parsed.query:
+                            nav_url = target_url.rstrip('/') + '/?googleall=1'
+                        elif 'googleall' not in parsed.query:
+                            nav_url = target_url + ('&' if '?' in target_url else '?') + 'googleall=1'
+                        print(f"  🌐 Opening {nav_url}...", flush=True)
                         try:
-                            page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
+                            page.goto(nav_url, timeout=60000, wait_until='domcontentloaded')
                         except:
                             pass
 
@@ -2758,7 +2911,11 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         time.sleep(2)
 
                         # Find the booking/form page dynamically
-                        find_booking_page(page, target_url)
+                        _api_bypass_ref = [_api_bypass_active]
+                        find_booking_page(page, target_url, 
+                                        api_bypass_setup=_setup_api_bypass if (not is_manus_space and proxy_config) else None,
+                                        api_bypass_active_ref=_api_bypass_ref)
+                        _api_bypass_active = _api_bypass_ref[0]
                         time.sleep(3)
 
                         # Fill form dynamically
