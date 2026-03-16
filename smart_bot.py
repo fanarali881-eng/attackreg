@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v46 - React state fix + nativeInputValueSetter for form validation
+Smart Universal Form Bot v47 - React state fix for form + payment fields
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -2199,28 +2199,64 @@ def fill_payment(page):
                     aria = (inp.get_attribute('aria-label') or '').lower()
                     clues = f"{ph} {name} {iid} {ac} {aria}"
                     
-                    if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'pan', '1234', 'رقم البطاقة', 'card_number', 'cardno']):
+                    if any(kw in clues for kw in ['card number', 'cardnumber', 'cc-number', 'pan', '1234', 'رقم البطاقة', 'card_number', 'cardno', 'card-number']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill('')
                         for ch in card_num:
                             inp.type(ch, delay=random.randint(40, 100))
+                        # Fix React state
+                        try:
+                            inp.evaluate("""(el, val) => {
+                                const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                s.call(el, val);
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
+                            }""", card_num)
+                        except: pass
+                        inp.press('Tab')
                         filled += 1
                         print(f"    ✅ رقم البطاقة: {card_num[:4]}****{card_num[-4:]}", flush=True)
                     
-                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder', 'cardname', 'nameoncard', 'name_on_card']):
+                    elif any(kw in clues for kw in ['holder', 'cardholder', 'name on', 'cc-name', 'حامل', 'الاسم كما', 'card_holder', 'cardname', 'nameoncard', 'name_on_card', 'card-holder', 'الأسم على', 'الاسم على']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill(holder)
+                        # Fix React state
+                        try:
+                            inp.evaluate("""(el, val) => {
+                                const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                s.call(el, val);
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
+                            }""", holder)
+                        except: pass
+                        inp.press('Tab')
                         filled += 1
                         print(f"    ✅ حامل البطاقة: {holder}", flush=True)
                     
-                    elif any(kw in clues for kw in ['cvv', 'cvc', 'security', 'cc-csc', 'رمز الأمان', 'csv', '123']):
+                    elif any(kw in clues for kw in ['cvv', 'cvc', 'security', 'cc-csc', 'رمز الأمان', 'csv', '123', 'card-cvv']):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill('')
                         for ch in cvv:
                             inp.type(ch, delay=random.randint(40, 100))
+                        # Fix React state
+                        try:
+                            inp.evaluate("""(el, val) => {
+                                const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                s.call(el, val);
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
+                            }""", cvv)
+                        except: pass
+                        inp.press('Tab')
                         filled += 1
                         print(f"    ✅ CVV: ***", flush=True)
                     
@@ -3289,7 +3325,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v46 (React-Fix+Payment) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v47 (React-Fix+Payment) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
