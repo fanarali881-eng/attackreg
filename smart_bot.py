@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v60 - Fix submit button visibility, delegate checkbox, commissioner fields
+Smart Universal Form Bot v61 - Fill ALL commissioner fields: name/phone/ID/nationality/consent + attendance fix
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -1829,6 +1829,113 @@ def fill_form_dynamically(page):
                 print(f"    \u2705 STEP 3c: {field_label} = {field_val[:20]}", flush=True)
         except Exception as cf_e:
             print(f"    \u26a0\ufe0f STEP 3c {field_label}: {str(cf_e)[:60]}", flush=True)
+    
+    # ===== STEP 3d: Click commissioner nationality button =====
+    try:
+        # Try clicking the radio input first (real site uses radio inputs)
+        nat_radio = page.locator('#commissionerType-resident')
+        if nat_radio.count() > 0 and nat_radio.first.is_visible():
+            nat_radio.first.check(force=True)
+            time.sleep(0.3)
+            print(f"    \u2705 STEP 3d: Nationality radio checked (resident)", flush=True)
+        else:
+            # Try button click (fahos_dist uses buttons)
+            nat_clicked = page.evaluate("""() => {
+                // Try buttons with text 'مواطن / مقيم'
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    if (btn.innerText.includes('مواطن / مقيم') || btn.innerText.includes('مواطن/مقيم')) {
+                        btn.click();
+                        return 'clicked_button';
+                    }
+                }
+                // Try radio inputs
+                const radios = document.querySelectorAll('input[type="radio"]');
+                for (const r of radios) {
+                    const label = r.closest('label, div');
+                    if (label && (label.textContent.includes('مواطن') || r.id.includes('resident'))) {
+                        r.click();
+                        r.dispatchEvent(new Event('change', { bubbles: true }));
+                        return 'clicked_radio';
+                    }
+                }
+                return 'not_found';
+            }""")
+            print(f"    \u2705 STEP 3d: Nationality = {nat_clicked}", flush=True)
+    except Exception as nat_e:
+        print(f"    \u26a0\ufe0f STEP 3d nationality: {str(nat_e)[:60]}", flush=True)
+    
+    # ===== STEP 3e: Check commissioner consent checkbox =====
+    try:
+        consent_cb = page.locator('#commissionerAcceptInput')
+        if consent_cb.count() > 0 and consent_cb.first.is_visible():
+            if not consent_cb.first.is_checked():
+                consent_cb.first.check(force=True)
+                time.sleep(0.3)
+                # Also trigger React onChange via fiber
+                consent_cb.first.evaluate("""(el) => {
+                    let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = el[fiberKey];
+                        for (let i = 0; i < 20 && fiber; i++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                        currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                }""")
+                print(f"    \u2705 STEP 3e: Consent checkbox checked", flush=True)
+            else:
+                print(f"    \u2705 STEP 3e: Consent already checked", flush=True)
+        else:
+            # Try finding consent checkbox by text
+            consent_result = page.evaluate("""() => {
+                const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                for (const cb of checkboxes) {
+                    const parent = cb.closest('div, label');
+                    if (parent && parent.textContent.includes('أوافق')) {
+                        if (!cb.checked) {
+                            // React fiber onChange
+                            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                            if (fiberKey) {
+                                let fiber = cb[fiberKey];
+                                for (let i = 0; i < 20 && fiber; i++) {
+                                    const props = fiber.memoizedProps || fiber.pendingProps;
+                                    if (props && typeof props.onChange === 'function') {
+                                        try {
+                                            props.onChange({
+                                                target: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
+                                                currentTarget: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
+                                                preventDefault: () => {}, stopPropagation: () => {},
+                                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                            });
+                                            return 'checked_via_fiber';
+                                        } catch(e) {}
+                                    }
+                                    fiber = fiber.return;
+                                }
+                            }
+                            cb.click();
+                            return 'checked_via_click';
+                        }
+                        return 'already_checked';
+                    }
+                }
+                return 'not_found';
+            }""")
+            print(f"    \u2705 STEP 3e: Consent = {consent_result}", flush=True)
+    except Exception as consent_e:
+        print(f"    \u26a0\ufe0f STEP 3e consent: {str(consent_e)[:60]}", flush=True)
     
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
@@ -3780,7 +3887,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v60 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v61 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
