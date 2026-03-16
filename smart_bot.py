@@ -2378,6 +2378,7 @@ def find_booking_page(page, target_url):
                     return root ? root.innerHTML.length : -1;
                 }""")
                 print(f"  [DEBUG] Retry {retry+1}: text={len(page_text)}chars, root_html={new_root_html_len}", flush=True)
+                print(f"  [DEBUG] Page text: {repr(page_text[:100])}", flush=True)
                 
                 still_unavailable = any(kw in page_text.lower() for kw in unavailable_keywords)
                 
@@ -2423,6 +2424,19 @@ def find_booking_page(page, target_url):
     try:
         page.wait_for_selector('a, button', timeout=10000)
         time.sleep(2)  # Extra wait for React hydration
+    except:
+        pass
+    
+    # Debug: print all visible elements
+    try:
+        debug_info = page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button,a,[role="button"]')).map(b => b.innerText?.trim()?.substring(0,40)).filter(t => t);
+            const inputs = document.querySelectorAll('input,select,textarea').length;
+            const all_text = document.body.innerText?.substring(0,200) || '';
+            return {btns, inputs, text: all_text};
+        }""")
+        print(f"  [DEBUG] Buttons: {debug_info.get('btns',[])} | Inputs: {debug_info.get('inputs',0)}", flush=True)
+        print(f"  [DEBUG] Visible text: {repr(debug_info.get('text','')[:150])}", flush=True)
     except:
         pass
     
