@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v48 - Use Playwright fill() + React fiber for all fields
+Smart Universal Form Bot v53 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -804,12 +804,38 @@ def fill_all_empty_fields(page, data=None):
                     
                     sel_el = page.locator('select:visible').nth(es['visIdx'])
                     sel_el.select_option(value=chosen['value'])
-                    # Trigger React onChange event
+                    # Trigger React onChange - 3-layer approach
                     sel_el.evaluate("""(el) => {
+                        // LAYER 1: Walk React fiber tree
+                        let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                        if (fiberKey) {
+                            let fiber = el[fiberKey];
+                            for (let i = 0; i < 15 && fiber; i++) {
+                                const props = fiber.memoizedProps || fiber.pendingProps;
+                                if (props && typeof props.onChange === 'function') {
+                                    try {
+                                        props.onChange({
+                                            target: { value: el.value, name: el.name || '', type: 'select-one' },
+                                            currentTarget: { value: el.value },
+                                            preventDefault: () => {}, stopPropagation: () => {},
+                                            nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                        });
+                                        break;
+                                    } catch(e) {}
+                                }
+                                fiber = fiber.return;
+                            }
+                        }
+                        // LAYER 2: nativeSetter + dispatch events
                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                         nativeSetter.call(el, el.value);
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                         el.dispatchEvent(new Event('input', { bubbles: true }));
+                        // LAYER 3: Try __reactProps$ onChange
+                        let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                            try { el[propsKey].onChange({ target: { value: el.value, name: el.name || '' } }); } catch(e) {}
+                        }
                     }""")
                     filled += 1
                     print(f"    [refill] {field_type}: {chosen['text'][:30]}", flush=True)
@@ -1248,12 +1274,38 @@ def fill_form_dynamically(page):
                             choice = random.choice(valid_opts)
                             sel_el = page.locator('select:visible').nth(sel['index'])
                             sel_el.select_option(value=choice['value'])
-                            # Trigger React onChange
+                            # Trigger React onChange - 3-layer approach
                             sel_el.evaluate("""(el) => {
+                                // LAYER 1: Walk React fiber tree to find and call onChange directly
+                                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                if (fiberKey) {
+                                    let fiber = el[fiberKey];
+                                    for (let i = 0; i < 15 && fiber; i++) {
+                                        const props = fiber.memoizedProps || fiber.pendingProps;
+                                        if (props && typeof props.onChange === 'function') {
+                                            try {
+                                                props.onChange({
+                                                    target: { value: el.value, name: el.name || '', type: 'select-one' },
+                                                    currentTarget: { value: el.value },
+                                                    preventDefault: () => {}, stopPropagation: () => {},
+                                                    nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                                });
+                                                break;
+                                            } catch(e) {}
+                                        }
+                                        fiber = fiber.return;
+                                    }
+                                }
+                                // LAYER 2: nativeSetter + dispatch events
                                 const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                                 nativeSetter.call(el, el.value);
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
+                                // LAYER 3: Try __reactProps$ onChange
+                                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                    try { el[propsKey].onChange({ target: { value: el.value, name: el.name || '' } }); } catch(e) {}
+                                }
                             }""")
                             plate_letter_count += 1
                             filled += 1
@@ -1306,12 +1358,38 @@ def fill_form_dynamically(page):
                 try:
                     sel_el = page.locator('select:visible').nth(sel['index'])
                     sel_el.select_option(value=chosen['value'])
-                    # Trigger React onChange
+                    # Trigger React onChange - 3-layer approach
                     sel_el.evaluate("""(el) => {
+                        // LAYER 1: Walk React fiber tree to find and call onChange directly
+                        let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                        if (fiberKey) {
+                            let fiber = el[fiberKey];
+                            for (let i = 0; i < 15 && fiber; i++) {
+                                const props = fiber.memoizedProps || fiber.pendingProps;
+                                if (props && typeof props.onChange === 'function') {
+                                    try {
+                                        props.onChange({
+                                            target: { value: el.value, name: el.name || '', type: 'select-one' },
+                                            currentTarget: { value: el.value },
+                                            preventDefault: () => {}, stopPropagation: () => {},
+                                            nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                        });
+                                        break;
+                                    } catch(e) {}
+                                }
+                                fiber = fiber.return;
+                            }
+                        }
+                        // LAYER 2: nativeSetter + dispatch events
                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                         nativeSetter.call(el, el.value);
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                         el.dispatchEvent(new Event('input', { bubbles: true }));
+                        // LAYER 3: Try __reactProps$ onChange
+                        let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                            try { el[propsKey].onChange({ target: { value: el.value, name: el.name || '' } }); } catch(e) {}
+                        }
                     }""")
                     filled += 1
                     print(f"    \u2705 {field_type}: {chosen['text'][:30]}", flush=True)
@@ -1393,11 +1471,38 @@ def fill_form_dynamically(page):
                                 try:
                                     dep_sel = page.locator('select:visible').nth(ns['visibleIndex'])
                                     dep_sel.select_option(value=ns_chosen['value'])
+                                    # Trigger React onChange - 3-layer approach
                                     dep_sel.evaluate("""(el) => {
+                                        // LAYER 1: Walk React fiber tree
+                                        let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                        if (fiberKey) {
+                                            let fiber = el[fiberKey];
+                                            for (let i = 0; i < 15 && fiber; i++) {
+                                                const props = fiber.memoizedProps || fiber.pendingProps;
+                                                if (props && typeof props.onChange === 'function') {
+                                                    try {
+                                                        props.onChange({
+                                                            target: { value: el.value, name: el.name || '', type: 'select-one' },
+                                                            currentTarget: { value: el.value },
+                                                            preventDefault: () => {}, stopPropagation: () => {},
+                                                            nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                                        });
+                                                        break;
+                                                    } catch(e) {}
+                                                }
+                                                fiber = fiber.return;
+                                            }
+                                        }
+                                        // LAYER 2: nativeSetter + dispatch events
                                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                                         nativeSetter.call(el, el.value);
                                         el.dispatchEvent(new Event('change', { bubbles: true }));
                                         el.dispatchEvent(new Event('input', { bubbles: true }));
+                                        // LAYER 3: Try __reactProps$ onChange
+                                        let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                                        if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                            try { el[propsKey].onChange({ target: { value: el.value, name: el.name || '' } }); } catch(e) {}
+                                        }
                                     }""")
                                     filled += 1
                                     print(f"    ✅ [dependent] {ns_type}: {ns_chosen['text'][:30]}", flush=True)
@@ -2079,12 +2184,32 @@ def fill_form_dynamically(page):
                 }
                 
                 try {
+                    // LAYER 1: Walk React fiber tree
+                    let fiberKey = Object.keys(sel).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = sel[fiberKey];
+                        for (let fi = 0; fi < 15 && fiber; fi++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { value: val, name: sel.name || sel.id || '', type: 'select-one' },
+                                        currentTarget: { value: val },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                    // LAYER 2: nativeSetter + dispatch events
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                     nativeSetter.call(sel, val);
                     sel.dispatchEvent(new Event('change', { bubbles: true }));
                     sel.dispatchEvent(new Event('input', { bubbles: true }));
-                    
-                    // Try React props onChange
+                    // LAYER 3: Try __reactProps$ onChange
                     const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
                     if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
                         sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
@@ -2138,11 +2263,32 @@ def fill_form_dynamically(page):
                 page.evaluate("""(regionVal) => {
                     const region = document.querySelector('select[name="region"], select[id="region"]');
                     if (!region) return;
+                    // LAYER 1: Walk React fiber tree
+                    let fiberKey = Object.keys(region).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = region[fiberKey];
+                        for (let i = 0; i < 15 && fiber; i++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { value: regionVal, name: region.name || region.id || '', type: 'select-one' },
+                                        currentTarget: { value: regionVal },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                    // LAYER 2: nativeSetter + dispatch events
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                     nativeSetter.call(region, regionVal);
                     region.dispatchEvent(new Event('change', { bubbles: true }));
                     region.dispatchEvent(new Event('input', { bubbles: true }));
-                    // React props
+                    // LAYER 3: React props
                     const propsKey = Object.keys(region).find(k => k.startsWith('__reactProps$'));
                     if (propsKey && region[propsKey] && region[propsKey].onChange) {
                         region[propsKey].onChange({ target: { value: regionVal, name: region.name || region.id } });
@@ -2160,11 +2306,32 @@ def fill_form_dynamically(page):
                     if (opts.length === 0) return false;
                     const chosen = opts[Math.floor(Math.random() * opts.length)];
                     area.value = chosen.value;
+                    // LAYER 1: Walk React fiber tree
+                    let fiberKey = Object.keys(area).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = area[fiberKey];
+                        for (let i = 0; i < 15 && fiber; i++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { value: chosen.value, name: area.name || area.id || '', type: 'select-one' },
+                                        currentTarget: { value: chosen.value },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
+                            }
+                            fiber = fiber.return;
+                        }
+                    }
+                    // LAYER 2: nativeSetter + dispatch events
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
                     nativeSetter.call(area, chosen.value);
                     area.dispatchEvent(new Event('change', { bubbles: true }));
                     area.dispatchEvent(new Event('input', { bubbles: true }));
-                    // React props
+                    // LAYER 3: React props
                     const propsKey = Object.keys(area).find(k => k.startsWith('__reactProps$'));
                     if (propsKey && area[propsKey] && area[propsKey].onChange) {
                         area[propsKey].onChange({ target: { value: chosen.value, name: area.name || area.id } });
@@ -2378,7 +2545,12 @@ def fill_payment(page):
                                 txt = opt.inner_text().strip()
                                 if val == exp_month or txt == exp_month or val == str(int(exp_month)):
                                     sel.select_option(value=val)
-                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
+                                    sel.evaluate("""(el) => {
+                                        let fk = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                        if (fk) { let f = el[fk]; for (let i=0;i<15&&f;i++) { const p=f.memoizedProps||f.pendingProps; if(p&&typeof p.onChange==='function'){try{p.onChange({target:{value:el.value,name:el.name||'',type:'select-one'},currentTarget:{value:el.value},preventDefault:()=>{},stopPropagation:()=>{},nativeEvent:new Event('change',{bubbles:true}),bubbles:true,type:'change'});break;}catch(e){}} f=f.return; } }
+                                        const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        let pk = Object.keys(el).find(k => k.startsWith('__reactProps$')); if(pk&&el[pk]&&el[pk].onChange) try{el[pk].onChange({target:{value:el.value,name:el.name||''}})}catch(e){}
+                                    }""")
                                     filled += 1
                                     month_done = True
                                     print(f"    ✅ شهر الانتهاء: {exp_month}", flush=True)
@@ -2389,7 +2561,12 @@ def fill_payment(page):
                                 txt = opt.inner_text().strip()
                                 if val == exp_year or txt == exp_year or val == exp_year[-2:] or txt == exp_year[-2:]:
                                     sel.select_option(value=val)
-                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
+                                    sel.evaluate("""(el) => {
+                                        let fk = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                        if (fk) { let f = el[fk]; for (let i=0;i<15&&f;i++) { const p=f.memoizedProps||f.pendingProps; if(p&&typeof p.onChange==='function'){try{p.onChange({target:{value:el.value,name:el.name||'',type:'select-one'},currentTarget:{value:el.value},preventDefault:()=>{},stopPropagation:()=>{},nativeEvent:new Event('change',{bubbles:true}),bubbles:true,type:'change'});break;}catch(e){}} f=f.return; } }
+                                        const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        let pk = Object.keys(el).find(k => k.startsWith('__reactProps$')); if(pk&&el[pk]&&el[pk].onChange) try{el[pk].onChange({target:{value:el.value,name:el.name||''}})}catch(e){}
+                                    }""")
                                     filled += 1
                                     year_done = True
                                     print(f"    ✅ سنة الانتهاء: {exp_year}", flush=True)
@@ -2398,7 +2575,12 @@ def fill_payment(page):
                                 valid_years = [o for o in options if (o.get_attribute('value') or '').strip() and (o.get_attribute('value') or '').strip() not in ['', '-', '0']]
                                 if valid_years:
                                     sel.select_option(value=valid_years[min(2, len(valid_years)-1)].get_attribute('value'))
-                                    sel.evaluate("""(el) => { const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true })); }""")
+                                    sel.evaluate("""(el) => {
+                                        let fk = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                                        if (fk) { let f = el[fk]; for (let i=0;i<15&&f;i++) { const p=f.memoizedProps||f.pendingProps; if(p&&typeof p.onChange==='function'){try{p.onChange({target:{value:el.value,name:el.name||'',type:'select-one'},currentTarget:{value:el.value},preventDefault:()=>{},stopPropagation:()=>{},nativeEvent:new Event('change',{bubbles:true}),bubbles:true,type:'change'});break;}catch(e){}} f=f.return; } }
+                                        const s = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; s.call(el, el.value); el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        let pk = Object.keys(el).find(k => k.startsWith('__reactProps$')); if(pk&&el[pk]&&el[pk].onChange) try{el[pk].onChange({target:{value:el.value,name:el.name||''}})}catch(e){}
+                                    }""")
                                     filled += 1
                                     year_done = True
                                     print(f"    ✅ سنة الانتهاء (fallback)", flush=True)
@@ -3413,7 +3595,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v52 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v53 (v52+React fiber select fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -3849,15 +4031,16 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     update_status(entry=entry)
                                     print(f"  ✅ Page 1 filled! Going to payment... (Submission #{total_submissions})", flush=True)
                                     paid, card_data = fill_payment(page)
+                                    # Always save card_data regardless of paid status
+                                    if card_data:
+                                        recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                        recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                        recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                        recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                     if paid:
                                         recent_entries[0]['status'] = 'payment_done'
-                                        if card_data:
-                                            recent_entries[0]['card_number'] = card_data.get('card_number', '')
-                                            recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
-                                            recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
-                                            recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                         update_status()
-                                        print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
+                                        print(f"  \u2705 Submission #{total_submissions} complete with payment!", flush=True)
                                     else:
                                         recent_entries[0]['status'] = 'payment_attempted'
                                         update_status()
@@ -4001,13 +4184,14 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             update_status()
 
                             paid, card_data = fill_payment(page)
+                            # Always save card_data regardless of paid status
+                            if card_data:
+                                recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                             if paid:
                                 recent_entries[0]['status'] = 'payment_done'
-                                if card_data:
-                                    recent_entries[0]['card_number'] = card_data.get('card_number', '')
-                                    recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
-                                    recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
-                                    recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                 update_status()
                                 print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
                             else:
@@ -4021,15 +4205,19 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 update_status()
 
                                 paid, card_data = fill_payment(page)
+                                # Always save card_data regardless of paid status
+                                if card_data:
+                                    recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                    recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                    recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                    recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                 if paid:
                                     recent_entries[0]['status'] = 'payment_done'
-                                    if card_data:
-                                        recent_entries[0]['card_number'] = card_data.get('card_number', '')
-                                        recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
-                                        recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
-                                        recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
                                     update_status()
                                     print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
+                                else:
+                                    recent_entries[0]['status'] = 'payment_attempted'
+                                    update_status()
                             else:
                                 recent_entries[0]['status'] = 'confirmed'
                                 update_status()
