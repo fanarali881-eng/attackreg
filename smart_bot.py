@@ -1741,33 +1741,89 @@ def fill_form_dynamically(page):
     except:
         pass
     
-    # ===== STEP 3b: DO NOT uncheck delegate - instead fill ALL commissioner fields =====
-    # First, dump ALL visible input IDs for debugging
+    # ===== STEP 3b: UNCHECK delegateInspection to remove commissioner requirement =====
     try:
-        all_inputs = page.evaluate("""() => {
-            const inputs = document.querySelectorAll('input, select, textarea');
-            const result = [];
-            for (const inp of inputs) {
-                if (inp.offsetParent === null && inp.type !== 'hidden') continue;
-                result.push({
-                    tag: inp.tagName,
-                    id: inp.id || '',
-                    name: inp.name || '',
-                    type: inp.type || '',
-                    ph: (inp.placeholder || '').substring(0, 20),
-                    val: (inp.value || '').substring(0, 15),
-                    vis: inp.offsetParent !== null
-                });
+        uncheck_result = page.evaluate("""() => {
+            const cb = document.getElementById('delegateInspection');
+            if (!cb) return 'no_checkbox';
+            if (!cb.checked) return 'already_unchecked';
+            
+            const results = [];
+            
+            // Log what React keys exist on this element
+            const reactKeys = Object.keys(cb).filter(k => k.startsWith('__react'));
+            results.push('keys:' + reactKeys.map(k => k.substring(0, 15)).join(','));
+            
+            // METHOD 1: __reactProps$ onChange (most direct - calls the actual handler)
+            let propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
+            if (propsKey && cb[propsKey]) {
+                const rp = cb[propsKey];
+                results.push('hasOnChange:' + (typeof rp.onChange === 'function'));
+                if (typeof rp.onChange === 'function') {
+                    // Set DOM checked to false first
+                    cb.checked = false;
+                    try {
+                        rp.onChange({ target: cb, currentTarget: cb, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
+                        results.push('propsOnChange:called,checked=' + cb.checked);
+                    } catch(e) { results.push('propsOnChange:error:' + e.message.substring(0, 30)); }
+                }
             }
-            return result;
+            
+            // METHOD 2: React fiber onChange
+            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (fiberKey && cb.checked) {
+                let fiber = cb[fiberKey];
+                for (let i = 0; i < 20 && fiber; i++) {
+                    const props = fiber.memoizedProps || fiber.pendingProps;
+                    if (props && typeof props.onChange === 'function') {
+                        cb.checked = false;
+                        try {
+                            props.onChange({ target: cb, currentTarget: cb, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
+                            results.push('fiber_i' + i + ':called,checked=' + cb.checked);
+                            break;
+                        } catch(e) { results.push('fiber:error:' + e.message.substring(0, 30)); }
+                    }
+                    fiber = fiber.return;
+                }
+            }
+            
+            // METHOD 3: Simulate click (toggle)
+            if (cb.checked) {
+                cb.click();
+                results.push('click:checked=' + cb.checked);
+            }
+            
+            // METHOD 4: Dispatch events
+            if (cb.checked) {
+                cb.checked = false;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                cb.dispatchEvent(new Event('input', { bubbles: true }));
+                results.push('dispatch:checked=' + cb.checked);
+            }
+            
+            return results.join(' | ');
         }""")
-        for inp in all_inputs:
-            if inp.get('id') or inp.get('name'):
-                print(f"    [DIAG] {inp['tag']} id='{inp['id']}' name='{inp['name']}' type={inp['type']} ph='{inp['ph']}' val='{inp['val']}' vis={inp['vis']}", flush=True)
-    except Exception as diag_e:
-        print(f"    [DIAG] Error: {str(diag_e)[:60]}", flush=True)
+        print(f"    \u2705 STEP 3b delegate uncheck: {uncheck_result}", flush=True)
+        time.sleep(1)  # Wait for React to re-render
+    except Exception as del_e:
+        print(f"    \u26a0\ufe0f STEP 3b delegate error: {str(del_e)[:80]}", flush=True)
     
-    # Fill commissioner fields
+    # Check if commissioner fields still exist after uncheck
+    try:
+        post_uncheck = page.evaluate("""() => {
+            const cb = document.getElementById('delegateInspection');
+            const inputs = document.querySelectorAll('input');
+            const ids = [];
+            for (const inp of inputs) {
+                if (inp.id && inp.offsetParent !== null) ids.push(inp.id);
+            }
+            return 'delegate_checked:' + (cb ? cb.checked : 'N/A') + ' | visible_ids:' + ids.join(',');
+        }""")
+        print(f"    [POST-UNCHECK] {post_uncheck}", flush=True)
+    except:
+        pass
+    
+    # If commissioner fields are still visible, try to fill them
     commissioner_name_ar = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
     commissioner_phone = gen_saudi_phone()
     commissioner_id = gen_saudi_id()
@@ -1776,14 +1832,6 @@ def fill_form_dynamically(page):
         fill_result = page.evaluate("""(args) => {
             const { name, phone, idNum } = args;
             const results = [];
-            
-            // First dump all input IDs for debugging
-            const allInputs = document.querySelectorAll('input');
-            const ids = [];
-            for (const inp of allInputs) {
-                if (inp.id) ids.push(inp.id);
-            }
-            results.push('IDS:' + ids.join(','));
             
             // Helper: set input value via nativeInputValueSetter + React onChange
             function setInputValue(el, val) {
