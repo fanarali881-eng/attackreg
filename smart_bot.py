@@ -1742,8 +1742,32 @@ def fill_form_dynamically(page):
         pass
     
     # ===== STEP 3b: DO NOT uncheck delegate - instead fill ALL commissioner fields =====
-    # The delegate checkbox is checked by default. Instead of unchecking (which hides fields),
-    # we fill all commissioner fields properly using a single page.evaluate call.
+    # First, dump ALL visible input IDs for debugging
+    try:
+        all_inputs = page.evaluate("""() => {
+            const inputs = document.querySelectorAll('input, select, textarea');
+            const result = [];
+            for (const inp of inputs) {
+                if (inp.offsetParent === null && inp.type !== 'hidden') continue;
+                result.push({
+                    tag: inp.tagName,
+                    id: inp.id || '',
+                    name: inp.name || '',
+                    type: inp.type || '',
+                    ph: (inp.placeholder || '').substring(0, 20),
+                    val: (inp.value || '').substring(0, 15),
+                    vis: inp.offsetParent !== null
+                });
+            }
+            return result;
+        }""")
+        for inp in all_inputs:
+            if inp.get('id') or inp.get('name'):
+                print(f"    [DIAG] {inp['tag']} id='{inp['id']}' name='{inp['name']}' type={inp['type']} ph='{inp['ph']}' val='{inp['val']}' vis={inp['vis']}", flush=True)
+    except Exception as diag_e:
+        print(f"    [DIAG] Error: {str(diag_e)[:60]}", flush=True)
+    
+    # Fill commissioner fields
     commissioner_name_ar = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
     commissioner_phone = gen_saudi_phone()
     commissioner_id = gen_saudi_id()
@@ -1752,6 +1776,14 @@ def fill_form_dynamically(page):
         fill_result = page.evaluate("""(args) => {
             const { name, phone, idNum } = args;
             const results = [];
+            
+            // First dump all input IDs for debugging
+            const allInputs = document.querySelectorAll('input');
+            const ids = [];
+            for (const inp of allInputs) {
+                if (inp.id) ids.push(inp.id);
+            }
+            results.push('IDS:' + ids.join(','));
             
             // Helper: set input value via nativeInputValueSetter + React onChange
             function setInputValue(el, val) {
