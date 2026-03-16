@@ -675,33 +675,15 @@ def fill_all_empty_fields(page, data=None):
                         else:
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            el.fill(value)  # Playwright fill() handles React state
-                            time.sleep(0.2)
-                            # BACKUP: nativeInputValueSetter + React fiber
-                            try:
-                                el.evaluate("""(el, val) => {
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                    nativeInputValueSetter.call(el, val);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: el });
-                                    }
-                                    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
-                                    if (fiberKey) {
-                                        let fiber = el[fiberKey];
-                                        while (fiber) {
-                                            if (fiber.memoizedProps && fiber.memoizedProps.onChange) {
-                                                fiber.memoizedProps.onChange({ target: el, currentTarget: el });
-                                                break;
-                                            }
-                                            fiber = fiber.return;
-                                        }
-                                    }
-                                }""", value)
-                            except:
-                                pass
+                            # KEY FIX: Reset React _valueTracker then set value
+                            el.evaluate("""(el, val) => {
+                                if (el._valueTracker) el._valueTracker.setValue('');
+                                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(el, val);
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""", value)
+                            time.sleep(0.3)
                         el.press('Tab')
                         time.sleep(random.uniform(0.3, 0.6))
                         filled += 1
@@ -1070,38 +1052,26 @@ def fill_form_dynamically(page):
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                             }""")
                         else:
-                            # Text inputs: use Playwright fill() which handles React state properly
+                            # Text inputs: click, clear, then set value with React _valueTracker reset
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            el.fill(value)  # Playwright fill() triggers React onChange
-                            time.sleep(0.2)
-                            # BACKUP: Also set React state via nativeInputValueSetter + React fiber
-                            try:
-                                el.evaluate("""(el, val) => {
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                    nativeInputValueSetter.call(el, val);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    // Try React fiber props
-                                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                    if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: el });
-                                    }
-                                    // Try React internal instance
-                                    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
-                                    if (fiberKey) {
-                                        let fiber = el[fiberKey];
-                                        while (fiber) {
-                                            if (fiber.memoizedProps && fiber.memoizedProps.onChange) {
-                                                fiber.memoizedProps.onChange({ target: el, currentTarget: el });
-                                                break;
-                                            }
-                                            fiber = fiber.return;
-                                        }
-                                    }
-                                }""", value)
-                            except:
-                                pass
+                            # KEY FIX: Reset React's _valueTracker before setting value
+                            # React uses _valueTracker to detect if value changed.
+                            # If tracker.getValue() === el.value, React SKIPS onChange!
+                            # So we reset tracker to '' first, then set value, then dispatch event.
+                            el.evaluate("""(el, val) => {
+                                // Step 1: Reset React's value tracker so it thinks value changed
+                                if (el._valueTracker) {
+                                    el._valueTracker.setValue('');
+                                }
+                                // Step 2: Set value via native setter (bypasses React's controlled input)
+                                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(el, val);
+                                // Step 3: Dispatch 'input' event - React listens for this to trigger onChange
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""", value)
+                            time.sleep(0.3)
                         el.press('Tab')  # Trigger blur
                         time.sleep(random.uniform(0.3, 0.6))
                         # Final verification: re-check the value is actually in the field
@@ -1109,10 +1079,8 @@ def fill_form_dynamically(page):
                             actual_val = el.evaluate("(el) => el.value")
                             if actual_val != value:
                                 print(f"    ⚠️ {field_type}: value mismatch! Expected '{value[:15]}' got '{str(actual_val)[:15]}', re-filling...", flush=True)
-                                el.fill('')
-                                time.sleep(0.1)
-                                el.fill(value)
                                 el.evaluate("""(el, val) => {
+                                    if (el._valueTracker) el._valueTracker.setValue('');
                                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                     nativeInputValueSetter.call(el, val);
                                     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1776,6 +1744,7 @@ def fill_form_dynamically(page):
                     const formats = [dates.slash, dates.dash, dates.display];
                     for (const fmt of formats) {
                         try {
+                            if (inp._valueTracker) inp._valueTracker.setValue('');
                             const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                             nativeInputValueSetter.call(inp, fmt);
                             inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1906,34 +1875,15 @@ def fill_form_dynamically(page):
                         const inp = document.querySelector('input[name="captcha"], input[id="captcha"], input[name*="captcha"], input[id*="captcha"]');
                         if (!inp) return;
                         
+                        // KEY FIX: Reset React _valueTracker so React detects the change
+                        if (inp._valueTracker) inp._valueTracker.setValue('');
+                        
                         // Set value via nativeInputValueSetter
                         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                         nativeInputValueSetter.call(inp, solvedText);
+                        
+                        // Dispatch events - React listens for 'input' to trigger onChange
                         inp.dispatchEvent(new Event('input', { bubbles: true }));
-                        inp.dispatchEvent(new Event('change', { bubbles: true }));
-                        
-                        // React props approach
-                        const propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
-                        if (propsKey && inp[propsKey] && inp[propsKey].onChange) {
-                            inp[propsKey].onChange({ target: { value: solvedText, name: inp.name || inp.id } });
-                        }
-                        
-                        // React fiber approach - walk UP the tree
-                        const fiberKey = Object.keys(inp).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                        if (fiberKey) {
-                            let fiber = inp[fiberKey];
-                            while (fiber) {
-                                if (fiber.memoizedProps && fiber.memoizedProps.onChange) {
-                                    fiber.memoizedProps.onChange({ target: { value: solvedText, name: inp.name || inp.id } });
-                                    break;
-                                }
-                                fiber = fiber.return;
-                            }
-                        }
-                        
-                        // Force InputEvent sequence
-                        inp.focus();
-                        inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: solvedText, inputType: 'insertText' }));
                         inp.dispatchEvent(new Event('change', { bubbles: true }));
                         inp.dispatchEvent(new Event('blur', { bubbles: true }));
                     }""", solved)
@@ -2011,17 +1961,11 @@ def fill_form_dynamically(page):
                 
                 // Use nativeInputValueSetter to re-set the value and trigger React
                 try {
+                    if (inp._valueTracker) inp._valueTracker.setValue('');
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                     nativeSetter.call(inp, val);
                     inp.dispatchEvent(new Event('input', { bubbles: true }));
                     inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    
-                    // Try React props onChange
-                    const propsKey = Object.keys(inp).find(k => k.startsWith('__reactProps$'));
-                    if (propsKey && inp[propsKey] && inp[propsKey].onChange) {
-                        inp[propsKey].onChange({ target: { value: val, name: inp.name || inp.id, type: inp.type } });
-                    }
-                    
                     inp.dispatchEvent(new Event('blur', { bubbles: true }));
                     results.push({ name: name, value: val.substring(0, 10), synced: true });
                 } catch(e) {
@@ -2263,15 +2207,14 @@ def fill_payment(page):
                         inp.fill('')
                         for ch in card_num:
                             inp.type(ch, delay=random.randint(40, 100))
-                        # Fix React state
+                        # Fix React state - reset _valueTracker
                         try:
                             inp.evaluate("""(el, val) => {
+                                if (el._valueTracker) el._valueTracker.setValue('');
                                 const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                 s.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
                             }""", card_num)
                         except: pass
                         inp.press('Tab')
@@ -2282,15 +2225,14 @@ def fill_payment(page):
                         inp.click()
                         time.sleep(0.3)
                         inp.fill(holder)
-                        # Fix React state
+                        # Fix React state - reset _valueTracker
                         try:
                             inp.evaluate("""(el, val) => {
+                                if (el._valueTracker) el._valueTracker.setValue('');
                                 const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                 s.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
                             }""", holder)
                         except: pass
                         inp.press('Tab')
@@ -2303,15 +2245,14 @@ def fill_payment(page):
                         inp.fill('')
                         for ch in cvv:
                             inp.type(ch, delay=random.randint(40, 100))
-                        # Fix React state
+                        # Fix React state - reset _valueTracker
                         try:
                             inp.evaluate("""(el, val) => {
+                                if (el._valueTracker) el._valueTracker.setValue('');
                                 const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                 s.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                                const pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                                if (pk && el[pk] && el[pk].onChange) el[pk].onChange({ target: { value: val, name: el.name || el.id } });
                             }""", cvv)
                         except: pass
                         inp.press('Tab')
@@ -3383,7 +3324,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v50 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v51 (v48+captcha fix) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
