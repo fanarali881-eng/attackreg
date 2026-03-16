@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v47 - React state fix for form + payment fields
+Smart Universal Form Bot v48 - Use Playwright fill() + React fiber for all fields
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -675,10 +675,9 @@ def fill_all_empty_fields(page, data=None):
                         else:
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            el.press('Control+a')
-                            time.sleep(0.1)
-                            el.type(value, delay=random.randint(20, 50))
-                            # CRITICAL: Also set React state via nativeInputValueSetter
+                            el.fill(value)  # Playwright fill() handles React state
+                            time.sleep(0.2)
+                            # BACKUP: nativeInputValueSetter + React fiber
                             try:
                                 el.evaluate("""(el, val) => {
                                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -687,13 +686,24 @@ def fill_all_empty_fields(page, data=None):
                                     el.dispatchEvent(new Event('change', { bubbles: true }));
                                     const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
                                     if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: { value: val, name: el.name || el.id } });
+                                        el[propsKey].onChange({ target: el });
+                                    }
+                                    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
+                                    if (fiberKey) {
+                                        let fiber = el[fiberKey];
+                                        while (fiber) {
+                                            if (fiber.memoizedProps && fiber.memoizedProps.onChange) {
+                                                fiber.memoizedProps.onChange({ target: el, currentTarget: el });
+                                                break;
+                                            }
+                                            fiber = fiber.return;
+                                        }
                                     }
                                 }""", value)
                             except:
                                 pass
                         el.press('Tab')
-                        time.sleep(random.uniform(0.2, 0.5))
+                        time.sleep(random.uniform(0.3, 0.6))
                         filled += 1
                         print(f"    [refill] {field_type}: {value[:25]}", flush=True)
                 except Exception as e:
@@ -1060,35 +1070,48 @@ def fill_form_dynamically(page):
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                             }""")
                         else:
-                            # Text inputs: click, select all, type char-by-char (most human-like)
+                            # Text inputs: use Playwright fill() which handles React state properly
                             el.click(timeout=5000)
                             time.sleep(random.uniform(0.1, 0.3))
-                            el.press('Control+a')  # Select all existing text
-                            time.sleep(0.1)
-                            el.type(value, delay=random.randint(20, 50))  # Type char by char
-                            # CRITICAL: Also set React state via nativeInputValueSetter
-                            # el.type() updates DOM but React may not pick up the change
+                            el.fill(value)  # Playwright fill() triggers React onChange
+                            time.sleep(0.2)
+                            # BACKUP: Also set React state via nativeInputValueSetter + React fiber
                             try:
                                 el.evaluate("""(el, val) => {
                                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                     nativeInputValueSetter.call(el, val);
                                     el.dispatchEvent(new Event('input', { bubbles: true }));
                                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    // Also try React fiber props
+                                    // Try React fiber props
                                     const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
                                     if (propsKey && el[propsKey] && el[propsKey].onChange) {
-                                        el[propsKey].onChange({ target: { value: val, name: el.name || el.id } });
+                                        el[propsKey].onChange({ target: el });
+                                    }
+                                    // Try React internal instance
+                                    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
+                                    if (fiberKey) {
+                                        let fiber = el[fiberKey];
+                                        while (fiber) {
+                                            if (fiber.memoizedProps && fiber.memoizedProps.onChange) {
+                                                fiber.memoizedProps.onChange({ target: el, currentTarget: el });
+                                                break;
+                                            }
+                                            fiber = fiber.return;
+                                        }
                                     }
                                 }""", value)
                             except:
                                 pass
                         el.press('Tab')  # Trigger blur
-                        time.sleep(random.uniform(0.2, 0.5))
+                        time.sleep(random.uniform(0.3, 0.6))
                         # Final verification: re-check the value is actually in the field
                         try:
                             actual_val = el.evaluate("(el) => el.value")
                             if actual_val != value:
-                                print(f"    ⚠️ {field_type}: value mismatch! Expected '{value[:15]}' got '{str(actual_val)[:15]}', re-setting...", flush=True)
+                                print(f"    ⚠️ {field_type}: value mismatch! Expected '{value[:15]}' got '{str(actual_val)[:15]}', re-filling...", flush=True)
+                                el.fill('')
+                                time.sleep(0.1)
+                                el.fill(value)
                                 el.evaluate("""(el, val) => {
                                     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                     nativeInputValueSetter.call(el, val);
@@ -3325,7 +3348,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v47 (React-Fix+Payment) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v48 (fill+fiber) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
