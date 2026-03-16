@@ -213,8 +213,8 @@ export async function POST(req) {
           // Step 1: Kill old processes
           await runSSHCommand(server, 'kill -9 $(pgrep -f smart_bot.py) 2>/dev/null; screen -X -S smartbot quit 2>/dev/null; rm -f /root/smart_bot.log', 5000);
           
-          // Step 1.5: Always pull latest smart_bot.py from GitHub before starting
-          await runSSHCommand(server, "wget -q -O /root/smart_bot.py 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main/smart_bot.py' && echo 'Latest smart_bot.py pulled from GitHub'", 15000);
+          // Step 1.5: Always pull latest smart_bot.py from GitHub before starting (cache-bust with timestamp)
+          await runSSHCommand(server, `wget -q --no-cache -O /root/smart_bot.py 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main/smart_bot.py?t=${Date.now()}' && wc -c /root/smart_bot.py && echo 'Latest smart_bot.py pulled from GitHub'`, 15000);
           
           // Step 2: Launch directly with screen - no script file needed
           const launchCmd = `screen -dmS smartbot bash -c "${envStr} python3 -u /root/smart_bot.py ${safeUrl} ${safeDuration} ${safeInstances} > /root/smart_bot.log 2>&1"`;
