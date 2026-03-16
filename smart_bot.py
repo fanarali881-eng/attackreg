@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v61 - Fill ALL commissioner fields: name/phone/ID/nationality/consent + attendance fix
+Smart Universal Form Bot v62 - Fill ALL commissioner fields via JS evaluate (no uncheck delegate)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -686,8 +686,9 @@ def fill_all_empty_fields(page, data=None):
                                         if (props && typeof props.onChange === 'function') {
                                             try {
                                                 props.onChange({
-                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
-                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    // Pass actual DOM element as target so React reads el.value
+                                                    target: el,
+                                                    currentTarget: el,
                                                     preventDefault: () => {}, stopPropagation: () => {},
                                                     nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
                                                 });
@@ -703,7 +704,7 @@ def fill_all_empty_fields(page, data=None):
                                 nativeInputValueSetter.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                                // LAYER 3: Try __reactProps$ onChange
+                                // LAYER 3: Try __reactProps$ onChange - pass actual DOM element
                                 let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
                                 if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
                                     try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
@@ -1120,9 +1121,13 @@ def fill_form_dynamically(page):
                                         if (props && typeof props.onChange === 'function') {
                                             try {
                                                 // Create a proper synthetic-like event object
+                                                // IMPORTANT: Set DOM value first, then pass actual element as target
+                                                if (el._valueTracker) el._valueTracker.setValue('');
+                                                const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                                ns.call(el, val);
                                                 const syntheticEvent = {
-                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
-                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    target: el,
+                                                    currentTarget: el,
                                                     preventDefault: () => {},
                                                     stopPropagation: () => {},
                                                     nativeEvent: new Event('input', { bubbles: true }),
@@ -1736,206 +1741,156 @@ def fill_form_dynamically(page):
     except:
         pass
     
-    # ===== STEP 3b: Force-uncheck delegateInspection if it got checked =====
-    try:
-        delegate_unchecked = page.evaluate("""() => {
-            // Find the delegate checkbox
-            const cb = document.querySelector('#delegateInspection, input[id*="delegate"], input[name*="delegate"]');
-            if (!cb) return 'no_checkbox';
-            if (!cb.checked) return 'already_unchecked';
-            
-            // METHOD 1: React fiber onChange with checked=false
-            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (fiberKey) {
-                let fiber = cb[fiberKey];
-                for (let i = 0; i < 20 && fiber; i++) {
-                    const props = fiber.memoizedProps || fiber.pendingProps;
-                    if (props && typeof props.onChange === 'function') {
-                        try {
-                            props.onChange({
-                                target: { checked: false, value: '', name: cb.name || '', type: 'checkbox' },
-                                currentTarget: { checked: false, value: '', name: cb.name || '', type: 'checkbox' },
-                                preventDefault: () => {}, stopPropagation: () => {},
-                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                            });
-                            return 'unchecked_via_fiber';
-                        } catch(e) {}
-                    }
-                    fiber = fiber.return;
-                }
-            }
-            
-            // METHOD 2: __reactProps$ onChange
-            let propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
-            if (propsKey && cb[propsKey] && typeof cb[propsKey].onChange === 'function') {
-                try {
-                    cb[propsKey].onChange({ target: { checked: false, value: '', name: cb.name || '', type: 'checkbox' } });
-                    return 'unchecked_via_props';
-                } catch(e) {}
-            }
-            
-            // METHOD 3: Click to toggle
-            cb.click();
-            return 'unchecked_via_click';
-        }""")
-        print(f"    \u2705 delegateInspection: {delegate_unchecked}", flush=True)
-        time.sleep(0.5)
-    except Exception as del_e:
-        print(f"    \u26a0\ufe0f delegateInspection uncheck error: {str(del_e)[:60]}", flush=True)
-    
-    # ===== STEP 3c: Fill commissioner fields if visible (in case delegateInspection stays checked) =====
-    # Use Playwright fill() which properly triggers React state updates
+    # ===== STEP 3b: DO NOT uncheck delegate - instead fill ALL commissioner fields =====
+    # The delegate checkbox is checked by default. Instead of unchecking (which hides fields),
+    # we fill all commissioner fields properly using a single page.evaluate call.
     commissioner_name_ar = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
     commissioner_phone = gen_saudi_phone()
     commissioner_id = gen_saudi_id()
     
-    for field_id, field_val, field_label in [
-        ('commissionerName', commissioner_name_ar, 'اسم المفوض'),
-        ('commissionerPhone', commissioner_phone, 'جوال المفوض'),
-        ('commissionerIdNumber', commissioner_id, 'هوية المفوض'),
-    ]:
-        try:
-            el = page.locator(f'#{field_id}')
-            if el.count() > 0 and el.first.is_visible():
-                # Clear and type using Playwright (triggers React events)
-                el.first.click()
-                time.sleep(0.2)
-                el.first.fill('')
-                time.sleep(0.1)
-                el.first.type(field_val, delay=30)
-                time.sleep(0.2)
-                # Also trigger React onChange via fiber
-                el.first.evaluate("""(el, val) => {
-                    let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                    if (fiberKey) {
-                        let fiber = el[fiberKey];
-                        for (let i = 0; i < 20 && fiber; i++) {
-                            const props = fiber.memoizedProps || fiber.pendingProps;
-                            if (props && typeof props.onChange === 'function') {
-                                try {
-                                    props.onChange({
-                                        target: { value: val, name: el.name || '', type: el.type || 'text' },
-                                        currentTarget: { value: val, name: el.name || '', type: el.type || 'text' },
-                                        preventDefault: () => {}, stopPropagation: () => {},
-                                        nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
-                                    });
-                                    break;
-                                } catch(e) {}
-                            }
-                            fiber = fiber.return;
-                        }
-                    }
-                }""", field_val)
-                print(f"    \u2705 STEP 3c: {field_label} = {field_val[:20]}", flush=True)
-        except Exception as cf_e:
-            print(f"    \u26a0\ufe0f STEP 3c {field_label}: {str(cf_e)[:60]}", flush=True)
-    
-    # ===== STEP 3d: Click commissioner nationality button =====
     try:
-        # Try clicking the radio input first (real site uses radio inputs)
-        nat_radio = page.locator('#commissionerType-resident')
-        if nat_radio.count() > 0 and nat_radio.first.is_visible():
-            nat_radio.first.check(force=True)
-            time.sleep(0.3)
-            print(f"    \u2705 STEP 3d: Nationality radio checked (resident)", flush=True)
-        else:
-            # Try button click (fahos_dist uses buttons)
-            nat_clicked = page.evaluate("""() => {
-                // Try buttons with text 'مواطن / مقيم'
+        fill_result = page.evaluate("""(args) => {
+            const { name, phone, idNum } = args;
+            const results = [];
+            
+            // Helper: set input value via nativeInputValueSetter + React onChange
+            function setInputValue(el, val) {
+                if (!el) return 'missing';
+                
+                // STEP 1: Set DOM value via nativeInputValueSetter
+                if (el._valueTracker) el._valueTracker.setValue('');
+                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeSetter.call(el, val);
+                
+                // STEP 2: Try __reactProps$ onChange FIRST (most direct)
+                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                    try {
+                        // Pass the ACTUAL DOM element as target so W.target.value reads the DOM value
+                        el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
+                        return 'reactProps:' + el.value.substring(0, 5);
+                    } catch(e) { /* continue to fiber */ }
+                }
+                
+                // STEP 3: React fiber onChange
+                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (fiberKey) {
+                    let fiber = el[fiberKey];
+                    for (let i = 0; i < 20 && fiber; i++) {
+                        const props = fiber.memoizedProps || fiber.pendingProps;
+                        if (props && typeof props.onChange === 'function') {
+                            try {
+                                // Pass actual DOM element as target
+                                props.onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change' });
+                                return 'fiber_i' + i + ':' + el.value.substring(0, 5);
+                            } catch(e) {}
+                        }
+                        fiber = fiber.return;
+                    }
+                }
+                
+                // STEP 4: Dispatch events as fallback
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'events:' + el.value.substring(0, 5);
+            }
+            
+            // Helper: check a checkbox via React fiber
+            function checkCheckbox(el) {
+                if (!el || el.checked) return el ? 'already' : 'missing';
+                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (fiberKey) {
+                    let fiber = el[fiberKey];
+                    for (let i = 0; i < 20 && fiber; i++) {
+                        const props = fiber.memoizedProps || fiber.pendingProps;
+                        if (props && typeof props.onChange === 'function') {
+                            try {
+                                props.onChange({
+                                    target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                    currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                    preventDefault: () => {}, stopPropagation: () => {},
+                                    nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                });
+                                return 'fiber';
+                            } catch(e) {}
+                        }
+                        fiber = fiber.return;
+                    }
+                }
+                el.click();
+                return 'click';
+            }
+            
+            // 1. Fill commissioner name
+            const nameEl = document.getElementById('commissionerName');
+            if (nameEl) {
+                setInputValue(nameEl, name);
+                results.push('name:' + nameEl.value.substring(0, 10));
+            } else { results.push('name:NOT_FOUND'); }
+            
+            // 2. Fill commissioner phone
+            const phoneEl = document.getElementById('commissionerPhone');
+            if (phoneEl) {
+                setInputValue(phoneEl, phone);
+                results.push('phone:' + phoneEl.value.substring(0, 10));
+            } else { results.push('phone:NOT_FOUND'); }
+            
+            // 3. Fill commissioner ID
+            const idEl = document.getElementById('commissionerIdNumber');
+            if (idEl) {
+                setInputValue(idEl, idNum);
+                results.push('id:' + idEl.value.substring(0, 10));
+            } else { results.push('id:NOT_FOUND'); }
+            
+            // 4. Click nationality radio/button (resident)
+            const natRadio = document.getElementById('commissionerType-resident');
+            if (natRadio) {
+                natRadio.click();
+                natRadio.dispatchEvent(new Event('change', { bubbles: true }));
+                results.push('nat:radio_clicked');
+            } else {
+                // Try button
                 const buttons = document.querySelectorAll('button');
+                let natFound = false;
                 for (const btn of buttons) {
-                    if (btn.innerText.includes('مواطن / مقيم') || btn.innerText.includes('مواطن/مقيم')) {
+                    if (btn.innerText.includes('مواطن') && btn.innerText.includes('مقيم')) {
                         btn.click();
-                        return 'clicked_button';
+                        results.push('nat:btn_clicked');
+                        natFound = true;
+                        break;
                     }
                 }
-                // Try radio inputs
-                const radios = document.querySelectorAll('input[type="radio"]');
-                for (const r of radios) {
-                    const label = r.closest('label, div');
-                    if (label && (label.textContent.includes('مواطن') || r.id.includes('resident'))) {
-                        r.click();
-                        r.dispatchEvent(new Event('change', { bubbles: true }));
-                        return 'clicked_radio';
+                if (!natFound) results.push('nat:NOT_FOUND');
+            }
+            
+            // 5. Check consent checkbox
+            const consentEl = document.getElementById('commissionerAcceptInput');
+            if (consentEl) {
+                const r = checkCheckbox(consentEl);
+                results.push('consent:' + r);
+            } else {
+                // Try finding by text
+                const cbs = document.querySelectorAll('input[type="checkbox"]');
+                let found = false;
+                for (const cb of cbs) {
+                    const p = cb.closest('div, label');
+                    if (p && p.textContent.includes('أوافق')) {
+                        const r = checkCheckbox(cb);
+                        results.push('consent:' + r);
+                        found = true;
+                        break;
                     }
                 }
-                return 'not_found';
-            }""")
-            print(f"    \u2705 STEP 3d: Nationality = {nat_clicked}", flush=True)
-    except Exception as nat_e:
-        print(f"    \u26a0\ufe0f STEP 3d nationality: {str(nat_e)[:60]}", flush=True)
+                if (!found) results.push('consent:NOT_FOUND');
+            }
+            
+            return results.join(' | ');
+        }""", {'name': commissioner_name_ar, 'phone': commissioner_phone, 'idNum': commissioner_id})
+        print(f"    \u2705 STEP 3b commissioner fill: {fill_result}", flush=True)
+    except Exception as fill_e:
+        print(f"    \u26a0\ufe0f STEP 3b commissioner fill error: {str(fill_e)[:80]}", flush=True)
     
-    # ===== STEP 3e: Check commissioner consent checkbox =====
-    try:
-        consent_cb = page.locator('#commissionerAcceptInput')
-        if consent_cb.count() > 0 and consent_cb.first.is_visible():
-            if not consent_cb.first.is_checked():
-                consent_cb.first.check(force=True)
-                time.sleep(0.3)
-                # Also trigger React onChange via fiber
-                consent_cb.first.evaluate("""(el) => {
-                    let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                    if (fiberKey) {
-                        let fiber = el[fiberKey];
-                        for (let i = 0; i < 20 && fiber; i++) {
-                            const props = fiber.memoizedProps || fiber.pendingProps;
-                            if (props && typeof props.onChange === 'function') {
-                                try {
-                                    props.onChange({
-                                        target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
-                                        currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
-                                        preventDefault: () => {}, stopPropagation: () => {},
-                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                                    });
-                                    break;
-                                } catch(e) {}
-                            }
-                            fiber = fiber.return;
-                        }
-                    }
-                }""")
-                print(f"    \u2705 STEP 3e: Consent checkbox checked", flush=True)
-            else:
-                print(f"    \u2705 STEP 3e: Consent already checked", flush=True)
-        else:
-            # Try finding consent checkbox by text
-            consent_result = page.evaluate("""() => {
-                const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-                for (const cb of checkboxes) {
-                    const parent = cb.closest('div, label');
-                    if (parent && parent.textContent.includes('أوافق')) {
-                        if (!cb.checked) {
-                            // React fiber onChange
-                            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                            if (fiberKey) {
-                                let fiber = cb[fiberKey];
-                                for (let i = 0; i < 20 && fiber; i++) {
-                                    const props = fiber.memoizedProps || fiber.pendingProps;
-                                    if (props && typeof props.onChange === 'function') {
-                                        try {
-                                            props.onChange({
-                                                target: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
-                                                currentTarget: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
-                                                preventDefault: () => {}, stopPropagation: () => {},
-                                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                                            });
-                                            return 'checked_via_fiber';
-                                        } catch(e) {}
-                                    }
-                                    fiber = fiber.return;
-                                }
-                            }
-                            cb.click();
-                            return 'checked_via_click';
-                        }
-                        return 'already_checked';
-                    }
-                }
-                return 'not_found';
-            }""")
-            print(f"    \u2705 STEP 3e: Consent = {consent_result}", flush=True)
-    except Exception as consent_e:
-        print(f"    \u26a0\ufe0f STEP 3e consent: {str(consent_e)[:60]}", flush=True)
+    time.sleep(0.5)
     
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
@@ -3887,7 +3842,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v61 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v62 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
