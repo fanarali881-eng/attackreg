@@ -2851,6 +2851,69 @@ def fill_form_dynamically(page):
     except Exception as comm_e:
         print(f"    \u26a0\ufe0f STEP 7g commissioner error: {str(comm_e)[:60]}", flush=True)
     
+    # ===== STEP 7g2: Fix delegateNationality React state =====
+    # The nationality buttons use onClick:()=>P('resident') which sets M state
+    # But the validation checks ae (a different state). We need to set ae='resident'
+    # by finding the state setter through the React fiber tree
+    try:
+        nat_fix = page.evaluate("""() => {
+            const results = [];
+            
+            // Find the nationality button by text
+            const buttons = document.querySelectorAll('button[type="button"]');
+            let natBtn = null;
+            for (const btn of buttons) {
+                if (btn.textContent.includes('مواطن / مقيم') || btn.textContent.includes('مواطن/مقيم')) {
+                    natBtn = btn;
+                    break;
+                }
+            }
+            if (!natBtn) { results.push('no_natBtn'); return results.join('|'); }
+            results.push('found_natBtn');
+            
+            // Click it first
+            natBtn.click();
+            results.push('clicked');
+            
+            // Walk up the React fiber tree from the button to find ALL state setters
+            let fiberKey = Object.keys(natBtn).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (!fiberKey) { results.push('no_fiber'); return results.join('|'); }
+            
+            let fiber = natBtn[fiberKey];
+            // Walk UP the fiber tree to find the form component
+            for (let i = 0; i < 30 && fiber; i++) {
+                // Look for memoizedState which contains useState hooks
+                if (fiber.memoizedState) {
+                    let hook = fiber.memoizedState;
+                    let hookIdx = 0;
+                    while (hook) {
+                        // useState hooks have a queue with dispatch
+                        if (hook.queue && typeof hook.queue.dispatch === 'function') {
+                            const currentVal = hook.memoizedState;
+                            // If current value is '' (empty string), this could be the nationality state
+                            if (currentVal === '' || currentVal === null) {
+                                try {
+                                    hook.queue.dispatch('resident');
+                                    results.push('set_hook_' + hookIdx + '_from_empty_at_fiber_' + i);
+                                } catch(e) {
+                                    results.push('hook_err_' + hookIdx + ':' + e.message.substring(0, 20));
+                                }
+                            }
+                        }
+                        hook = hook.next;
+                        hookIdx++;
+                    }
+                }
+                fiber = fiber.return;
+            }
+            
+            return results.join('|');
+        }""")
+        print(f"    \u2705 STEP 7g2 nationality fix: {nat_fix}", flush=True)
+        time.sleep(1)
+    except Exception as nat_e:
+        print(f"    \u26a0\ufe0f STEP 7g2 error: {str(nat_e)[:60]}", flush=True)
+    
     # Scroll to bottom to make submit button visible
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
