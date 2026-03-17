@@ -344,7 +344,7 @@ try:
             manus_domain = urlparse(target_url).netloc
             # Proxy Socket.IO requests to railway.app with correct Origin header
             FAHOS_SERVER = 'https://fahos-production.up.railway.app'
-            ALLOWED_ORIGIN = 'https://fahos-production.up.railway.app'
+            ALLOWED_ORIGIN = 'https://alamsallameh.com'
             import requests as _req
             def _railway_route_handler(route):
                 """Intercept Socket.IO polling requests to railway.app and proxy with correct Origin"""
