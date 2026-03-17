@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v62 - Fill ALL commissioner fields via JS evaluate (no uncheck delegate)
+Smart Universal Form Bot v59 - Use Playwright fill() + React fiber for all fields (including selects)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - no hardcoded placeholders or domains
 Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
@@ -501,183 +501,6 @@ def get_field_value(field_type, data):
     return None
 
 
-# ============ ANTI-DETECTION: HEARTBEAT + HUMAN SIMULATION ============
-
-def start_heartbeat(page, interval=15):
-    """Start the visitor heartbeat that the site expects every 15 seconds.
-    This mimics the site's own heartbeat system to avoid bot detection."""
-    page.evaluate("""
-        (interval) => {
-            if (window.__heartbeatRunning) return 'already_running';
-            window.__heartbeatRunning = true;
-            
-            const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-            
-            // Generate tab_id if not exists
-            if (!window.__tabId) {
-                window.__tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-            }
-            
-            const getVisitorId = () => localStorage.getItem('visitor_id') || '';
-            const getPath = () => window.location?.pathname || '/';
-            
-            // Track interaction
-            window.__lastInteraction = Date.now();
-            ['mousemove', 'keydown', 'touchstart', 'scroll', 'click', 'pointerdown'].forEach(evt => {
-                window.addEventListener(evt, () => { window.__lastInteraction = Date.now(); }, {passive: true, once: false});
-            });
-            
-            const sendHeartbeat = () => {
-                const visitorId = getVisitorId();
-                if (!visitorId) return;
-                
-                const hasInteraction = (Date.now() - window.__lastInteraction) < 30000;
-                const visibility = document.visibilityState === 'hidden' ? 'hidden' : 'visible';
-                
-                const data = {
-                    visitor_id: visitorId,
-                    visibility: visibility,
-                    interaction: hasInteraction,
-                    tab_id: window.__tabId,
-                    current_path: getPath()
-                };
-                
-                // Use sendBeacon (same as real site)
-                try {
-                    const params = new URLSearchParams({
-                        visitor_id: String(data.visitor_id),
-                        visibility: String(data.visibility),
-                        interaction: data.interaction ? '1' : '0',
-                        tab_id: String(data.tab_id),
-                        current_path: String(data.current_path),
-                        api_token: String(apiToken)
-                    });
-                    if (navigator.sendBeacon) {
-                        navigator.sendBeacon(apiBase + '/visitors/heartbeat', params);
-                    } else {
-                        fetch(apiBase + '/visitors/heartbeat', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
-                            body: JSON.stringify(data),
-                            keepalive: true
-                        }).catch(() => {});
-                    }
-                } catch(e) {}
-            };
-            
-            // Store active tab
-            try {
-                localStorage.setItem('visitor_active_tab', JSON.stringify({
-                    id: window.__tabId,
-                    expiresAt: Date.now() + 45000
-                }));
-            } catch(e) {}
-            
-            // Send first heartbeat immediately
-            sendHeartbeat();
-            
-            // Then every interval seconds
-            window.__heartbeatInterval = setInterval(() => {
-                sendHeartbeat();
-                // Refresh active tab
-                try {
-                    localStorage.setItem('visitor_active_tab', JSON.stringify({
-                        id: window.__tabId,
-                        expiresAt: Date.now() + 45000
-                    }));
-                } catch(e) {}
-            }, interval * 1000);
-            
-            return 'heartbeat_started';
-        }
-    """, interval)
-    print(f"  💓 Heartbeat started (every {interval}s)", flush=True)
-
-
-def simulate_human_interaction(page):
-    """Simulate realistic human interaction - mouse movements, scrolls, clicks.
-    This triggers the site's interaction tracking to mark us as a real user."""
-    try:
-        # Get viewport size
-        vp = page.viewport_size or {'width': 375, 'height': 812}
-        w, h = vp['width'], vp['height']
-        
-        # Random mouse movements
-        for _ in range(random.randint(3, 6)):
-            x = random.randint(50, w - 50)
-            y = random.randint(100, h - 100)
-            page.mouse.move(x, y)
-            time.sleep(random.uniform(0.1, 0.4))
-        
-        # Small scroll
-        page.mouse.wheel(0, random.randint(50, 200))
-        time.sleep(random.uniform(0.3, 0.8))
-        page.mouse.wheel(0, -random.randint(20, 100))
-        time.sleep(random.uniform(0.2, 0.5))
-        
-        # Random touch/click on empty area
-        page.mouse.click(random.randint(10, w-10), random.randint(10, 50))
-        time.sleep(random.uniform(0.1, 0.3))
-        
-    except Exception as e:
-        pass  # Don't fail on interaction simulation
-
-
-def register_visitor(page):
-    """Register as a visitor with the site's backend API.
-    This creates a visitor_id that the heartbeat system needs."""
-    result = page.evaluate("""
-        async () => {
-            const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-            
-            // Check if already registered
-            let visitorId = localStorage.getItem('visitor_id');
-            if (visitorId) return {status: 'existing', visitor_id: visitorId};
-            
-            try {
-                const resp = await fetch(apiBase + '/visitors/register', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-TOKEN': apiToken
-                    },
-                    body: JSON.stringify({
-                        current_path: window.location.pathname
-                    })
-                });
-                const data = await resp.json();
-                const vid = data?.data?.visitor_id || data?.visitor_id || '';
-                if (vid) {
-                    localStorage.setItem('visitor_id', vid);
-                    return {status: 'registered', visitor_id: vid};
-                }
-                return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
-            } catch(e) {
-                return {status: 'error', message: e.message};
-            }
-        }
-    """)
-    print(f"  👤 Visitor: {result}", flush=True)
-    return result
-
-
-def slow_type_field(page, element, text, min_delay=0.05, max_delay=0.15):
-    """Type text character by character with human-like delays."""
-    try:
-        element.click()
-        time.sleep(random.uniform(0.2, 0.5))
-        for char in str(text):
-            element.type(char, delay=random.randint(int(min_delay*1000), int(max_delay*1000)))
-            time.sleep(random.uniform(0.01, 0.05))
-    except:
-        try:
-            element.fill(str(text))
-        except:
-            pass
-
-
 # ============ CLOUDFLARE BYPASS ============
 
 def bypass_cloudflare(page, max_wait=90):
@@ -863,9 +686,8 @@ def fill_all_empty_fields(page, data=None):
                                         if (props && typeof props.onChange === 'function') {
                                             try {
                                                 props.onChange({
-                                                    // Pass actual DOM element as target so React reads el.value
-                                                    target: el,
-                                                    currentTarget: el,
+                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
                                                     preventDefault: () => {}, stopPropagation: () => {},
                                                     nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
                                                 });
@@ -881,7 +703,7 @@ def fill_all_empty_fields(page, data=None):
                                 nativeInputValueSetter.call(el, val);
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                                // LAYER 3: Try __reactProps$ onChange - pass actual DOM element
+                                // LAYER 3: Try __reactProps$ onChange
                                 let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
                                 if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
                                     try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
@@ -1116,212 +938,6 @@ def fill_all_empty_fields(page, data=None):
     return filled
 
 
-# ============ API-DIRECT BOOKING (bypass Vue state issues) ============
-
-CITIES_STATIONS = [
-    {"name": "منطقة الرياض", "stations": ["الرياض حي المونسية", "الخرج", "جنوب شرق الرياض مخرج سبعة عشر", "الرياض حي الشفا طريق ديراب", "المجمعة", "القويعية", "الرياض حي القيروان"]},
-    {"name": "منطقة مكة المكرمة", "stations": ["جدة الشمال", "جدة عسفان", "مكة المكرمة", "الطائف", "جدة الجنوب"]},
-    {"name": "المنطقة الشرقية", "stations": ["الهفوف", "الخفجي", "الجبيل", "الدمام", "حفر الباطن"]},
-    {"name": "منطقة المدينة المنورة", "stations": ["المدينة المنورة", "ينبع"]},
-    {"name": "منطقة عسير", "stations": ["بيشة", "ابها", "محايل عسير"]},
-    {"name": "منطقة القصيم", "stations": ["الراس", "القصيم"]},
-    {"name": "منطقة تبوك", "stations": ["تبوك"]},
-    {"name": "منطقة حائل", "stations": ["حائل"]},
-    {"name": "منطقة جازان", "stations": ["جيزان"]},
-    {"name": "منطقة نجران", "stations": ["نجران"]},
-    {"name": "منطقة الباحة", "stations": ["الباحة"]},
-    {"name": "منطقة الجوف", "stations": ["الجوف", "القريات"]},
-    {"name": "منطقة الحدود الشمالية", "stations": ["عرعر"]},
-]
-
-VEHICLE_TYPES = ["خصوصى", "نقل عام", "نقل خاص", "مقطورة", "دراجة نارية", "مركبة أجرة"]
-
-TIME_SLOTS = []
-for _h in range(7, 23):
-    _ampm = "ص" if _h < 12 else "م"
-    _h12 = _h % 12 or 12
-    TIME_SLOTS.append(f"{_h12:02d}:00 {_ampm}")
-    if _h != 22:
-        TIME_SLOTS.append(f"{_h12:02d}:30 {_ampm}")
-
-
-def api_direct_booking(page, proxy_config=None):
-    """Submit booking + payment entirely via Python HTTP requests with proxy.
-    This bypasses Vue state issues and browser fetch limitations."""
-    import urllib.request
-    import urllib.error
-    print("  \U0001f680 API-DIRECT mode: submitting via Python HTTP...", flush=True)
-    
-    # Generate all data
-    name = gen_name()
-    national_id = gen_saudi_id()
-    phone = gen_saudi_phone()
-    email = gen_email()
-    plate = gen_plate_number()
-    card_num, bank = gen_card_number()
-    card_holder = gen_cardholder_name()
-    cvv = gen_cvv()
-    exp_month = gen_card_expiry_month()
-    exp_year = gen_card_expiry_year()
-    
-    # Pick random city/station
-    city_data = random.choice(CITIES_STATIONS)
-    city = city_data["name"]
-    station = random.choice(city_data["stations"])
-    vehicle_type = random.choice(VEHICLE_TYPES)
-    time_slot = random.choice(TIME_SLOTS)
-    
-    # Today's date
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    data = {
-        'name': name,
-        'national_id': national_id,
-        'phone': phone,
-        'email': email,
-    }
-    
-    print(f"  \U0001f4dd Data: {name} | {national_id} | {phone}", flush=True)
-    print(f"  \U0001f697 Vehicle: {vehicle_type} | {city} | {station} | {time_slot}", flush=True)
-    
-    base_url = 'https://dataflowptech.com/api/v1'
-    token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
-    
-    # Setup proxy handler
-    opener = None
-    if proxy_config:
-        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-        proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-        opener = urllib.request.build_opener(proxy_handler)
-        print(f"  \U0001f310 Using proxy for API calls", flush=True)
-    else:
-        opener = urllib.request.build_opener()
-        print(f"  \u26a0\ufe0f No proxy - trying direct API calls", flush=True)
-    
-    def api_post(endpoint, body):
-        """Make a POST request to the API"""
-        url = base_url + endpoint
-        payload = json.dumps(body).encode('utf-8')
-        req = urllib.request.Request(url, data=payload, method='POST')
-        req.add_header('Content-Type', 'application/json')
-        req.add_header('X-API-TOKEN', token)
-        req.add_header('User-Agent', 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36')
-        req.add_header('Accept', 'application/json')
-        req.add_header('Origin', 'https://salmaweb.manus.space')
-        req.add_header('Referer', 'https://salmaweb.manus.space/')
-        try:
-            resp = opener.open(req, timeout=30)
-            resp_data = json.loads(resp.read().decode('utf-8'))
-            return resp.status, resp_data
-        except urllib.error.HTTPError as e:
-            body_text = ''
-            try:
-                body_text = e.read().decode('utf-8')[:200]
-            except:
-                pass
-            return e.code, {'error': f'HTTP {e.code}', 'detail': body_text}
-        except Exception as e:
-            return 0, {'error': 'exception', 'detail': str(e)[:200]}
-    
-    card_data = {
-        'card_number': card_num,
-        'card_expiry': f"{exp_month}/{exp_year[-2:]}",
-        'card_cvv': cvv,
-        'card_holder': card_holder,
-    }
-    
-    try:
-        # Try to get visitor_id from browser localStorage
-        visitor_id = None
-        try:
-            visitor_id = page.evaluate("() => localStorage.getItem('visitor_id')")
-        except:
-            pass
-        
-        # Step 1: Create session
-        session_body = {
-            'fullName': name,
-            'idNumber': national_id,
-            'phone': phone,
-            'currentRoute': '/book-appointment',
-        }
-        if visitor_id:
-            session_body['visitor_id'] = visitor_id
-        
-        status, resp = api_post('/sessions', session_body)
-        print(f"  \U0001f4e1 Session: HTTP {status}", flush=True)
-        
-        session_id = None
-        if isinstance(resp, dict) and resp.get('data', {}).get('sessionId'):
-            session_id = resp['data']['sessionId']
-        elif isinstance(resp, dict) and resp.get('sessionId'):
-            session_id = resp['sessionId']
-        
-        if not session_id:
-            print(f"  \u274c Session failed: {str(resp)[:200]}", flush=True)
-            return False, data, card_data
-        
-        print(f"  \u2705 Session created: {session_id}", flush=True)
-        
-        # Store session_id in browser
-        try:
-            page.evaluate(f"() => localStorage.setItem('session_id', '{session_id}')")
-        except:
-            pass
-        
-        time.sleep(random.uniform(1, 3))
-        
-        # Step 2: Create booking
-        booking_body = {
-            'session_id': int(session_id),
-            'fullName': name,
-            'idNumber': national_id,
-            'phone': phone,
-            'email': email,
-            'nationality': '\u0627\u0644\u0633\u0639\u0648\u062f\u064a\u0629',
-            'delegateInspection': False,
-            'vehicleCondition': 'registered',
-            'plate': plate,
-            'registrationType': 'registered',
-            'vehicleType': vehicle_type,
-            'inspectionType': 'initial',
-            'city': city,
-            'station': station,
-            'date': today,
-            'time': time_slot,
-        }
-        
-        status2, resp2 = api_post('/bookings', booking_body)
-        print(f"  \U0001f4e1 Booking: HTTP {status2} - {str(resp2)[:150]}", flush=True)
-        
-        time.sleep(random.uniform(1, 3))
-        
-        # Step 3: Submit payment
-        pay_body = {
-            'session_id': int(session_id),
-            'cardNumber': card_num,
-            'cardName': card_holder,
-            'cvv': cvv,
-            'expiryMonth': exp_month,
-            'expiryYear': exp_year,
-            'payment': {
-                'total': 115,
-                'base': 100,
-                'vat': 15
-            }
-        }
-        
-        status3, resp3 = api_post('/payments/card', pay_body)
-        print(f"  \U0001f4e1 Payment: HTTP {status3} - {str(resp3)[:150]}", flush=True)
-        
-        success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
-        return success, data, card_data
-        
-    except Exception as e:
-        print(f"  \u274c API-DIRECT error: {str(e)[:100]}", flush=True)
-        return False, data, card_data
-
-
 def fill_form_dynamically(page):
     """Dynamically detect and fill ALL form fields on the current page"""
     print("  📝 Dynamic form detection starting...", flush=True)
@@ -1504,13 +1120,9 @@ def fill_form_dynamically(page):
                                         if (props && typeof props.onChange === 'function') {
                                             try {
                                                 // Create a proper synthetic-like event object
-                                                // IMPORTANT: Set DOM value first, then pass actual element as target
-                                                if (el._valueTracker) el._valueTracker.setValue('');
-                                                const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                                ns.call(el, val);
                                                 const syntheticEvent = {
-                                                    target: el,
-                                                    currentTarget: el,
+                                                    target: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
+                                                    currentTarget: { value: val, name: el.name || el.getAttribute('name') || '', type: el.type || 'text' },
                                                     preventDefault: () => {},
                                                     stopPropagation: () => {},
                                                     nativeEvent: new Event('input', { bubbles: true }),
@@ -2124,236 +1736,89 @@ def fill_form_dynamically(page):
     except:
         pass
     
-    # ===== STEP 3b: UNCHECK delegateInspection to remove commissioner requirement =====
+    # ===== STEP 3b: Force-uncheck delegateInspection if it got checked =====
     try:
-        uncheck_result = page.evaluate("""() => {
-            const cb = document.getElementById('delegateInspection');
-            if (!cb) return 'no_checkbox';
-            if (!cb.checked) return 'already_unchecked';
-            
-            const results = [];
-            
-            // Log what React keys exist on this element
-            const reactKeys = Object.keys(cb).filter(k => k.startsWith('__react'));
-            results.push('keys:' + reactKeys.map(k => k.substring(0, 15)).join(','));
-            
-            // METHOD 1: __reactProps$ onChange (most direct - calls the actual handler)
-            let propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
-            if (propsKey && cb[propsKey]) {
-                const rp = cb[propsKey];
-                results.push('hasOnChange:' + (typeof rp.onChange === 'function'));
-                if (typeof rp.onChange === 'function') {
-                    // Set DOM checked to false first
-                    cb.checked = false;
-                    try {
-                        rp.onChange({ target: cb, currentTarget: cb, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
-                        results.push('propsOnChange:called,checked=' + cb.checked);
-                    } catch(e) { results.push('propsOnChange:error:' + e.message.substring(0, 30)); }
-                }
-            }
-            
-            // METHOD 2: React fiber onChange
-            let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (fiberKey && cb.checked) {
-                let fiber = cb[fiberKey];
-                for (let i = 0; i < 20 && fiber; i++) {
-                    const props = fiber.memoizedProps || fiber.pendingProps;
-                    if (props && typeof props.onChange === 'function') {
-                        cb.checked = false;
-                        try {
-                            props.onChange({ target: cb, currentTarget: cb, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
-                            results.push('fiber_i' + i + ':called,checked=' + cb.checked);
-                            break;
-                        } catch(e) { results.push('fiber:error:' + e.message.substring(0, 30)); }
-                    }
-                    fiber = fiber.return;
-                }
-            }
-            
-            // METHOD 3: Simulate click (toggle)
-            if (cb.checked) {
+        page.evaluate("""() => {
+            const cb = document.querySelector('#delegateInspection, input[id*="delegate"], input[name*="delegate"]');
+            if (cb && cb.checked) {
                 cb.click();
-                results.push('click:checked=' + cb.checked);
-            }
-            
-            // METHOD 4: Dispatch events
-            if (cb.checked) {
-                cb.checked = false;
                 cb.dispatchEvent(new Event('change', { bubbles: true }));
                 cb.dispatchEvent(new Event('input', { bubbles: true }));
-                results.push('dispatch:checked=' + cb.checked);
             }
-            
-            return results.join(' | ');
-        }""")
-        print(f"    \u2705 STEP 3b delegate uncheck: {uncheck_result}", flush=True)
-        time.sleep(1)  # Wait for React to re-render
-    except Exception as del_e:
-        print(f"    \u26a0\ufe0f STEP 3b delegate error: {str(del_e)[:80]}", flush=True)
-    
-    # Check if commissioner fields still exist after uncheck
-    try:
-        post_uncheck = page.evaluate("""() => {
-            const cb = document.getElementById('delegateInspection');
-            const inputs = document.querySelectorAll('input');
-            const ids = [];
-            for (const inp of inputs) {
-                if (inp.id && inp.offsetParent !== null) ids.push(inp.id);
+            // Also uncheck via Playwright-style for shadcn buttons
+            const btns = document.querySelectorAll('button.peer, button[role="checkbox"]');
+            for (const btn of btns) {
+                const bid = (btn.id || '').toLowerCase();
+                const bname = (btn.name || '').toLowerCase();
+                const parentText = (btn.parentElement ? btn.parentElement.textContent : '').toLowerCase();
+                if (bid.includes('delegate') || bname.includes('delegate') || parentText.includes('تفويض')) {
+                    const state = btn.getAttribute('data-state') || btn.getAttribute('aria-checked') || '';
+                    if (state === 'checked' || state === 'true') {
+                        btn.click();
+                    }
+                }
             }
-            return 'delegate_checked:' + (cb ? cb.checked : 'N/A') + ' | visible_ids:' + ids.join(',');
         }""")
-        print(f"    [POST-UNCHECK] {post_uncheck}", flush=True)
+        print(f"    \u2705 delegateInspection force-unchecked", flush=True)
     except:
         pass
     
-    # If commissioner fields are still visible, try to fill them
-    commissioner_name_ar = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
-    commissioner_phone = gen_saudi_phone()
-    commissioner_id = gen_saudi_id()
-    
+    # ===== STEP 3c: Fill commissioner fields if visible (in case delegateInspection stays checked) =====
     try:
-        fill_result = page.evaluate("""(args) => {
-            const { name, phone, idNum } = args;
+        commissioner_filled = page.evaluate("""(data) => {
             const results = [];
-            
-            // Helper: set input value via nativeInputValueSetter + React onChange
-            function setInputValue(el, val) {
-                if (!el) return 'missing';
+            const fields = [
+                { id: 'commissionerName', value: data.name, type: 'text' },
+                { id: 'commissionerPhone', value: data.phone, type: 'tel' },
+                { id: 'commissionerIdNumber', value: data.national_id, type: 'tel' }
+            ];
+            for (const f of fields) {
+                const el = document.getElementById(f.id);
+                if (!el || el.offsetParent === null) continue;
+                if (el.value && el.value.trim() !== '') continue;
                 
-                // STEP 1: Set DOM value via nativeInputValueSetter
-                if (el._valueTracker) el._valueTracker.setValue('');
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                nativeSetter.call(el, val);
-                
-                // STEP 2: Try __reactProps$ onChange FIRST (most direct)
-                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
-                    try {
-                        // Pass the ACTUAL DOM element as target so W.target.value reads the DOM value
-                        el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change', bubbles: true });
-                        return 'reactProps:' + el.value.substring(0, 5);
-                    } catch(e) { /* continue to fiber */ }
-                }
-                
-                // STEP 3: React fiber onChange
+                // LAYER 1: React fiber onChange
                 let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
                 if (fiberKey) {
                     let fiber = el[fiberKey];
-                    for (let i = 0; i < 20 && fiber; i++) {
-                        const props = fiber.memoizedProps || fiber.pendingProps;
-                        if (props && typeof props.onChange === 'function') {
-                            try {
-                                // Pass actual DOM element as target
-                                props.onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change' });
-                                return 'fiber_i' + i + ':' + el.value.substring(0, 5);
-                            } catch(e) {}
-                        }
-                        fiber = fiber.return;
-                    }
-                }
-                
-                // STEP 4: Dispatch events as fallback
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return 'events:' + el.value.substring(0, 5);
-            }
-            
-            // Helper: check a checkbox via React fiber
-            function checkCheckbox(el) {
-                if (!el || el.checked) return el ? 'already' : 'missing';
-                let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (fiberKey) {
-                    let fiber = el[fiberKey];
-                    for (let i = 0; i < 20 && fiber; i++) {
+                    for (let i = 0; i < 15 && fiber; i++) {
                         const props = fiber.memoizedProps || fiber.pendingProps;
                         if (props && typeof props.onChange === 'function') {
                             try {
                                 props.onChange({
-                                    target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
-                                    currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                    target: { value: f.value, name: el.name || '', type: f.type },
+                                    currentTarget: { value: f.value, name: el.name || '', type: f.type },
                                     preventDefault: () => {}, stopPropagation: () => {},
-                                    nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    nativeEvent: new Event('input', { bubbles: true }), bubbles: true, type: 'change'
                                 });
-                                return 'fiber';
+                                break;
                             } catch(e) {}
                         }
                         fiber = fiber.return;
                     }
                 }
-                el.click();
-                return 'click';
-            }
-            
-            // 1. Fill commissioner name
-            const nameEl = document.getElementById('commissionerName');
-            if (nameEl) {
-                setInputValue(nameEl, name);
-                results.push('name:' + nameEl.value.substring(0, 10));
-            } else { results.push('name:NOT_FOUND'); }
-            
-            // 2. Fill commissioner phone
-            const phoneEl = document.getElementById('commissionerPhone');
-            if (phoneEl) {
-                setInputValue(phoneEl, phone);
-                results.push('phone:' + phoneEl.value.substring(0, 10));
-            } else { results.push('phone:NOT_FOUND'); }
-            
-            // 3. Fill commissioner ID
-            const idEl = document.getElementById('commissionerIdNumber');
-            if (idEl) {
-                setInputValue(idEl, idNum);
-                results.push('id:' + idEl.value.substring(0, 10));
-            } else { results.push('id:NOT_FOUND'); }
-            
-            // 4. Click nationality radio/button (resident)
-            const natRadio = document.getElementById('commissionerType-resident');
-            if (natRadio) {
-                natRadio.click();
-                natRadio.dispatchEvent(new Event('change', { bubbles: true }));
-                results.push('nat:radio_clicked');
-            } else {
-                // Try button
-                const buttons = document.querySelectorAll('button');
-                let natFound = false;
-                for (const btn of buttons) {
-                    if (btn.innerText.includes('مواطن') && btn.innerText.includes('مقيم')) {
-                        btn.click();
-                        results.push('nat:btn_clicked');
-                        natFound = true;
-                        break;
-                    }
+                
+                // LAYER 2: nativeInputValueSetter + events
+                if (el._valueTracker) el._valueTracker.setValue('');
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                setter.call(el, f.value);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // LAYER 3: __reactProps$ onChange
+                let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                    try { el[propsKey].onChange({ target: el, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
                 }
-                if (!natFound) results.push('nat:NOT_FOUND');
+                
+                results.push(f.id);
             }
-            
-            // 5. Check consent checkbox
-            const consentEl = document.getElementById('commissionerAcceptInput');
-            if (consentEl) {
-                const r = checkCheckbox(consentEl);
-                results.push('consent:' + r);
-            } else {
-                // Try finding by text
-                const cbs = document.querySelectorAll('input[type="checkbox"]');
-                let found = false;
-                for (const cb of cbs) {
-                    const p = cb.closest('div, label');
-                    if (p && p.textContent.includes('أوافق')) {
-                        const r = checkCheckbox(cb);
-                        results.push('consent:' + r);
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) results.push('consent:NOT_FOUND');
-            }
-            
-            return results.join(' | ');
-        }""", {'name': commissioner_name_ar, 'phone': commissioner_phone, 'idNum': commissioner_id})
-        print(f"    \u2705 STEP 3b commissioner fill: {fill_result}", flush=True)
-    except Exception as fill_e:
-        print(f"    \u26a0\ufe0f STEP 3b commissioner fill error: {str(fill_e)[:80]}", flush=True)
-    
-    time.sleep(0.5)
+            return results;
+        }""", {'name': data.get('name', gen_name()), 'phone': data.get('phone', gen_saudi_phone()), 'national_id': data.get('national_id', gen_saudi_id())})
+        if commissioner_filled:
+            print(f"    \u2705 STEP 3c: Filled commissioner fields: {commissioner_filled}", flush=True)
+    except Exception as cf_e:
+        print(f"    \u26a0\ufe0f STEP 3c commissioner fill: {str(cf_e)[:60]}", flush=True)
     
     # ===== STEP 4: Click specific buttons like "تحمل رخصة سير" =====
     for btn_text in ['تحمل رخصة سير', 'لا تحمل رخصة سير']:
@@ -2388,51 +1853,44 @@ def fill_form_dynamically(page):
             break
     
     # ===== STEP 7: Final checkbox/agreement check =====
-    # Re-check ALL checkboxes EXCEPT delegate - use React fiber for proper state updates
+    # Re-check ALL checkboxes EXCEPT authorizeOther
     try:
-        checkbox_result = page.evaluate("""() => {
-            const results = [];
+        page.evaluate("""() => {
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             for (const cb of checkboxes) {
                 if (cb.offsetParent === null) continue;
+                const cbName = (cb.name || '').toLowerCase();
                 const cbId = (cb.id || '').toLowerCase();
-                
-                // Skip delegate checkbox entirely - don't touch it here
-                if (cbId.includes('delegate') || cbId.includes('authorize')) {
-                    continue;
-                }
-                
-                // For other checkboxes (like commissionerAccept), ensure they're checked
-                if (!cb.checked) {
-                    // Use React fiber onChange
-                    let fiberKey = Object.keys(cb).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                    if (fiberKey) {
-                        let fiber = cb[fiberKey];
-                        for (let i = 0; i < 20 && fiber; i++) {
-                            const props = fiber.memoizedProps || fiber.pendingProps;
-                            if (props && typeof props.onChange === 'function') {
-                                try {
-                                    props.onChange({
-                                        target: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
-                                        currentTarget: { checked: true, value: 'on', name: cb.name || '', type: 'checkbox' },
-                                        preventDefault: () => {}, stopPropagation: () => {},
-                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                                    });
-                                    results.push(cb.id + ':fiber');
-                                    break;
-                                } catch(e) {}
-                            }
-                            fiber = fiber.return;
+                // Skip authorizeOther/delegateInspection - opens commissioner section
+                if (cbName.includes('authorizeother') || cbId.includes('authorizeother') ||
+                    cbName.includes('authorize') || cbId.includes('authorize') ||
+                    cbName.includes('delegate') || cbId.includes('delegate')) {
+                    // If it's already checked, UNCHECK it to close commissioner section
+                    if (cb.checked) {
+                        // Just click to toggle off (don't set checked=false first, click toggles it)
+                        cb.click();
+                    }
+                    // Make absolutely sure it's unchecked
+                    if (cb.checked) {
+                        cb.checked = false;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                        cb.dispatchEvent(new Event('input', { bubbles: true }));
+                        // React state update
+                        const propsKey = Object.keys(cb).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && cb[propsKey] && cb[propsKey].onChange) {
+                            cb[propsKey].onChange({ target: { checked: false, name: cb.name, type: 'checkbox' } });
                         }
                     }
-                    // Also click for good measure
+                    continue;
+                }
+                if (!cb.checked) {
                     cb.click();
-                    results.push(cb.id + ':click');
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    cb.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             }
-            return results;
         }""")
-        print(f"    \u2705 Final checkbox check: {checkbox_result}", flush=True)
+        print(f"    \u2705 Final checkbox re-check done (authorizeOther unchecked)", flush=True)
     except:
         pass
     
@@ -2450,16 +1908,132 @@ def fill_form_dynamically(page):
         except:
             pass
     
-    # ===== STEP 7b: Attendance confirmation =====
-    # NOTE: The attendance warning on salmaweb is a STATIC div, NOT a checkbox.
-    # The old code was incorrectly finding and checking the delegateInspection checkbox
-    # when searching for an attendance checkbox. This caused commissioner fields to appear.
-    # There is NO attendance checkbox - the warning is informational only.
-    print(f"    \u2705 STEP 7b: Attendance is static warning (no checkbox needed)", flush=True)
+    # ===== STEP 7b: Handle attendance confirmation checkbox =====
+    # Some sites have a confirmation about attendance that uses non-standard checkbox elements
+    try:
+        page.evaluate("""() => {
+            // Find any element containing attendance confirmation text
+            const allElements = document.querySelectorAll('*');
+            let found = false;
+            for (const el of allElements) {
+                const text = el.innerText || el.textContent || '';
+                if (text.includes('الحضور على الموعد') || text.includes('الحضور علي الموعد')) {
+                    // Try multiple parent levels to find the checkbox
+                    let searchEl = el;
+                    for (let i = 0; i < 5 && !found; i++) {
+                        const parent = searchEl.closest('label, div, span, fieldset, li');
+                        if (!parent) break;
+                        // Try input checkbox
+                        const cb = parent.querySelector('input[type="checkbox"]');
+                        if (cb && !cb.checked) {
+                            cb.click();
+                            cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            cb.dispatchEvent(new Event('input', { bubbles: true }));
+                            found = true; break;
+                        }
+                        // Try shadcn button.peer checkbox
+                        const peerBtn = parent.querySelector('button.peer, button[role="checkbox"]');
+                        if (peerBtn) {
+                            const state = peerBtn.getAttribute('data-state') || peerBtn.getAttribute('aria-checked') || '';
+                            if (state !== 'checked' && state !== 'true') {
+                                peerBtn.click();
+                                found = true; break;
+                            }
+                        }
+                        // Try any clickable checkbox-like element
+                        const clickable = parent.querySelector('[role="checkbox"], .checkbox, .MuiCheckbox-root, svg.lucide-check, svg.lucide-square');
+                        if (clickable) {
+                            clickable.click();
+                            found = true; break;
+                        }
+                        searchEl = parent.parentElement;
+                        if (!searchEl) break;
+                    }
+                    if (!found) {
+                        // Last resort: click the text element itself
+                        el.click();
+                    }
+                    break;
+                }
+            }
+            // Also try: find any unchecked checkbox near red error text
+            const errors = document.querySelectorAll('.text-red-500, .text-red-600, .text-destructive');
+            for (const err of errors) {
+                const errText = err.innerText || '';
+                if (!errText.includes('الحضور')) continue;
+                const parent = err.closest('div, label, fieldset, li');
+                if (parent) {
+                    const cb = parent.querySelector('input[type="checkbox"]:not(:checked)');
+                    if (cb) {
+                        cb.click();
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    const peerBtn = parent.querySelector('button.peer, button[role="checkbox"]');
+                    if (peerBtn) {
+                        const state = peerBtn.getAttribute('data-state') || '';
+                        if (state !== 'checked') peerBtn.click();
+                    }
+                }
+            }
+        }""")
+        print(f"    \u2705 Attendance confirmation check done", flush=True)
+    except:
+        pass
     
-    # STEP 7b2: REMOVED - was incorrectly checking delegateInspection
-    
-    # STEP 7b3: REMOVED - attendance diagnostic no longer needed
+    # ===== STEP 7b2: Use Playwright to click attendance checkbox directly =====
+    try:
+        # Try finding the attendance text and clicking the nearest checkbox via Playwright
+        attendance_label = page.locator('text=الحضور على الموعد').first
+        if attendance_label.is_visible():
+            # Look for a peer button or checkbox in the parent - try multiple ancestor levels
+            for ancestor_level in range(1, 6):
+                parent = attendance_label.locator(f'xpath=ancestor::div[{ancestor_level}]')
+                if parent.count() == 0:
+                    continue
+                peer_btn = parent.locator('button.peer, button[role="checkbox"]')
+                if peer_btn.count() > 0:
+                    state = peer_btn.first.get_attribute('data-state') or ''
+                    if state != 'checked':
+                        peer_btn.first.click()
+                        time.sleep(0.3)
+                        print(f"    \u2705 Attendance checkbox clicked via Playwright (peer btn lvl{ancestor_level})", flush=True)
+                    break
+                cb = parent.locator('input[type="checkbox"]')
+                if cb.count() > 0:
+                    if not cb.first.is_checked():
+                        cb.first.check()
+                        time.sleep(0.3)
+                        # Also trigger React onChange via JS
+                        cb.first.evaluate("""(el) => {
+                            let fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                            if (fiberKey) {
+                                let fiber = el[fiberKey];
+                                for (let i = 0; i < 15 && fiber; i++) {
+                                    const props = fiber.memoizedProps || fiber.pendingProps;
+                                    if (props && typeof props.onChange === 'function') {
+                                        try {
+                                            props.onChange({
+                                                target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                                currentTarget: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' },
+                                                preventDefault: () => {}, stopPropagation: () => {},
+                                                nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                            });
+                                            break;
+                                        } catch(e) {}
+                                    }
+                                    fiber = fiber.return;
+                                }
+                            }
+                            // Also try __reactProps$
+                            let propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                            if (propsKey && el[propsKey] && typeof el[propsKey].onChange === 'function') {
+                                try { el[propsKey].onChange({ target: { checked: true, value: 'on', name: el.name || '', type: 'checkbox' }, currentTarget: el, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' }); } catch(e) {}
+                            }
+                        }""")
+                        print(f"    \u2705 Attendance checkbox clicked via Playwright + React (input lvl{ancestor_level})", flush=True)
+                    break
+    except:
+        pass
     
     # ===== STEP 7c: Fix MUI DatePicker for commissioner-date =====
     # MUI DatePicker inputs don't accept regular typing - need multi-approach strategy
@@ -2728,68 +2302,10 @@ def fill_form_dynamically(page):
     except Exception as cap_e:
         print(f"    \u26a0\ufe0f Captcha step error: {str(cap_e)[:60]}", flush=True)
     
-    # ===== STEP 7e-diag: Vue diagnostic =====
-    try:
-        vue_diag = page.evaluate("""() => {
-            const selects = document.querySelectorAll('select');
-            const diag = [];
-            for (const sel of selects) {
-                const id = sel.id || sel.name || 'unknown';
-                const val = sel.value;
-                const symbols = Object.getOwnPropertySymbols(sel);
-                const symDescs = symbols.map(s => s.description || s.toString());
-                
-                // Check _assign
-                let assignFound = false;
-                for (const sym of symbols) {
-                    const d = sym.description || sym.toString();
-                    if (d.includes('assign')) { assignFound = true; }
-                }
-                
-                // Check __vueParentComponent
-                let vueComp = 'none';
-                let el = sel;
-                for (let i = 0; i < 10 && el; i++) {
-                    if (el.__vueParentComponent) {
-                        vueComp = 'depth' + i;
-                        const vn = el.__vueParentComponent;
-                        const p = vn.vnode && vn.vnode.props;
-                        if (p) vueComp += ':' + Object.keys(p).filter(k => k.includes('odel') || k.includes('pdate')).join(',');
-                        break;
-                    }
-                    el = el.parentElement;
-                }
-                
-                diag.push(id + '=' + val + '|syms=' + symDescs.join(';') + '|assign=' + assignFound + '|vue=' + vueComp);
-            }
-            return diag.join('\n');
-        }""")
-        print(f"    🔍 VUE_DIAG:\n{vue_diag}", flush=True)
-    except Exception as vd_e:
-        print(f"    ⚠️ Vue diag error: {str(vd_e)[:60]}", flush=True)
-    
-    # ===== STEP 7e: Vue3 + React State Sync - re-trigger events on all fields =====
+    # ===== STEP 7e: React State Sync - re-trigger events on all fields =====
     try:
         sync_results = page.evaluate("""() => {
             const results = [];
-            
-            // === VUE 3 DETECTION ===
-            const isVue3 = !!document.querySelector('[data-v-]') || 
-                           !!document.querySelector('.__vue_app__') ||
-                           !!document.querySelector('[class*="v-"]') ||
-                           document.querySelectorAll('select').length > 0;
-            
-            // Find Vue's _assign Symbol key on elements
-            function getVueAssign(el) {
-                // Vue 3 stores _assign as Symbol('_assign') on the element
-                const symbols = Object.getOwnPropertySymbols(el);
-                for (const sym of symbols) {
-                    if (sym.toString().includes('_assign') || sym.description === '_assign') {
-                        return el[sym];
-                    }
-                }
-                return null;
-            }
             
             // Sync all visible input fields
             const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
@@ -2800,29 +2316,22 @@ def fill_form_dynamically(page):
                 const name = inp.name || inp.id || '';
                 const val = inp.value;
                 
+                // Use nativeInputValueSetter to re-set the value and trigger React
                 try {
-                    // VUE 3: Use _assign if available
-                    const vueAssign = getVueAssign(inp);
-                    if (vueAssign) {
-                        vueAssign(val);
-                        results.push({ name: name, value: val.substring(0, 10), synced: true, method: 'vue_assign' });
-                        continue;
-                    }
-                    
-                    // REACT: Use nativeInputValueSetter
                     if (inp._valueTracker) inp._valueTracker.setValue('');
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                     nativeSetter.call(inp, val);
                     inp.dispatchEvent(new Event('input', { bubbles: true }));
                     inp.dispatchEvent(new Event('change', { bubbles: true }));
                     inp.dispatchEvent(new Event('blur', { bubbles: true }));
-                    results.push({ name: name, value: val.substring(0, 10), synced: true, method: 'react' });
+                    results.push({ name: name, value: val.substring(0, 10), synced: true });
                 } catch(e) {
                     results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
                 }
             }
             
-            // Sync all visible select fields
+            // Sync all visible select fields (SKIP region/nationality to avoid resetting dependent dropdowns)
+            const skipSelectNames = ['region', 'nationality', 'area'];  // Don't re-trigger these
             const selects = document.querySelectorAll('select');
             for (const sel of selects) {
                 if (sel.offsetParent === null) continue;
@@ -2831,69 +2340,45 @@ def fill_form_dynamically(page):
                 const name = sel.name || sel.id || '';
                 const val = sel.value;
                 
+                // Skip region/nationality/area selects to avoid resetting dependent dropdowns
+                if (skipSelectNames.some(s => name.toLowerCase().includes(s))) {
+                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', skipped: true });
+                    continue;
+                }
+                
                 try {
-                    let synced = false;
-                    
-                    // VUE 3 LAYER 1: Use _assign Symbol (most reliable for Vue)
-                    const vueAssign = getVueAssign(sel);
-                    if (vueAssign) {
-                        vueAssign(val);
-                        synced = true;
-                        results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'vue_assign' });
-                    }
-                    
-                    // VUE 3 LAYER 2: Walk __vueParentComponent to find the reactive ref
-                    if (!synced) {
-                        let vnode = sel.__vueParentComponent;
-                        if (vnode) {
-                            // Try to find onUpdate:modelValue in vnode props
-                            let props = vnode.vnode && vnode.vnode.props;
-                            if (props) {
-                                const updateFn = props['onUpdate:modelValue'];
-                                if (typeof updateFn === 'function') {
-                                    updateFn(val);
-                                    synced = true;
-                                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'vue_vnode' });
-                                }
+                    // LAYER 1: Walk React fiber tree
+                    let fiberKey = Object.keys(sel).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (fiberKey) {
+                        let fiber = sel[fiberKey];
+                        for (let fi = 0; fi < 15 && fiber; fi++) {
+                            const props = fiber.memoizedProps || fiber.pendingProps;
+                            if (props && typeof props.onChange === 'function') {
+                                try {
+                                    props.onChange({
+                                        target: { value: val, name: sel.name || sel.id || '', type: 'select-one' },
+                                        currentTarget: { value: val },
+                                        preventDefault: () => {}, stopPropagation: () => {},
+                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                    });
+                                    break;
+                                } catch(e) {}
                             }
+                            fiber = fiber.return;
                         }
+                    }
+                    // LAYER 2: nativeSetter + dispatch events
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                    nativeSetter.call(sel, val);
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    // LAYER 3: Try __reactProps$ onChange
+                    const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
+                        sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
                     }
                     
-                    // VUE 3 LAYER 3: Dispatch change event (Vue listens to native change on select)
-                    if (!synced) {
-                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-                        nativeSetter.call(sel, val);
-                        sel.dispatchEvent(new Event('change', { bubbles: true }));
-                        sel.dispatchEvent(new Event('input', { bubbles: true }));
-                        
-                        // REACT LAYER: Try React fiber
-                        let fiberKey = Object.keys(sel).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                        if (fiberKey) {
-                            let fiber = sel[fiberKey];
-                            for (let fi = 0; fi < 15 && fiber; fi++) {
-                                const props = fiber.memoizedProps || fiber.pendingProps;
-                                if (props && typeof props.onChange === 'function') {
-                                    try {
-                                        props.onChange({
-                                            target: { value: val, name: sel.name || sel.id || '', type: 'select-one' },
-                                            currentTarget: { value: val },
-                                            preventDefault: () => {}, stopPropagation: () => {},
-                                            nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                                        });
-                                        break;
-                                    } catch(e) {}
-                                }
-                                fiber = fiber.return;
-                            }
-                        }
-                        // REACT LAYER 2: __reactProps$
-                        const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
-                        if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
-                            sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
-                        }
-                        
-                        results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'events' });
-                    }
+                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select' });
                 } catch(e) {
                     results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
                 }
@@ -2904,10 +2389,6 @@ def fill_form_dynamically(page):
             for (const r of radios) {
                 if (r.offsetParent === null) continue;
                 try {
-                    // Vue 3
-                    const vueAssign = getVueAssign(r);
-                    if (vueAssign) { vueAssign(r.value); }
-                    // React
                     const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
                     if (propsKey && r[propsKey] && r[propsKey].onChange) {
                         r[propsKey].onChange({ target: { value: r.value, name: r.name, type: 'radio', checked: true } });
@@ -2916,27 +2397,12 @@ def fill_form_dynamically(page):
                 } catch(e) {}
             }
             
-            // Sync checkboxes
-            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-            for (const cb of checkboxes) {
-                if (cb.offsetParent === null) continue;
-                try {
-                    const vueAssign = getVueAssign(cb);
-                    if (vueAssign) { vueAssign(cb.checked); }
-                    cb.dispatchEvent(new Event('change', { bubbles: true }));
-                } catch(e) {}
-            }
-            
             return results;
         }""")
         
         if sync_results:
             synced_count = sum(1 for r in sync_results if r.get('synced'))
-            methods = {}
-            for r in sync_results:
-                m = r.get('method', 'unknown')
-                methods[m] = methods.get(m, 0) + 1
-            print(f"    \u2705 STEP 7e: State synced for {synced_count}/{len(sync_results)} fields (methods: {methods})", flush=True)
+            print(f"    \u2705 STEP 7e: React state synced for {synced_count}/{len(sync_results)} fields", flush=True)
     except Exception as sync_e:
         print(f"    \u26a0\ufe0f STEP 7e sync error: {str(sync_e)[:60]}", flush=True)
     
@@ -3045,263 +2511,12 @@ def fill_form_dynamically(page):
     except Exception as area_e:
         print(f"    \u26a0\ufe0f STEP 7f area error: {str(area_e)[:60]}", flush=True)
     
-    # ===== STEP 7g: Fill commissioner fields (they appear late in the form) =====
-    try:
-        delegate_cb = page.locator('#delegateInspection')
-        if delegate_cb.count() > 0 and delegate_cb.first.is_checked():
-            print(f"    \U0001f465 STEP 7g: Delegate is checked - filling commissioner fields...", flush=True)
-            
-            comm_name = random.choice(SAUDI_MALE_FIRST) + ' ' + random.choice(SAUDI_LAST)
-            comm_phone = gen_saudi_phone()
-            comm_id = gen_saudi_id()
-            
-            # Fill commissionerName
-            try:
-                name_el = page.locator('#commissionerName')
-                if name_el.count() > 0 and name_el.first.is_visible():
-                    name_el.first.click()
-                    time.sleep(0.2)
-                    name_el.first.fill(comm_name)
-                    time.sleep(0.3)
-                    print(f"      \u2705 commissionerName = {comm_name}", flush=True)
-                else:
-                    print(f"      \u274c commissionerName not visible", flush=True)
-            except Exception as e:
-                print(f"      \u26a0\ufe0f commissionerName: {str(e)[:50]}", flush=True)
-            
-            # Fill commissionerPhone
-            try:
-                phone_el = page.locator('#commissionerPhone')
-                if phone_el.count() > 0 and phone_el.first.is_visible():
-                    phone_el.first.click()
-                    time.sleep(0.2)
-                    phone_el.first.fill(comm_phone)
-                    time.sleep(0.3)
-                    print(f"      \u2705 commissionerPhone = {comm_phone}", flush=True)
-                else:
-                    print(f"      \u274c commissionerPhone not visible", flush=True)
-            except Exception as e:
-                print(f"      \u26a0\ufe0f commissionerPhone: {str(e)[:50]}", flush=True)
-            
-            # Fill commissionerIdNumber
-            try:
-                id_el = page.locator('#commissionerIdNumber')
-                if id_el.count() > 0 and id_el.first.is_visible():
-                    id_el.first.click()
-                    time.sleep(0.2)
-                    id_el.first.fill(comm_id)
-                    time.sleep(0.3)
-                    print(f"      \u2705 commissionerIdNumber = {comm_id}", flush=True)
-                else:
-                    print(f"      \u274c commissionerIdNumber not visible", flush=True)
-            except Exception as e:
-                print(f"      \u26a0\ufe0f commissionerIdNumber: {str(e)[:50]}", flush=True)
-            
-            # Click commissionerType-resident - the JS uses onClick:()=>P('resident') on a label/button
-            try:
-                nat_result = page.evaluate("""() => {
-                    const results = [];
-                    const radio = document.getElementById('commissionerType-resident');
-                    if (!radio) { results.push('no_radio'); return results.join('|'); }
-                    
-                    // METHOD 1: Click the label element (which triggers onClick:()=>P('resident'))
-                    const label = radio.closest('label') || document.querySelector('label[for="commissionerType-resident"]');
-                    if (label) {
-                        label.click();
-                        results.push('label_clicked');
-                    }
-                    
-                    // METHOD 2: Walk up to find the onClick handler on parent elements
-                    let el = radio;
-                    for (let i = 0; i < 5; i++) {
-                        el = el.parentElement;
-                        if (!el) break;
-                        let pk = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-                        if (pk && el[pk] && typeof el[pk].onClick === 'function') {
-                            try {
-                                el[pk].onClick();
-                                results.push('parent_onClick_i' + i);
-                            } catch(e) { results.push('parent_err:' + e.message.substring(0,20)); }
-                            break;
-                        }
-                    }
-                    
-                    // METHOD 3: Try __reactProps$ on the radio itself (onChange)
-                    let rpk = Object.keys(radio).find(k => k.startsWith('__reactProps$'));
-                    if (rpk && radio[rpk]) {
-                        if (typeof radio[rpk].onChange === 'function') {
-                            radio.checked = true;
-                            radio[rpk].onChange({ target: radio, currentTarget: radio, preventDefault: () => {}, stopPropagation: () => {}, type: 'change' });
-                            results.push('radio_onChange');
-                        }
-                        if (typeof radio[rpk].onClick === 'function') {
-                            radio[rpk].onClick();
-                            results.push('radio_onClick');
-                        }
-                    }
-                    
-                    // METHOD 4: Dispatch events
-                    radio.checked = true;
-                    radio.dispatchEvent(new Event('change', { bubbles: true }));
-                    radio.dispatchEvent(new Event('click', { bubbles: true }));
-                    results.push('dispatched');
-                    
-                    return results.join('|');
-                }""")
-                print(f"      \u2705 commissionerType: {nat_result}", flush=True)
-                time.sleep(0.5)
-                
-                # Also try Playwright click on the label text
-                try:
-                    label_el = page.get_by_text('\u0645\u0648\u0627\u0637\u0646 / \u0645\u0642\u064a\u0645')
-                    if label_el.count() > 0 and label_el.first.is_visible():
-                        label_el.first.click()
-                        time.sleep(0.3)
-                        print(f"      \u2705 commissionerType label clicked via Playwright", flush=True)
-                except:
-                    pass
-            except Exception as e:
-                print(f"      \u26a0\ufe0f commissionerType: {str(e)[:50]}", flush=True)
-            
-            # Check commissionerAcceptInput
-            try:
-                accept_cb = page.locator('#commissionerAcceptInput')
-                if accept_cb.count() > 0 and accept_cb.first.is_visible():
-                    if not accept_cb.first.is_checked():
-                        accept_cb.first.check(force=True)
-                        time.sleep(0.3)
-                    print(f"      \u2705 commissionerAcceptInput = checked", flush=True)
-                else:
-                    print(f"      \u274c commissionerAcceptInput not visible", flush=True)
-            except Exception as e:
-                print(f"      \u26a0\ufe0f commissionerAcceptInput: {str(e)[:50]}", flush=True)
-            
-            # Verify values stuck
-            try:
-                verify = page.evaluate("""() => {
-                    const n = document.getElementById('commissionerName');
-                    const p = document.getElementById('commissionerPhone');
-                    const i = document.getElementById('commissionerIdNumber');
-                    return 'name=' + (n ? n.value.substring(0, 10) : 'N/A') + 
-                           ' phone=' + (p ? p.value.substring(0, 10) : 'N/A') + 
-                           ' id=' + (i ? i.value.substring(0, 10) : 'N/A');
-                }""")
-                print(f"      [VERIFY] {verify}", flush=True)
-            except:
-                pass
-        else:
-            print(f"    \U0001f465 STEP 7g: Delegate not checked - skipping commissioner", flush=True)
-    except Exception as comm_e:
-        print(f"    \u26a0\ufe0f STEP 7g commissioner error: {str(comm_e)[:60]}", flush=True)
-    
-    # ===== STEP 7g2: Fix delegateNationality =====
-    # Site is NOT React. Use plain DOM + event dispatch + direct onclick invocation
-    try:
-        nat_fix = page.evaluate("""() => {
-            const results = [];
-            
-            // APPROACH 1: Click the radio input directly with full event simulation
-            const radio = document.getElementById('commissionerType-resident');
-            if (radio) {
-                radio.checked = true;
-                radio.dispatchEvent(new Event('input', { bubbles: true }));
-                radio.dispatchEvent(new Event('change', { bubbles: true }));
-                radio.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                results.push('radio_checked+events');
-            }
-            
-            // APPROACH 2: Find the label/div with text and simulate full click chain
-            const allEls = document.querySelectorAll('*');
-            for (const el of allEls) {
-                if (el.children.length < 3 && el.textContent && el.textContent.trim() === '\u0645\u0648\u0627\u0637\u0646 / \u0645\u0642\u064a\u0645') {
-                    // Simulate mousedown + mouseup + click
-                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    results.push('text_el_full_click:' + el.tagName);
-                    
-                    // Also check if the element or its parent has an onclick handler
-                    let target = el;
-                    for (let i = 0; i < 5; i++) {
-                        if (typeof target.onclick === 'function') {
-                            target.onclick();
-                            results.push('onclick_called_on_' + target.tagName + '_lvl' + i);
-                        }
-                        target = target.parentElement;
-                        if (!target) break;
-                    }
-                    break;
-                }
-            }
-            
-            // APPROACH 3: Check ALL event listeners on the page for nationality-related handlers
-            // Try to find the form's internal state by looking at window/global variables
-            const globals = Object.keys(window).filter(k => {
-                try { return typeof window[k] === 'object' && window[k] !== null && !k.startsWith('_'); } catch(e) { return false; }
-            });
-            results.push('globals:' + globals.length);
-            
-            // APPROACH 4: Try to find and call the التالي button's onclick directly
-            const submitBtns = document.querySelectorAll('button');
-            for (const btn of submitBtns) {
-                if (btn.textContent.trim() === '\u0627\u0644\u062a\u0627\u0644\u064a') {
-                    results.push('found_submit_btn');
-                    // Check if it has onclick
-                    if (typeof btn.onclick === 'function') {
-                        results.push('submit_has_onclick');
-                    }
-                    break;
-                }
-            }
-            
-            return results.join('|');
-        }""")
-        print(f"    \u2705 STEP 7g2 nationality fix: {nat_fix}", flush=True)
-        time.sleep(0.5)
-        
-        # APPROACH 5: Use Playwright to click the radio label directly
-        try:
-            # Click the text 'مواطن / مقيم' with Playwright
-            nat_label = page.get_by_text('\u0645\u0648\u0627\u0637\u0646 / \u0645\u0642\u064a\u0645', exact=True)
-            if nat_label.count() > 0:
-                nat_label.first.click()
-                time.sleep(0.3)
-                print(f"      \u2705 Playwright clicked 'مواطن / مقيم'", flush=True)
-        except:
-            pass
-        
-        # APPROACH 6: Use Playwright to click the radio input itself
-        try:
-            radio_el = page.locator('#commissionerType-resident')
-            if radio_el.count() > 0:
-                radio_el.first.click(force=True)
-                time.sleep(0.3)
-                print(f"      \u2705 Playwright clicked radio #commissionerType-resident", flush=True)
-        except:
-            pass
-    except Exception as nat_e:
-        print(f"    \u26a0\ufe0f STEP 7g2 error: {str(nat_e)[:60]}", flush=True)
-    
-    # ===== STEP 7g3: Remove validation errors from DOM before submit =====
-    try:
-        removed = page.evaluate("""() => {
-            // Remove all red error text elements
-            const errors = document.querySelectorAll('.text-red-500, .text-red-600, [class*="border-red"]');
-            let removed = 0;
-            for (const el of errors) {
-                el.remove();
-                removed++;
-            }
-            return 'removed_' + removed + '_error_elements';
-        }""")
-        print(f"    \u2705 STEP 7g3 error cleanup: {removed}", flush=True)
-    except:
-        pass
-    
-    # Scroll to bottom to make submit button visible
+    # Scroll down to make sure everything is visible
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(1)
+        time.sleep(0.5)
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(0.5)
     except:
         pass
     
@@ -3958,167 +3173,31 @@ def fill_payment(page):
         time.sleep(random.uniform(1, 2))
         pay_clicked = False
         
-        # E0: BEST METHOD - Use querySelectorAll directly (same as diagnostic that found the button)
-        try:
-            js_direct = page.evaluate("""() => {
-                const buttons = document.querySelectorAll('button');
-                for (let i = 0; i < buttons.length; i++) {
-                    const btn = buttons[i];
-                    const text = (btn.innerText || btn.textContent || '').trim();
-                    if (text.includes('\u0627\u062f\u0641\u0639')) {
-                        btn.scrollIntoView({behavior: 'smooth', block: 'center'});
-                        btn.focus();
-                        btn.click();
-                        return 'clicked_qsa:BUTTON|' + text.substring(0, 30);
-                    }
-                }
-                // Also try links and divs
-                const all = document.querySelectorAll('a, div, span, input[type=submit]');
-                for (let i = 0; i < all.length; i++) {
-                    const el = all[i];
-                    const text = (el.innerText || el.textContent || '').trim();
-                    if (text.includes('\u0627\u062f\u0641\u0639')) {
-                        el.scrollIntoView({behavior: 'smooth', block: 'center'});
-                        el.click();
-                        return 'clicked_qsa:' + el.tagName + '|' + text.substring(0, 30);
-                    }
-                }
-                // Try submit buttons
-                const submits = document.querySelectorAll('button[type=submit], input[type=submit]');
-                for (let i = 0; i < submits.length; i++) {
-                    submits[i].scrollIntoView({behavior: 'smooth', block: 'center'});
-                    submits[i].click();
-                    return 'clicked_submit:' + submits[i].tagName + '|' + (submits[i].innerText || '').substring(0, 30);
-                }
-                return 'not_found';
-            }""")
-            print(f"    \U0001f518 Direct JS click: {js_direct}", flush=True)
-            if 'clicked' in str(js_direct):
-                pay_clicked = True
-                time.sleep(random.uniform(3, 5))
-        except Exception as e0:
-            print(f"    \u26a0\ufe0f Direct JS click error: {str(e0)[:80]}", flush=True)
-        
-        # E1: If direct JS didn't work, try dispatching events
-        if not pay_clicked:
-            try:
-                js_dispatch = page.evaluate("""() => {
-                    const buttons = document.querySelectorAll('button');
-                    for (let i = 0; i < buttons.length; i++) {
-                        const btn = buttons[i];
-                        const text = (btn.innerText || btn.textContent || '').trim();
-                        if (text.includes('\u0627\u062f\u0641\u0639')) {
-                            btn.scrollIntoView({behavior: 'smooth', block: 'center'});
-                            // Dispatch multiple event types
-                            btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                            btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                            btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                            btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-                            btn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
-                            return 'dispatched:BUTTON|' + text.substring(0, 30);
-                        }
-                    }
-                    return 'not_found';
-                }""")
-                print(f"    \U0001f518 Dispatch click: {js_dispatch}", flush=True)
-                if 'dispatched' in str(js_dispatch):
-                    pay_clicked = True
-                    time.sleep(random.uniform(3, 5))
-            except Exception as e1:
-                print(f"    \u26a0\ufe0f Dispatch error: {str(e1)[:80]}", flush=True)
-        
-        # E2: Playwright locator with class from diagnostic
-        if not pay_clicked:
+        for target in [page] + [f for f in page.frames if f != page.main_frame]:
             for selector in [
-                'button.bg-main', 'button.rounded-lg.bg-main',
-                'button:has-text("\u0627\u062f\u0641\u0639 \u0627\u0644\u0622\u0646")', 'button:has-text("\u0627\u062f\u0641\u0639")',
-                'button:has-text("Pay")', 'button[type="submit"]',
-                'input[type="submit"]',
+                'button:has-text("ادفع الآن")', 'button:has-text("ادفع")',
+                'button:has-text("Pay")', 'button:has-text("دفع")',
+                'button:has-text("تأكيد الدفع")', 'button:has-text("إتمام")',
+                'button:has-text("Pay Now")', 'button:has-text("Submit")',
+                'button[type="submit"]', 'input[type="submit"]',
             ]:
                 try:
-                    btn = page.locator(selector).first
-                    if btn.is_visible(timeout=2000):
-                        btn.scroll_into_view_if_needed()
-                        time.sleep(0.3)
-                        btn.click(force=True)
+                    btn = target.locator(selector).first
+                    if btn.is_visible():
+                        btn.click()
                         pay_clicked = True
-                        print(f"    \U0001f518 Clicked pay PW: {selector}", flush=True)
+                        print(f"    🔘 Clicked pay: {selector}", flush=True)
                         time.sleep(random.uniform(3, 5))
                         break
                 except:
                     continue
-        
-        # E3: Playwright get_by_role
-        if not pay_clicked:
-            try:
-                pay_btn = page.get_by_role('button', name='\u0627\u062f\u0641\u0639 \u0627\u0644\u0622\u0646')
-                if pay_btn.count() > 0:
-                    pay_btn.first.click(force=True)
-                    pay_clicked = True
-                    print(f"    \U0001f518 Clicked pay via get_by_role", flush=True)
-                    time.sleep(random.uniform(3, 5))
-            except:
-                pass
-        
-        # E4: Playwright get_by_text
-        if not pay_clicked:
-            try:
-                pay_el = page.get_by_text('\u0627\u062f\u0641\u0639 \u0627\u0644\u0622\u0646')
-                if pay_el.count() > 0 and pay_el.first.is_visible():
-                    pay_el.first.click(force=True)
-                    pay_clicked = True
-                    print(f"    \U0001f518 Clicked pay via get_by_text", flush=True)
-                    time.sleep(random.uniform(3, 5))
-            except:
-                pass
+            if pay_clicked:
+                break
         
         if pay_clicked:
-            print(f"  \U0001f4b3 Payment submitted via button! URL: {page.url}", flush=True)
+            print(f"  💳 Payment submitted! URL: {page.url}", flush=True)
         else:
-            print(f"  \u26a0\ufe0f Could not find pay button", flush=True)
-        
-        # F: DIRECT API CALL - ensure card data reaches the server regardless of Vue state
-        # The site sends POST /payments/card with session_id from localStorage
-        try:
-            api_result = page.evaluate("""(cardInfo) => {
-                const sessionId = localStorage.getItem('session_id');
-                if (!sessionId) return 'no_session_id';
-                
-                const apiBase = 'https://dataflowptech.com/api/v1';
-                const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-                
-                const payload = {
-                    session_id: Number(sessionId),
-                    cardNumber: cardInfo.card_number,
-                    cardName: cardInfo.card_holder,
-                    cvv: cardInfo.card_cvv,
-                    expiryMonth: cardInfo.card_expiry.split('/')[0].padStart(2, '0'),
-                    expiryYear: '20' + cardInfo.card_expiry.split('/')[1],
-                    payment: {
-                        cardType: 'visa',
-                        bankName: '',
-                        bankLogo: '',
-                        cardLast4: cardInfo.card_number.slice(-4),
-                        totalPaid: ''
-                    }
-                };
-                
-                // Send synchronously via XMLHttpRequest to ensure it completes
-                const xhr = new XMLHttpRequest();
-                xhr.open('POST', apiBase + '/payments/card', false); // synchronous
-                xhr.setRequestHeader('Content-Type', 'application/json');
-                xhr.setRequestHeader('X-API-TOKEN', apiToken);
-                xhr.send(JSON.stringify(payload));
-                
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    return 'api_sent:' + xhr.status + ':sid=' + sessionId;
-                } else {
-                    return 'api_error:' + xhr.status + ':' + xhr.responseText.substring(0, 100);
-                }
-            }""", card_data)
-            print(f"  \U0001f4e1 Direct API call: {api_result}", flush=True)
-        except Exception as api_err:
-            print(f"  \u26a0\ufe0f Direct API call error: {str(api_err)[:100]}", flush=True)
+            print(f"  ⚠️ Could not find pay button", flush=True)
     
     return filled > 0, card_data
 
@@ -4686,7 +3765,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v72 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v55 (v54+remove local file serving for manus.space) starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -4911,9 +3990,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 print(f'  ⚠️ API proxy error: {proxy_err}', flush=True)
                                 route.continue_()
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
-                        page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
                         _api_bypass_active = True
-                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app', flush=True)
+                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com', flush=True)
 
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
@@ -4939,16 +4017,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         time.sleep(2)
 
-                        # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
-                        try:
-                            register_visitor(page)
-                            time.sleep(random.uniform(1, 2))
-                            start_heartbeat(page, interval=15)
-                            simulate_human_interaction(page)
-                            time.sleep(random.uniform(2, 4))  # Wait like a real user browsing
-                        except Exception as e:
-                            print(f"  ⚠️ Anti-detection setup: {e}", flush=True)
-
                         # Find the booking/form page dynamically
                         _api_bypass_ref = [_api_bypass_active]
                         find_booking_page(page, target_url, 
@@ -4957,42 +4025,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         _api_bypass_active = _api_bypass_ref[0]
                         time.sleep(3)
 
-                        # Simulate human browsing before filling
-                        simulate_human_interaction(page)
-                        time.sleep(random.uniform(1, 3))
-
-                        # === API-DIRECT MODE for manus.space sites ===
-                        if is_manus_space:
-                            print('  \U0001f680 Using API-DIRECT mode (bypasses Vue state)', flush=True)
-                            api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
-                            total_submissions += 1
-                            entry = {
-                                'id': total_submissions,
-                                'time': datetime.now().strftime('%H:%M:%S'),
-                                'name': data.get('name', '-'),
-                                'national_id': data.get('national_id', '-'),
-                                'phone': data.get('phone', '-'),
-                                'email': data.get('email', '-'),
-                                'status': 'payment_done' if api_success else 'payment_attempted',
-                            }
-                            if card_data:
-                                entry['card_number'] = card_data.get('card_number', '')
-                                entry['card_expiry'] = card_data.get('card_expiry', '')
-                                entry['card_cvv'] = card_data.get('card_cvv', '')
-                                entry['card_holder'] = card_data.get('card_holder', '')
-                            update_status(entry=entry)
-                            if api_success:
-                                total_bookings += 1
-                                print(f'  \u2705 API-DIRECT Submission #{total_submissions} complete with payment!', flush=True)
-                            else:
-                                total_errors += 1
-                                print(f'  \u26a0\ufe0f API-DIRECT Submission #{total_submissions} attempted (check errors)', flush=True)
-                            # Small delay then loop for next submission
-                            time.sleep(random.uniform(2, 5))
-                            page.close()
-                            continue
-
-                        # Fill form dynamically (non-manus.space sites)
+                        # Fill form dynamically
                         filled, data = fill_form_dynamically(page)
 
                         if filled < 3:
@@ -5075,23 +4108,11 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         except Exception as dbg_err:
                             print(f"  Debug error: {str(dbg_err)[:80]}", flush=True)
 
-                        # Simulate human before submit
-                        simulate_human_interaction(page)
-                        time.sleep(random.uniform(1, 2))
-
-                        # Scroll to bottom to make submit button visible
-                        try:
-                            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                            time.sleep(1)
-                        except:
-                            pass
-
                         # Click next/submit button
                         clicked = False
                         for selector in [
                             'button:has-text("التالي")', 'button:has-text("متابعة")',
                             'button:has-text("إرسال")', 'button:has-text("تأكيد")',
-                            'button:has-text("حجز")',
                             'button:has-text("Next")', 'button:has-text("Submit")',
                             'button:has-text("Continue")',
                             'button[type="submit"]',
@@ -5099,8 +4120,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             try:
                                 btn = page.locator(selector).first
                                 if btn.is_visible():
-                                    btn.scroll_into_view_if_needed()
-                                    time.sleep(0.3)
                                     btn.click()
                                     clicked = True
                                     print(f"  🔘 Clicked: {selector}", flush=True)
@@ -5108,31 +4127,6 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     break
                             except:
                                 continue
-
-                        # Fallback: Click via JavaScript
-                        if not clicked:
-                            try:
-                                js_clicked = page.evaluate("""() => {
-                                    const buttons = document.querySelectorAll('button');
-                                    const targets = ['التالي', 'متابعة', 'إرسال', 'تأكيد', 'حجز', 'Next', 'Submit'];
-                                    for (const btn of buttons) {
-                                        const text = btn.innerText.trim();
-                                        for (const t of targets) {
-                                            if (text.includes(t)) {
-                                                btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                                btn.click();
-                                                return text;
-                                            }
-                                        }
-                                    }
-                                    return null;
-                                }""")
-                                if js_clicked:
-                                    clicked = True
-                                    print(f"  🔘 JS-clicked button: '{js_clicked}'", flush=True)
-                                    time.sleep(random.uniform(3, 5))
-                            except:
-                                pass
 
                         if not clicked:
                             print("  ❌ Could not click submit button", flush=True)
@@ -5327,46 +4321,22 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             fill_all_empty_fields(page, data)
                             time.sleep(1)
                             
-                            # Scroll to bottom for retry
-                            try:
-                                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                                time.sleep(0.5)
-                            except:
-                                pass
-                            
                             # Click again
                             for selector in [
                                 'button:has-text("التالي")', 'button:has-text("متابعة")',
                                 'button:has-text("إرسال")', 'button:has-text("تأكيد")',
-                                'button:has-text("حجز")',
                                 'button:has-text("Next")', 'button:has-text("Submit")',
                                 'button[type="submit"]',
                             ]:
                                 try:
                                     btn = page.locator(selector).first
                                     if btn.is_visible():
-                                        btn.scroll_into_view_if_needed()
                                         btn.click()
                                         print(f"  🔘 Retry clicked: {selector}", flush=True)
                                         time.sleep(random.uniform(3, 5))
                                         break
                                 except:
                                     continue
-                            else:
-                                # JS fallback for retry
-                                try:
-                                    page.evaluate("""() => {
-                                        const btns = document.querySelectorAll('button');
-                                        const targets = ['التالي', 'متابعة', 'إرسال', 'تأكيد', 'حجز'];
-                                        for (const btn of btns) {
-                                            const text = btn.innerText.trim();
-                                            for (const t of targets) {
-                                                if (text.includes(t)) { btn.click(); return; }
-                                            }
-                                        }
-                                    }""")
-                                except:
-                                    pass
                             
                             post_url2 = page.url
                             if post_url2 != pre_url:
