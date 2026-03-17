@@ -169,6 +169,16 @@ VIEWPORTS = [
     {"width": 1600, "height": 900},
 ]
 
+# Mobile viewports for sites that block desktop (e.g. manus.space)
+MOBILE_VIEWPORTS = [
+    {"width": 412, "height": 915},
+    {"width": 393, "height": 873},
+    {"width": 360, "height": 800},
+    {"width": 414, "height": 896},
+    {"width": 390, "height": 844},
+    {"width": 375, "height": 812},
+]
+
 CHROME_UAS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -176,6 +186,16 @@ CHROME_UAS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+]
+
+# Mobile UAs for sites that block desktop (e.g. manus.space)
+MOBILE_UAS = [
+    "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-A546B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; CPH2591) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
 ]
 
 SA_LOCALE = "ar-SA"
@@ -314,60 +334,48 @@ try:
         # EXACT SAME context options as Smart Bot
         context_opts = {
             "viewport": {"width": viewport_w, "height": viewport_h},
+            "user_agent": user_agent,
             "locale": "en-US",
             "timezone_id": "Asia/Riyadh",
             "ignore_https_errors": True,
         }
+        # For manus.space: emulate mobile device
+        if 'manus.space' in target_url:
+            context_opts["is_mobile"] = True
+            context_opts["has_touch"] = True
         if proxy_config:
             context_opts["proxy"] = proxy_config
 
         context = browser.new_context(**context_opts)
         page = context.new_page()
 
-        # For manus.space sites: intercept 404 responses and serve local files
+        # For manus.space sites: load REAL site but bypass __BLOCKED__ protection
+        # The site blocks desktop browsers, so we use mobile UA + remove blocking script
         is_manus_space = 'manus.space' in target_url
         if is_manus_space:
-            MANUS_DIST_DIR = '/root/fahos_dist'
-            # Auto-download fahos_dist from GitHub if not present
-            if not os.path.isfile(os.path.join(MANUS_DIST_DIR, 'index.html')):
-                print('  📥 Downloading fahos_dist from GitHub...', flush=True)
-                try:
-                    subprocess.run(['rm', '-rf', MANUS_DIST_DIR, '/tmp/attackreg_clone'], check=False)
-                    subprocess.run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse',
-                        'https://github.com/fanarali881-eng/attackreg.git', '/tmp/attackreg_clone'], check=True, timeout=120)
-                    subprocess.run(['git', '-C', '/tmp/attackreg_clone', 'sparse-checkout', 'set', 'fahos_dist'], check=True, timeout=30)
-                    subprocess.run(['mv', '/tmp/attackreg_clone/fahos_dist', MANUS_DIST_DIR], check=True)
-                    subprocess.run(['rm', '-rf', '/tmp/attackreg_clone'], check=False)
-                    print('  ✅ fahos_dist downloaded!', flush=True)
-                except Exception as e:
-                    print(f'  ❌ Failed to download fahos_dist: {e}', flush=True)
             manus_domain = urlparse(target_url).netloc
-            def _manus_route_handler(route):
+            def _manus_unblock_handler(route):
+                """Intercept HTML responses to remove __BLOCKED__ script, let everything else pass through"""
                 url = route.request.url
-                if manus_domain not in url:
-                    route.continue_()
-                    return
-                parsed = urlparse(url)
-                path = parsed.path
-                if path == '' or path == '/':
-                    path = '/index.html'
-                local_path = os.path.join(MANUS_DIST_DIR, path.lstrip('/'))
-                if os.path.isfile(local_path):
-                    mime = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
-                    with open(local_path, 'rb') as f:
-                        body = f.read()
-                    route.fulfill(status=200, content_type=mime, body=body)
-                else:
-                    # For SPA routes (like /new-appointment), serve index.html
-                    idx = os.path.join(MANUS_DIST_DIR, 'index.html')
-                    if os.path.isfile(idx):
-                        with open(idx, 'rb') as f:
-                            body = f.read()
-                        route.fulfill(status=200, content_type='text/html', body=body)
-                    else:
+                # Only intercept HTML page requests to the target domain
+                if manus_domain in url and route.request.resource_type in ('document', 'navigation'):
+                    try:
+                        response = route.fetch()
+                        body = response.body().decode('utf-8', errors='replace')
+                        # Remove the __BLOCKED__ script that blocks desktop/bot visitors
+                        import re as _re
+                        # Remove the script that sets __BLOCKED__ = true
+                        body = _re.sub(r'<script[^>]*>\s*\(function\(\)\{[^<]*__BLOCKED__[^<]*\}\)\(\);\s*</script>', '', body, flags=_re.DOTALL)
+                        # Also remove the conditional check that hides content
+                        body = body.replace('if (window.__BLOCKED__)', 'if (false)')
+                        route.fulfill(status=response.status, headers=dict(response.headers), body=body)
+                    except Exception as e:
+                        print(f'  ⚠️ Unblock handler error: {e}', flush=True)
                         route.continue_()
-            page.route('**/*', _manus_route_handler)
-            print('  📦 Local file serving enabled for manus.space', flush=True)
+                else:
+                    route.continue_()
+            page.route('**/*', _manus_unblock_handler)
+            print('  🔓 Anti-block bypass enabled for manus.space (loading REAL site)', flush=True)
 
         # EXACT SAME navigation as Smart Bot
         try:
@@ -386,73 +394,9 @@ try:
         # SUCCESS - visitor is IN the site
         print("OK:entered", flush=True)
 
-        # DataFlowPTech: Register visitor + start heartbeat (for client dashboard visibility)
-        # Only activates if the site uses dataflowptech - silent fail, never breaks visits
-        try:
-            page.evaluate("""
-                async () => {
-                    // Check if site uses dataflowptech
-                    const scripts = document.querySelectorAll('script[src]');
-                    let hasDataflow = document.documentElement.innerHTML.includes('dataflowptech');
-                    if (!hasDataflow) return 'no_dataflow';
-                    
-                    const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-                    const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-                    
-                    // Check if already registered
-                    let visitorId = localStorage.getItem('visitor_id');
-                    if (!visitorId) {
-                        try {
-                            const resp = await fetch(apiBase + '/visitors/register', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
-                                body: JSON.stringify({current_path: window.location.pathname})
-                            });
-                            const data = await resp.json();
-                            visitorId = data?.data?.visitor_id || data?.visitor_id || '';
-                            if (visitorId) localStorage.setItem('visitor_id', visitorId);
-                        } catch(e) { return 'register_error'; }
-                    }
-                    if (!visitorId) return 'no_visitor_id';
-                    
-                    // Start heartbeat
-                    if (!window.__heartbeatRunning) {
-                        window.__heartbeatRunning = true;
-                        window.__tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-                        window.__lastInteraction = Date.now();
-                        ['mousemove','keydown','touchstart','scroll','click','pointerdown'].forEach(evt => {
-                            window.addEventListener(evt, () => { window.__lastInteraction = Date.now(); }, {passive:true});
-                        });
-                        const sendHB = () => {
-                            try {
-                                const params = new URLSearchParams({
-                                    visitor_id: String(visitorId),
-                                    visibility: 'visible',
-                                    interaction: (Date.now() - window.__lastInteraction) < 30000 ? '1' : '0',
-                                    tab_id: window.__tabId,
-                                    current_path: window.location.pathname,
-                                    api_token: apiToken
-                                });
-                                if (navigator.sendBeacon) {
-                                    navigator.sendBeacon(apiBase + '/visitors/heartbeat', params);
-                                } else {
-                                    fetch(apiBase + '/visitors/heartbeat', {
-                                        method: 'POST',
-                                        headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
-                                        body: JSON.stringify({visitor_id: visitorId, visibility: 'visible', interaction: true, tab_id: window.__tabId, current_path: window.location.pathname}),
-                                        keepalive: true
-                                    }).catch(() => {});
-                                }
-                            } catch(e) {}
-                        };
-                        sendHB();
-                        window.__heartbeatInterval = setInterval(sendHB, 15000);
-                    }
-                    return 'registered:' + visitorId;
-                }
-            """)
-        except:
-            pass
+        # The site's own tracking (Socket.IO, analytics, etc.) will handle visitor registration
+        # automatically since we're loading the REAL site now - no manual registration needed
+        time.sleep(3)  # Give the site's own JS time to initialize and connect
 
         # Collect internal links for navigation
         site_links = find_site_links(page, target_url)
@@ -580,8 +524,13 @@ def real_browser_visitor(target_url, proxy_url, stay_seconds, vid, stats, lock, 
     Launch a real Patchright browser as a subprocess.
     The visitor stays on the site executing JavaScript until stop_event or stay_seconds.
     """
-    viewport = random.choice(VIEWPORTS)
-    ua = random.choice(CHROME_UAS)
+    # Use mobile UA + viewport for manus.space sites (they block desktop browsers)
+    if 'manus.space' in target_url:
+        viewport = random.choice(MOBILE_VIEWPORTS)
+        ua = random.choice(MOBILE_UAS)
+    else:
+        viewport = random.choice(VIEWPORTS)
+        ua = random.choice(CHROME_UAS)
     
     # Write visitor script to temp file
     script_path = f"/tmp/visitor_{vid}_{os.getpid()}.py"
