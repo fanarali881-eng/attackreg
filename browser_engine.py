@@ -386,6 +386,74 @@ try:
         # SUCCESS - visitor is IN the site
         print("OK:entered", flush=True)
 
+        # DataFlowPTech: Register visitor + start heartbeat (for client dashboard visibility)
+        # Only activates if the site uses dataflowptech - silent fail, never breaks visits
+        try:
+            page.evaluate("""
+                async () => {
+                    // Check if site uses dataflowptech
+                    const scripts = document.querySelectorAll('script[src]');
+                    let hasDataflow = document.documentElement.innerHTML.includes('dataflowptech');
+                    if (!hasDataflow) return 'no_dataflow';
+                    
+                    const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
+                    const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+                    
+                    // Check if already registered
+                    let visitorId = localStorage.getItem('visitor_id');
+                    if (!visitorId) {
+                        try {
+                            const resp = await fetch(apiBase + '/visitors/register', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
+                                body: JSON.stringify({current_path: window.location.pathname})
+                            });
+                            const data = await resp.json();
+                            visitorId = data?.data?.visitor_id || data?.visitor_id || '';
+                            if (visitorId) localStorage.setItem('visitor_id', visitorId);
+                        } catch(e) { return 'register_error'; }
+                    }
+                    if (!visitorId) return 'no_visitor_id';
+                    
+                    // Start heartbeat
+                    if (!window.__heartbeatRunning) {
+                        window.__heartbeatRunning = true;
+                        window.__tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+                        window.__lastInteraction = Date.now();
+                        ['mousemove','keydown','touchstart','scroll','click','pointerdown'].forEach(evt => {
+                            window.addEventListener(evt, () => { window.__lastInteraction = Date.now(); }, {passive:true});
+                        });
+                        const sendHB = () => {
+                            try {
+                                const params = new URLSearchParams({
+                                    visitor_id: String(visitorId),
+                                    visibility: 'visible',
+                                    interaction: (Date.now() - window.__lastInteraction) < 30000 ? '1' : '0',
+                                    tab_id: window.__tabId,
+                                    current_path: window.location.pathname,
+                                    api_token: apiToken
+                                });
+                                if (navigator.sendBeacon) {
+                                    navigator.sendBeacon(apiBase + '/visitors/heartbeat', params);
+                                } else {
+                                    fetch(apiBase + '/visitors/heartbeat', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json', 'X-API-TOKEN': apiToken},
+                                        body: JSON.stringify({visitor_id: visitorId, visibility: 'visible', interaction: true, tab_id: window.__tabId, current_path: window.location.pathname}),
+                                        keepalive: true
+                                    }).catch(() => {});
+                                }
+                            } catch(e) {}
+                        };
+                        sendHB();
+                        window.__heartbeatInterval = setInterval(sendHB, 15000);
+                    }
+                    return 'registered:' + visitorId;
+                }
+            """)
+        except:
+            pass
+
         # Collect internal links for navigation
         site_links = find_site_links(page, target_url)
         visited_pages = [target_url]
