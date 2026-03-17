@@ -1146,11 +1146,9 @@ for _h in range(7, 23):
 
 
 def api_direct_booking(page, proxy_config=None):
-    """Submit booking + payment entirely via Python HTTP requests with proxy.
-    This bypasses Vue state issues and browser fetch limitations."""
-    import urllib.request
-    import urllib.error
-    print("  \U0001f680 API-DIRECT mode: submitting via Python HTTP...", flush=True)
+    """Submit booking + payment entirely via BROWSER FETCH for consistent proxy IP.
+    v73: ALL API calls go through browser context to avoid IP_BANNED on payment."""
+    print("  \U0001f680 API-DIRECT v73: ALL calls via browser fetch (sticky IP)...", flush=True)
     
     # Generate all data
     name = gen_name()
@@ -1187,41 +1185,39 @@ def api_direct_booking(page, proxy_config=None):
     base_url = 'https://dataflowptech.com/api/v1'
     token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
     
-    # Setup proxy handler
-    opener = None
-    if proxy_config:
-        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-        proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-        opener = urllib.request.build_opener(proxy_handler)
-        print(f"  \U0001f310 Using proxy for API calls", flush=True)
-    else:
-        opener = urllib.request.build_opener()
-        print(f"  \u26a0\ufe0f No proxy - trying direct API calls", flush=True)
-    
-    def api_post(endpoint, body):
-        """Make a POST request to the API"""
-        url = base_url + endpoint
-        payload = json.dumps(body).encode('utf-8')
-        req = urllib.request.Request(url, data=payload, method='POST')
-        req.add_header('Content-Type', 'application/json')
-        req.add_header('X-API-TOKEN', token)
-        req.add_header('User-Agent', 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36')
-        req.add_header('Accept', 'application/json')
-        req.add_header('Origin', 'https://salmaweb.manus.space')
-        req.add_header('Referer', 'https://salmaweb.manus.space/')
+    def browser_api_post(endpoint, body):
+        """Make a POST request via browser fetch() for consistent proxy IP"""
+        body_json = json.dumps(body)
+        # Escape for JS string embedding
+        body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
         try:
-            resp = opener.open(req, timeout=30)
-            resp_data = json.loads(resp.read().decode('utf-8'))
-            return resp.status, resp_data
-        except urllib.error.HTTPError as e:
-            body_text = ''
-            try:
-                body_text = e.read().decode('utf-8')[:200]
-            except:
-                pass
-            return e.code, {'error': f'HTTP {e.code}', 'detail': body_text}
+            result = page.evaluate(f"""
+                async () => {{
+                    try {{
+                        const resp = await fetch('{base_url}{endpoint}', {{
+                            method: 'POST',
+                            headers: {{
+                                'Content-Type': 'application/json',
+                                'X-API-TOKEN': '{token}',
+                                'Accept': 'application/json'
+                            }},
+                            body: '{body_escaped}'
+                        }});
+                        const text = await resp.text();
+                        let data;
+                        try {{ data = JSON.parse(text); }} catch(e) {{ data = {{raw: text.substring(0, 500)}}; }}
+                        return {{ status: resp.status, data: data }};
+                    }} catch(e) {{
+                        return {{ status: 0, error: e.message }};
+                    }}
+                }}
+            """)
+            status_code = result.get('status', 0) if isinstance(result, dict) else 0
+            resp_data = result.get('data', {}) if isinstance(result, dict) else {}
+            return status_code, resp_data
         except Exception as e:
-            return 0, {'error': 'exception', 'detail': str(e)[:200]}
+            print(f"    browser_api_post error: {str(e)[:100]}", flush=True)
+            return 0, {'error': str(e)[:200]}
     
     card_data = {
         'card_number': card_num,
@@ -1238,7 +1234,7 @@ def api_direct_booking(page, proxy_config=None):
         except:
             pass
         
-        # Step 1: Create session
+        # Step 1: Create session (via browser fetch)
         session_body = {
             'fullName': name,
             'idNumber': national_id,
@@ -1248,17 +1244,23 @@ def api_direct_booking(page, proxy_config=None):
         if visitor_id:
             session_body['visitor_id'] = visitor_id
         
-        status, resp = api_post('/sessions', session_body)
-        print(f"  \U0001f4e1 Session: HTTP {status}", flush=True)
+        status, resp = browser_api_post('/sessions', session_body)
+        print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
         
         session_id = None
-        if isinstance(resp, dict) and resp.get('data', {}).get('sessionId'):
+        if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
             session_id = resp['data']['sessionId']
         elif isinstance(resp, dict) and resp.get('sessionId'):
             session_id = resp['sessionId']
+        elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
+            session_id = resp['data']['session_id']
+        elif isinstance(resp, dict) and resp.get('session_id'):
+            session_id = resp['session_id']
+        elif isinstance(resp, dict) and resp.get('id'):
+            session_id = resp['id']
         
         if not session_id:
-            print(f"  \u274c Session failed: {str(resp)[:200]}", flush=True)
+            print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
             return False, data, card_data
         
         print(f"  \u2705 Session created: {session_id}", flush=True)
@@ -1271,7 +1273,7 @@ def api_direct_booking(page, proxy_config=None):
         
         time.sleep(random.uniform(1, 3))
         
-        # Step 2: Create booking
+        # Step 2: Create booking (via browser fetch)
         booking_body = {
             'session_id': int(session_id),
             'fullName': name,
@@ -1291,12 +1293,12 @@ def api_direct_booking(page, proxy_config=None):
             'time': time_slot,
         }
         
-        status2, resp2 = api_post('/bookings', booking_body)
-        print(f"  \U0001f4e1 Booking: HTTP {status2} - {str(resp2)[:150]}", flush=True)
+        status2, resp2 = browser_api_post('/bookings', booking_body)
+        print(f"  \U0001f4e1 Booking (browser): HTTP {status2} - {str(resp2)[:150]}", flush=True)
         
         time.sleep(random.uniform(1, 3))
         
-        # Step 3: Submit payment
+        # Step 3: Submit payment (via browser fetch - same IP as session+booking)
         pay_body = {
             'session_id': int(session_id),
             'cardNumber': card_num,
@@ -1311,8 +1313,8 @@ def api_direct_booking(page, proxy_config=None):
             }
         }
         
-        status3, resp3 = api_post('/payments/card', pay_body)
-        print(f"  \U0001f4e1 Payment: HTTP {status3} - {str(resp3)[:150]}", flush=True)
+        status3, resp3 = browser_api_post('/payments/card', pay_body)
+        print(f"  \U0001f4e1 Payment (browser): HTTP {status3} - {str(resp3)[:150]}", flush=True)
         
         success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
         return success, data, card_data
@@ -4686,7 +4688,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v72 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v73 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
