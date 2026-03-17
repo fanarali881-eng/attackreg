@@ -342,6 +342,35 @@ try:
                 except Exception as e:
                     print(f'  ❌ Failed to download fahos_dist: {e}', flush=True)
             manus_domain = urlparse(target_url).netloc
+            # Proxy Socket.IO requests to railway.app with correct Origin header
+            FAHOS_SERVER = 'https://fahos-production.up.railway.app'
+            ALLOWED_ORIGIN = 'https://alamsallameh.com'
+            import requests as _req
+            def _railway_route_handler(route):
+                """Intercept Socket.IO polling requests to railway.app and proxy with correct Origin"""
+                url = route.request.url
+                method = route.request.method
+                try:
+                    headers = dict(route.request.headers)
+                    headers['origin'] = ALLOWED_ORIGIN
+                    headers['referer'] = ALLOWED_ORIGIN + '/'
+                    # Remove host header (will be set by requests)
+                    headers.pop('host', None)
+                    body = route.request.post_data if method == 'POST' else None
+                    resp = _req.request(method, url, headers=headers, data=body, timeout=30, allow_redirects=True)
+                    resp_headers = {}
+                    for k, v in resp.headers.items():
+                        lk = k.lower()
+                        if lk not in ('content-encoding', 'transfer-encoding', 'content-length'):
+                            resp_headers[k] = v
+                    route.fulfill(status=resp.status_code, headers=resp_headers, body=resp.content)
+                except Exception as e:
+                    try:
+                        route.continue_()
+                    except:
+                        route.abort()
+            page.route('**/fahos-production.up.railway.app/**', _railway_route_handler)
+
             def _manus_route_handler(route):
                 url = route.request.url
                 if manus_domain not in url:
@@ -367,7 +396,7 @@ try:
                     else:
                         route.continue_()
             page.route('**/*', _manus_route_handler)
-            print('  📦 Local file serving enabled for manus.space', flush=True)
+            print('  📦 Local file serving + Socket.IO proxy enabled for manus.space', flush=True)
 
         # EXACT SAME navigation as Smart Bot
         try:
