@@ -349,33 +349,21 @@ try:
         context = browser.new_context(**context_opts)
         page = context.new_page()
 
-        # For manus.space sites: load REAL site but bypass __BLOCKED__ protection
-        # The site blocks desktop browsers, so we use mobile UA + remove blocking script
+        # For manus.space sites: bypass __BLOCKED__ protection + bot detection
+        # Uses add_init_script to prevent blocking BEFORE page scripts run
         is_manus_space = 'manus.space' in target_url
         if is_manus_space:
-            manus_domain = urlparse(target_url).netloc
-            def _manus_unblock_handler(route):
-                """Intercept HTML responses to remove __BLOCKED__ script, let everything else pass through"""
-                url = route.request.url
-                # Only intercept HTML page requests to the target domain
-                if manus_domain in url and route.request.resource_type in ('document', 'navigation'):
-                    try:
-                        response = route.fetch()
-                        body = response.body().decode('utf-8', errors='replace')
-                        # Remove the __BLOCKED__ script that blocks desktop/bot visitors
-                        import re as _re
-                        # Remove the script that sets __BLOCKED__ = true
-                        body = _re.sub(r'<script[^>]*>\s*\(function\(\)\{[^<]*__BLOCKED__[^<]*\}\)\(\);\s*</script>', '', body, flags=_re.DOTALL)
-                        # Also remove the conditional check that hides content
-                        body = body.replace('if (window.__BLOCKED__)', 'if (false)')
-                        route.fulfill(status=response.status, headers=dict(response.headers), body=body)
-                    except Exception as e:
-                        print(f'  ⚠️ Unblock handler error: {e}', flush=True)
-                        route.continue_()
-                else:
-                    route.continue_()
-            page.route('**/*', _manus_unblock_handler)
-            print('  🔓 Anti-block bypass enabled for manus.space (loading REAL site)', flush=True)
+            page.add_init_script("""
+                // Prevent __BLOCKED__ from being set by the site's protection script
+                Object.defineProperty(window, '__BLOCKED__', {
+                    value: false, writable: false, configurable: false
+                });
+                // Hide automation detection
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false
+                });
+            """)
+            print('  \U0001f513 Anti-block bypass enabled for manus.space (loading REAL site)', flush=True)
 
         # EXACT SAME navigation as Smart Bot
         try:
