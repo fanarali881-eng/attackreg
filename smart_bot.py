@@ -2522,10 +2522,28 @@ def fill_form_dynamically(page):
     except Exception as cap_e:
         print(f"    \u26a0\ufe0f Captcha step error: {str(cap_e)[:60]}", flush=True)
     
-    # ===== STEP 7e: React State Sync - re-trigger events on all fields =====
+    # ===== STEP 7e: Vue3 + React State Sync - re-trigger events on all fields =====
     try:
         sync_results = page.evaluate("""() => {
             const results = [];
+            
+            // === VUE 3 DETECTION ===
+            const isVue3 = !!document.querySelector('[data-v-]') || 
+                           !!document.querySelector('.__vue_app__') ||
+                           !!document.querySelector('[class*="v-"]') ||
+                           document.querySelectorAll('select').length > 0;
+            
+            // Find Vue's _assign Symbol key on elements
+            function getVueAssign(el) {
+                // Vue 3 stores _assign as Symbol('_assign') on the element
+                const symbols = Object.getOwnPropertySymbols(el);
+                for (const sym of symbols) {
+                    if (sym.toString().includes('_assign') || sym.description === '_assign') {
+                        return el[sym];
+                    }
+                }
+                return null;
+            }
             
             // Sync all visible input fields
             const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
@@ -2536,22 +2554,29 @@ def fill_form_dynamically(page):
                 const name = inp.name || inp.id || '';
                 const val = inp.value;
                 
-                // Use nativeInputValueSetter to re-set the value and trigger React
                 try {
+                    // VUE 3: Use _assign if available
+                    const vueAssign = getVueAssign(inp);
+                    if (vueAssign) {
+                        vueAssign(val);
+                        results.push({ name: name, value: val.substring(0, 10), synced: true, method: 'vue_assign' });
+                        continue;
+                    }
+                    
+                    // REACT: Use nativeInputValueSetter
                     if (inp._valueTracker) inp._valueTracker.setValue('');
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                     nativeSetter.call(inp, val);
                     inp.dispatchEvent(new Event('input', { bubbles: true }));
                     inp.dispatchEvent(new Event('change', { bubbles: true }));
                     inp.dispatchEvent(new Event('blur', { bubbles: true }));
-                    results.push({ name: name, value: val.substring(0, 10), synced: true });
+                    results.push({ name: name, value: val.substring(0, 10), synced: true, method: 'react' });
                 } catch(e) {
                     results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
                 }
             }
             
-            // Sync all visible select fields (SKIP region/nationality to avoid resetting dependent dropdowns)
-            const skipSelectNames = ['region', 'nationality', 'area'];  // Don't re-trigger these
+            // Sync all visible select fields
             const selects = document.querySelectorAll('select');
             for (const sel of selects) {
                 if (sel.offsetParent === null) continue;
@@ -2560,45 +2585,69 @@ def fill_form_dynamically(page):
                 const name = sel.name || sel.id || '';
                 const val = sel.value;
                 
-                // Skip region/nationality/area selects to avoid resetting dependent dropdowns
-                if (skipSelectNames.some(s => name.toLowerCase().includes(s))) {
-                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', skipped: true });
-                    continue;
-                }
-                
                 try {
-                    // LAYER 1: Walk React fiber tree
-                    let fiberKey = Object.keys(sel).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                    if (fiberKey) {
-                        let fiber = sel[fiberKey];
-                        for (let fi = 0; fi < 15 && fiber; fi++) {
-                            const props = fiber.memoizedProps || fiber.pendingProps;
-                            if (props && typeof props.onChange === 'function') {
-                                try {
-                                    props.onChange({
-                                        target: { value: val, name: sel.name || sel.id || '', type: 'select-one' },
-                                        currentTarget: { value: val },
-                                        preventDefault: () => {}, stopPropagation: () => {},
-                                        nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
-                                    });
-                                    break;
-                                } catch(e) {}
-                            }
-                            fiber = fiber.return;
-                        }
-                    }
-                    // LAYER 2: nativeSetter + dispatch events
-                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-                    nativeSetter.call(sel, val);
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    sel.dispatchEvent(new Event('input', { bubbles: true }));
-                    // LAYER 3: Try __reactProps$ onChange
-                    const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
-                    if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
-                        sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
+                    let synced = false;
+                    
+                    // VUE 3 LAYER 1: Use _assign Symbol (most reliable for Vue)
+                    const vueAssign = getVueAssign(sel);
+                    if (vueAssign) {
+                        vueAssign(val);
+                        synced = true;
+                        results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'vue_assign' });
                     }
                     
-                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select' });
+                    // VUE 3 LAYER 2: Walk __vueParentComponent to find the reactive ref
+                    if (!synced) {
+                        let vnode = sel.__vueParentComponent;
+                        if (vnode) {
+                            // Try to find onUpdate:modelValue in vnode props
+                            let props = vnode.vnode && vnode.vnode.props;
+                            if (props) {
+                                const updateFn = props['onUpdate:modelValue'];
+                                if (typeof updateFn === 'function') {
+                                    updateFn(val);
+                                    synced = true;
+                                    results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'vue_vnode' });
+                                }
+                            }
+                        }
+                    }
+                    
+                    // VUE 3 LAYER 3: Dispatch change event (Vue listens to native change on select)
+                    if (!synced) {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+                        nativeSetter.call(sel, val);
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        
+                        // REACT LAYER: Try React fiber
+                        let fiberKey = Object.keys(sel).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                        if (fiberKey) {
+                            let fiber = sel[fiberKey];
+                            for (let fi = 0; fi < 15 && fiber; fi++) {
+                                const props = fiber.memoizedProps || fiber.pendingProps;
+                                if (props && typeof props.onChange === 'function') {
+                                    try {
+                                        props.onChange({
+                                            target: { value: val, name: sel.name || sel.id || '', type: 'select-one' },
+                                            currentTarget: { value: val },
+                                            preventDefault: () => {}, stopPropagation: () => {},
+                                            nativeEvent: new Event('change', { bubbles: true }), bubbles: true, type: 'change'
+                                        });
+                                        break;
+                                    } catch(e) {}
+                                }
+                                fiber = fiber.return;
+                            }
+                        }
+                        // REACT LAYER 2: __reactProps$
+                        const propsKey = Object.keys(sel).find(k => k.startsWith('__reactProps$'));
+                        if (propsKey && sel[propsKey] && sel[propsKey].onChange) {
+                            sel[propsKey].onChange({ target: { value: val, name: sel.name || sel.id } });
+                        }
+                        
+                        results.push({ name: name, value: val.substring(0, 10), synced: true, type: 'select', method: 'events' });
+                    }
                 } catch(e) {
                     results.push({ name: name, value: val.substring(0, 10), synced: false, error: e.message });
                 }
@@ -2609,6 +2658,10 @@ def fill_form_dynamically(page):
             for (const r of radios) {
                 if (r.offsetParent === null) continue;
                 try {
+                    // Vue 3
+                    const vueAssign = getVueAssign(r);
+                    if (vueAssign) { vueAssign(r.value); }
+                    // React
                     const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
                     if (propsKey && r[propsKey] && r[propsKey].onChange) {
                         r[propsKey].onChange({ target: { value: r.value, name: r.name, type: 'radio', checked: true } });
@@ -2617,12 +2670,27 @@ def fill_form_dynamically(page):
                 } catch(e) {}
             }
             
+            // Sync checkboxes
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            for (const cb of checkboxes) {
+                if (cb.offsetParent === null) continue;
+                try {
+                    const vueAssign = getVueAssign(cb);
+                    if (vueAssign) { vueAssign(cb.checked); }
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch(e) {}
+            }
+            
             return results;
         }""")
         
         if sync_results:
             synced_count = sum(1 for r in sync_results if r.get('synced'))
-            print(f"    \u2705 STEP 7e: React state synced for {synced_count}/{len(sync_results)} fields", flush=True)
+            methods = {}
+            for r in sync_results:
+                m = r.get('method', 'unknown')
+                methods[m] = methods.get(m, 0) + 1
+            print(f"    \u2705 STEP 7e: State synced for {synced_count}/{len(sync_results)} fields (methods: {methods})", flush=True)
     except Exception as sync_e:
         print(f"    \u26a0\ufe0f STEP 7e sync error: {str(sync_e)[:60]}", flush=True)
     
@@ -4372,7 +4440,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v67 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v68 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
