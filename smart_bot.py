@@ -3284,17 +3284,20 @@ def fill_form_dynamically(page):
     except Exception as nat_e:
         print(f"    \u26a0\ufe0f STEP 7g2 error: {str(nat_e)[:60]}", flush=True)
     
-    # ===== STEP 7g3: Remove validation errors from DOM before submit =====
+    # ===== STEP 7g3: Hide validation errors (safe - preserves buttons) =====
     try:
         removed = page.evaluate("""() => {
             // Remove all red error text elements
             const errors = document.querySelectorAll('.text-red-500, .text-red-600, [class*="border-red"]');
             let removed = 0;
             for (const el of errors) {
-                el.remove();
+                if (el.querySelector && el.querySelector("button")) continue;
+                if (el.tagName === "BUTTON") continue;
+                el.style.display = "none";
+                el.style.visibility = "hidden";
                 removed++;
             }
-            return 'removed_' + removed + '_error_elements';
+            return 'hidden_' + removed + '_error_elements';
         }""")
         print(f"    \u2705 STEP 7g3 error cleanup: {removed}", flush=True)
     except:
