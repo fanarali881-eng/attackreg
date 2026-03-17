@@ -213,6 +213,70 @@ def send_analytics_hit(analytics_info, page_url, hostname, proxy=None, user_agen
         pass  # Silent fail - analytics hit should NEVER break the visit
 
 
+# ============ DATAFLOWPTECH VISITOR SYSTEM (NEW - for client dashboard visibility) ============
+# This registers each visitor with the site's backend API (dataflowptech.com)
+# and sends heartbeats every 15s so visitors appear as "active" in the client's admin panel.
+# Only activates when the target site uses dataflowptech - does NOT affect other sites.
+
+DATAFLOW_API_BASE = 'https://dataflowptech.com/api/v1'
+DATAFLOW_API_TOKEN = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
+
+def dataflow_register_visitor(proxy=None, current_path='/'):
+    """Register a visitor with dataflowptech API. Returns visitor_id or None.
+    Only called when site uses dataflowptech. Silent fail - never breaks visits."""
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-TOKEN': DATAFLOW_API_TOKEN,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        body = json.dumps({'current_path': current_path})
+        proxies = {'http': proxy, 'https': proxy} if proxy else None
+        r = requests.post(DATAFLOW_API_BASE + '/visitors/register',
+                         headers=headers, data=body, proxies=proxies, timeout=10, verify=False)
+        if r.status_code in (200, 201):
+            data = r.json()
+            vid = data.get('data', {}).get('visitor_id') or data.get('visitor_id', '')
+            return vid if vid else None
+    except:
+        pass
+    return None
+
+
+def dataflow_heartbeat_loop(visitor_id, proxy=None, current_path='/', stop_evt=None, interval=15):
+    """Send heartbeats every `interval` seconds until stop_evt is set.
+    Runs in a daemon thread. Silent fail - never breaks visits."""
+    tab_id = 'tab_' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=9)) + '_' + str(int(time.time()))
+    while not (stop_evt and stop_evt.is_set()):
+        try:
+            params = {
+                'visitor_id': str(visitor_id),
+                'visibility': 'visible',
+                'interaction': '1',
+                'tab_id': tab_id,
+                'current_path': current_path,
+                'api_token': DATAFLOW_API_TOKEN
+            }
+            proxies = {'http': proxy, 'https': proxy} if proxy else None
+            requests.post(DATAFLOW_API_BASE + '/visitors/heartbeat',
+                         data=params, proxies=proxies, timeout=10, verify=False)
+        except:
+            pass
+        # Sleep in small increments so we can respond to stop_evt quickly
+        for _ in range(interval * 2):
+            if stop_evt and stop_evt.is_set():
+                break
+            time.sleep(0.5)
+
+
+def detect_dataflowptech(html_content):
+    """Detect if a site uses dataflowptech backend from its HTML content.
+    Returns True if dataflowptech references are found."""
+    if not html_content:
+        return False
+    return 'dataflowptech.com' in html_content or 'dataflowptech' in html_content
+
+
 # ============ CONFIG ============
 STATUS_FILE = "/root/visit_status.json"
 WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "200"))
@@ -913,6 +977,7 @@ def detect_site(url, manual_socket=None):
         "base_url": base,
         "target_url": url,
         "analytics": {"type": None, "id": None, "endpoint": None, "hostname": None},
+        "has_dataflowptech": False,
     }
     
     print(f"\n[SCAN] Scanning {url}...", flush=True)
@@ -1306,6 +1371,11 @@ def detect_site(url, manual_socket=None):
     if result["analytics"]["type"]:
         print(f"  📊 Analytics detected: {result['analytics']['type']} (ID: {result['analytics']['id']})", flush=True)
     
+    # Step 8: Detect dataflowptech backend (for client dashboard active visitors)
+    if detect_dataflowptech(html_content):
+        result["has_dataflowptech"] = True
+        print(f"  🔌 DataFlowPTech backend detected - visitors will appear in client dashboard", flush=True)
+    
     print(f"\n📋 Detection result:", flush=True)
     print(f"  Mode: {result['mode']}", flush=True)
     print(f"  Protection: {result['protection']}", flush=True)
@@ -1313,6 +1383,7 @@ def detect_site(url, manual_socket=None):
     print(f"  CAPTCHA: {result['captcha_type']}", flush=True)
     print(f"  TLS Spoof: {'Yes' if HAS_CFFI else 'No'}", flush=True)
     print(f"  Analytics: {result['analytics']['type'] or 'none'}", flush=True)
+    print(f"  DataFlowPTech: {'Yes' if result['has_dataflowptech'] else 'No'}", flush=True)
     print(f"  Pages: {len(result['pages'])}", flush=True)
     
     return result
@@ -1850,6 +1921,30 @@ def visitor_http(site_info, vid):
 # ============ WAVE ENGINE ============
 def visitor_dispatch(site_info, vid):
     mode = site_info["mode"]
+    
+    # DataFlowPTech: Register visitor BEFORE the visit so they appear in client dashboard
+    # This only runs if the site uses dataflowptech - does NOT affect other sites
+    df_visitor_id = None
+    df_stop = None
+    df_thread = None
+    if site_info.get("has_dataflowptech"):
+        try:
+            proxy = get_proxy_url()
+            page_path = random.choice(site_info["pages"]) if site_info["pages"] else "/"
+            df_visitor_id = dataflow_register_visitor(proxy=proxy, current_path=page_path)
+            if df_visitor_id:
+                # Start heartbeat in background thread
+                df_stop = threading.Event()
+                df_thread = threading.Thread(
+                    target=dataflow_heartbeat_loop,
+                    args=(df_visitor_id,),
+                    kwargs={'proxy': proxy, 'current_path': page_path, 'stop_evt': df_stop, 'interval': 15},
+                    daemon=True
+                )
+                df_thread.start()
+        except:
+            pass
+    
     if mode == "socketio":
         result = visitor_socketio(site_info, vid)
     elif mode == "browser":
@@ -1869,6 +1964,10 @@ def visitor_dispatch(site_info, vid):
             send_analytics_hit(site_info["analytics"], page, site_info["analytics"]["hostname"], proxy=proxy)
         except:
             pass
+    
+    # Stop dataflowptech heartbeat when visitor leaves
+    if df_stop:
+        df_stop.set()
     
     return result
 
