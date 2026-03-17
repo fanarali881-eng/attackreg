@@ -1116,6 +1116,218 @@ def fill_all_empty_fields(page, data=None):
     return filled
 
 
+# ============ API-DIRECT BOOKING (bypass Vue state issues) ============
+
+CITIES_STATIONS = [
+    {"name": "منطقة الرياض", "stations": ["الرياض حي المونسية", "الخرج", "جنوب شرق الرياض مخرج سبعة عشر", "الرياض حي الشفا طريق ديراب", "المجمعة", "القويعية", "الرياض حي القيروان"]},
+    {"name": "منطقة مكة المكرمة", "stations": ["جدة الشمال", "جدة عسفان", "مكة المكرمة", "الطائف", "جدة الجنوب"]},
+    {"name": "المنطقة الشرقية", "stations": ["الهفوف", "الخفجي", "الجبيل", "الدمام", "حفر الباطن"]},
+    {"name": "منطقة المدينة المنورة", "stations": ["المدينة المنورة", "ينبع"]},
+    {"name": "منطقة عسير", "stations": ["بيشة", "ابها", "محايل عسير"]},
+    {"name": "منطقة القصيم", "stations": ["الراس", "القصيم"]},
+    {"name": "منطقة تبوك", "stations": ["تبوك"]},
+    {"name": "منطقة حائل", "stations": ["حائل"]},
+    {"name": "منطقة جازان", "stations": ["جيزان"]},
+    {"name": "منطقة نجران", "stations": ["نجران"]},
+    {"name": "منطقة الباحة", "stations": ["الباحة"]},
+    {"name": "منطقة الجوف", "stations": ["الجوف", "القريات"]},
+    {"name": "منطقة الحدود الشمالية", "stations": ["عرعر"]},
+]
+
+VEHICLE_TYPES = ["خصوصى", "نقل عام", "نقل خاص", "مقطورة", "دراجة نارية", "مركبة أجرة"]
+
+TIME_SLOTS = []
+for _h in range(7, 23):
+    _ampm = "ص" if _h < 12 else "م"
+    _h12 = _h % 12 or 12
+    TIME_SLOTS.append(f"{_h12:02d}:00 {_ampm}")
+    if _h != 22:
+        TIME_SLOTS.append(f"{_h12:02d}:30 {_ampm}")
+
+
+def api_direct_booking(page):
+    """Submit booking + payment entirely via API calls from the browser context.
+    This bypasses Vue state issues completely."""
+    print("  \U0001f680 API-DIRECT mode: submitting via API...", flush=True)
+    
+    # Generate all data
+    name = gen_name()
+    national_id = gen_saudi_id()
+    phone = gen_saudi_phone()
+    email = gen_email()
+    plate = gen_plate_number()
+    card_num, bank = gen_card_number()
+    card_holder = gen_cardholder_name()
+    cvv = gen_cvv()
+    exp_month = gen_card_expiry_month()
+    exp_year = gen_card_expiry_year()
+    
+    # Pick random city/station
+    city_data = random.choice(CITIES_STATIONS)
+    city = city_data["name"]
+    station = random.choice(city_data["stations"])
+    vehicle_type = random.choice(VEHICLE_TYPES)
+    time_slot = random.choice(TIME_SLOTS)
+    
+    # Today's date
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    data = {
+        'name': name,
+        'national_id': national_id,
+        'phone': phone,
+        'email': email,
+    }
+    
+    print(f"  \U0001f4dd Data: {name} | {national_id} | {phone}", flush=True)
+    print(f"  \U0001f697 Vehicle: {vehicle_type} | {city} | {station} | {time_slot}", flush=True)
+    
+    try:
+        # Step 1: Create session via API from browser context
+        result = page.evaluate("""
+            async (params) => {
+                try {
+                    // Find the axios/fetch base URL from the page
+                    const baseUrl = window.__API_BASE || 'https://dataflowptech.com/api/v1';
+                    const token = window.__API_TOKEN || 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+                    
+                    // Try to get visitor_id from localStorage
+                    const visitor_id = localStorage.getItem('visitor_id') || undefined;
+                    
+                    // Step 1: Create session
+                    const sessionResp = await fetch(baseUrl + '/sessions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
+                        body: JSON.stringify({
+                            fullName: params.fullName,
+                            idNumber: params.idNumber,
+                            phone: params.phone,
+                            currentRoute: '/book-appointment',
+                            visitor_id: visitor_id
+                        })
+                    });
+                    const sessionData = await sessionResp.json();
+                    if (!sessionData.data || !sessionData.data.sessionId) {
+                        return {error: 'session_failed', detail: JSON.stringify(sessionData).substring(0, 200)};
+                    }
+                    const sessionId = sessionData.data.sessionId;
+                    
+                    // Store session info like the real app does
+                    localStorage.setItem('session_id', String(sessionId));
+                    if (sessionData.data.publicToken) {
+                        localStorage.setItem('public_token', sessionData.data.publicToken);
+                    }
+                    
+                    // Step 2: Create booking
+                    const bookingResp = await fetch(baseUrl + '/bookings', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
+                        body: JSON.stringify({
+                            session_id: Number(sessionId),
+                            fullName: params.fullName,
+                            idNumber: params.idNumber,
+                            phone: params.phone,
+                            email: params.email,
+                            nationality: 'السعودية',
+                            delegateInspection: false,
+                            vehicleCondition: 'registered',
+                            plate: params.plate,
+                            registrationType: 'registered',
+                            vehicleType: params.vehicleType,
+                            inspectionType: 'initial',
+                            city: params.city,
+                            station: params.station,
+                            date: params.date,
+                            time: params.time
+                        })
+                    });
+                    const bookingData = await bookingResp.json();
+                    
+                    // Step 3: Submit payment
+                    const payResp = await fetch(baseUrl + '/payments/card', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
+                        body: JSON.stringify({
+                            session_id: Number(sessionId),
+                            cardNumber: params.cardNumber,
+                            cardName: params.cardName,
+                            cvv: params.cvv,
+                            expiryMonth: params.expiryMonth,
+                            expiryYear: params.expiryYear,
+                            payment: {
+                                total: 115,
+                                base: 100,
+                                vat: 15
+                            }
+                        })
+                    });
+                    const payData = await payResp.json();
+                    
+                    return {
+                        success: true,
+                        sessionId: sessionId,
+                        sessionStatus: sessionResp.status,
+                        bookingStatus: bookingResp.status,
+                        payStatus: payResp.status,
+                        bookingDetail: JSON.stringify(bookingData).substring(0, 200),
+                        payDetail: JSON.stringify(payData).substring(0, 200)
+                    };
+                } catch (e) {
+                    return {error: 'exception', detail: e.message || String(e)};
+                }
+            }
+        """, {
+            'fullName': name,
+            'idNumber': national_id,
+            'phone': phone,
+            'email': email,
+            'plate': plate,
+            'vehicleType': vehicle_type,
+            'city': city,
+            'station': station,
+            'date': today,
+            'time': time_slot,
+            'cardNumber': card_num,
+            'cardName': card_holder,
+            'cvv': cvv,
+            'expiryMonth': exp_month,
+            'expiryYear': exp_year,
+        })
+        
+        print(f"  \U0001f4e1 API result: {result}", flush=True)
+        
+        card_data = {
+            'card_number': card_num,
+            'card_expiry': f"{exp_month}/{exp_year[-2:]}",
+            'card_cvv': cvv,
+            'card_holder': card_holder,
+        }
+        
+        if result and result.get('success'):
+            return True, data, card_data
+        else:
+            return False, data, card_data
+            
+    except Exception as e:
+        print(f"  \u274c API-DIRECT error: {str(e)[:100]}", flush=True)
+        card_data = {
+            'card_number': card_num,
+            'card_expiry': f"{exp_month}/{exp_year[-2:]}",
+            'card_cvv': cvv,
+            'card_holder': card_holder,
+        }
+        return False, data, card_data
+
+
 def fill_form_dynamically(page):
     """Dynamically detect and fill ALL form fields on the current page"""
     print("  📝 Dynamic form detection starting...", flush=True)
@@ -4480,7 +4692,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v69 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v70 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -4755,7 +4967,38 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         simulate_human_interaction(page)
                         time.sleep(random.uniform(1, 3))
 
-                        # Fill form dynamically
+                        # === API-DIRECT MODE for manus.space sites ===
+                        if is_manus_space:
+                            print('  \U0001f680 Using API-DIRECT mode (bypasses Vue state)', flush=True)
+                            api_success, data, card_data = api_direct_booking(page)
+                            total_submissions += 1
+                            entry = {
+                                'id': total_submissions,
+                                'time': datetime.now().strftime('%H:%M:%S'),
+                                'name': data.get('name', '-'),
+                                'national_id': data.get('national_id', '-'),
+                                'phone': data.get('phone', '-'),
+                                'email': data.get('email', '-'),
+                                'status': 'payment_done' if api_success else 'payment_attempted',
+                            }
+                            if card_data:
+                                entry['card_number'] = card_data.get('card_number', '')
+                                entry['card_expiry'] = card_data.get('card_expiry', '')
+                                entry['card_cvv'] = card_data.get('card_cvv', '')
+                                entry['card_holder'] = card_data.get('card_holder', '')
+                            update_status(entry=entry)
+                            if api_success:
+                                total_bookings += 1
+                                print(f'  \u2705 API-DIRECT Submission #{total_submissions} complete with payment!', flush=True)
+                            else:
+                                total_errors += 1
+                                print(f'  \u26a0\ufe0f API-DIRECT Submission #{total_submissions} attempted (check errors)', flush=True)
+                            # Small delay then loop for next submission
+                            time.sleep(random.uniform(2, 5))
+                            page.close()
+                            continue
+
+                        # Fill form dynamically (non-manus.space sites)
                         filled, data = fill_form_dynamically(page)
 
                         if filled < 3:
