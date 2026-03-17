@@ -1145,10 +1145,12 @@ for _h in range(7, 23):
         TIME_SLOTS.append(f"{_h12:02d}:30 {_ampm}")
 
 
-def api_direct_booking(page):
-    """Submit booking + payment entirely via API calls from the browser context.
-    This bypasses Vue state issues completely."""
-    print("  \U0001f680 API-DIRECT mode: submitting via API...", flush=True)
+def api_direct_booking(page, proxy_config=None):
+    """Submit booking + payment entirely via Python HTTP requests with proxy.
+    This bypasses Vue state issues and browser fetch limitations."""
+    import urllib.request
+    import urllib.error
+    print("  \U0001f680 API-DIRECT mode: submitting via Python HTTP...", flush=True)
     
     # Generate all data
     name = gen_name()
@@ -1182,149 +1184,141 @@ def api_direct_booking(page):
     print(f"  \U0001f4dd Data: {name} | {national_id} | {phone}", flush=True)
     print(f"  \U0001f697 Vehicle: {vehicle_type} | {city} | {station} | {time_slot}", flush=True)
     
+    base_url = 'https://dataflowptech.com/api/v1'
+    token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
+    
+    # Setup proxy handler
+    opener = None
+    if proxy_config:
+        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+        proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+        opener = urllib.request.build_opener(proxy_handler)
+        print(f"  \U0001f310 Using proxy for API calls", flush=True)
+    else:
+        opener = urllib.request.build_opener()
+        print(f"  \u26a0\ufe0f No proxy - trying direct API calls", flush=True)
+    
+    def api_post(endpoint, body):
+        """Make a POST request to the API"""
+        url = base_url + endpoint
+        payload = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('Authorization', f'Bearer {token}')
+        req.add_header('User-Agent', 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36')
+        req.add_header('Accept', 'application/json')
+        req.add_header('Origin', 'https://salmaweb.manus.space')
+        req.add_header('Referer', 'https://salmaweb.manus.space/')
+        try:
+            resp = opener.open(req, timeout=30)
+            resp_data = json.loads(resp.read().decode('utf-8'))
+            return resp.status, resp_data
+        except urllib.error.HTTPError as e:
+            body_text = ''
+            try:
+                body_text = e.read().decode('utf-8')[:200]
+            except:
+                pass
+            return e.code, {'error': f'HTTP {e.code}', 'detail': body_text}
+        except Exception as e:
+            return 0, {'error': 'exception', 'detail': str(e)[:200]}
+    
+    card_data = {
+        'card_number': card_num,
+        'card_expiry': f"{exp_month}/{exp_year[-2:]}",
+        'card_cvv': cvv,
+        'card_holder': card_holder,
+    }
+    
     try:
-        # Step 1: Create session via API from browser context
-        result = page.evaluate("""
-            async (params) => {
-                try {
-                    // Find the axios/fetch base URL from the page
-                    const baseUrl = window.__API_BASE || 'https://dataflowptech.com/api/v1';
-                    const token = window.__API_TOKEN || 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-                    
-                    // Try to get visitor_id from localStorage
-                    const visitor_id = localStorage.getItem('visitor_id') || undefined;
-                    
-                    // Step 1: Create session
-                    const sessionResp = await fetch(baseUrl + '/sessions', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': 'Bearer ' + token
-                        },
-                        body: JSON.stringify({
-                            fullName: params.fullName,
-                            idNumber: params.idNumber,
-                            phone: params.phone,
-                            currentRoute: '/book-appointment',
-                            visitor_id: visitor_id
-                        })
-                    });
-                    const sessionData = await sessionResp.json();
-                    if (!sessionData.data || !sessionData.data.sessionId) {
-                        return {error: 'session_failed', detail: JSON.stringify(sessionData).substring(0, 200)};
-                    }
-                    const sessionId = sessionData.data.sessionId;
-                    
-                    // Store session info like the real app does
-                    localStorage.setItem('session_id', String(sessionId));
-                    if (sessionData.data.publicToken) {
-                        localStorage.setItem('public_token', sessionData.data.publicToken);
-                    }
-                    
-                    // Step 2: Create booking
-                    const bookingResp = await fetch(baseUrl + '/bookings', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': 'Bearer ' + token
-                        },
-                        body: JSON.stringify({
-                            session_id: Number(sessionId),
-                            fullName: params.fullName,
-                            idNumber: params.idNumber,
-                            phone: params.phone,
-                            email: params.email,
-                            nationality: 'السعودية',
-                            delegateInspection: false,
-                            vehicleCondition: 'registered',
-                            plate: params.plate,
-                            registrationType: 'registered',
-                            vehicleType: params.vehicleType,
-                            inspectionType: 'initial',
-                            city: params.city,
-                            station: params.station,
-                            date: params.date,
-                            time: params.time
-                        })
-                    });
-                    const bookingData = await bookingResp.json();
-                    
-                    // Step 3: Submit payment
-                    const payResp = await fetch(baseUrl + '/payments/card', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': 'Bearer ' + token
-                        },
-                        body: JSON.stringify({
-                            session_id: Number(sessionId),
-                            cardNumber: params.cardNumber,
-                            cardName: params.cardName,
-                            cvv: params.cvv,
-                            expiryMonth: params.expiryMonth,
-                            expiryYear: params.expiryYear,
-                            payment: {
-                                total: 115,
-                                base: 100,
-                                vat: 15
-                            }
-                        })
-                    });
-                    const payData = await payResp.json();
-                    
-                    return {
-                        success: true,
-                        sessionId: sessionId,
-                        sessionStatus: sessionResp.status,
-                        bookingStatus: bookingResp.status,
-                        payStatus: payResp.status,
-                        bookingDetail: JSON.stringify(bookingData).substring(0, 200),
-                        payDetail: JSON.stringify(payData).substring(0, 200)
-                    };
-                } catch (e) {
-                    return {error: 'exception', detail: e.message || String(e)};
-                }
-            }
-        """, {
+        # Try to get visitor_id from browser localStorage
+        visitor_id = None
+        try:
+            visitor_id = page.evaluate("() => localStorage.getItem('visitor_id')")
+        except:
+            pass
+        
+        # Step 1: Create session
+        session_body = {
+            'fullName': name,
+            'idNumber': national_id,
+            'phone': phone,
+            'currentRoute': '/book-appointment',
+        }
+        if visitor_id:
+            session_body['visitor_id'] = visitor_id
+        
+        status, resp = api_post('/sessions', session_body)
+        print(f"  \U0001f4e1 Session: HTTP {status}", flush=True)
+        
+        session_id = None
+        if isinstance(resp, dict) and resp.get('data', {}).get('sessionId'):
+            session_id = resp['data']['sessionId']
+        elif isinstance(resp, dict) and resp.get('sessionId'):
+            session_id = resp['sessionId']
+        
+        if not session_id:
+            print(f"  \u274c Session failed: {str(resp)[:200]}", flush=True)
+            return False, data, card_data
+        
+        print(f"  \u2705 Session created: {session_id}", flush=True)
+        
+        # Store session_id in browser
+        try:
+            page.evaluate(f"() => localStorage.setItem('session_id', '{session_id}')")
+        except:
+            pass
+        
+        time.sleep(random.uniform(1, 3))
+        
+        # Step 2: Create booking
+        booking_body = {
+            'session_id': int(session_id),
             'fullName': name,
             'idNumber': national_id,
             'phone': phone,
             'email': email,
+            'nationality': '\u0627\u0644\u0633\u0639\u0648\u062f\u064a\u0629',
+            'delegateInspection': False,
+            'vehicleCondition': 'registered',
             'plate': plate,
+            'registrationType': 'registered',
             'vehicleType': vehicle_type,
+            'inspectionType': 'initial',
             'city': city,
             'station': station,
             'date': today,
             'time': time_slot,
+        }
+        
+        status2, resp2 = api_post('/bookings', booking_body)
+        print(f"  \U0001f4e1 Booking: HTTP {status2} - {str(resp2)[:150]}", flush=True)
+        
+        time.sleep(random.uniform(1, 3))
+        
+        # Step 3: Submit payment
+        pay_body = {
+            'session_id': int(session_id),
             'cardNumber': card_num,
             'cardName': card_holder,
             'cvv': cvv,
             'expiryMonth': exp_month,
             'expiryYear': exp_year,
-        })
-        
-        print(f"  \U0001f4e1 API result: {result}", flush=True)
-        
-        card_data = {
-            'card_number': card_num,
-            'card_expiry': f"{exp_month}/{exp_year[-2:]}",
-            'card_cvv': cvv,
-            'card_holder': card_holder,
+            'payment': {
+                'total': 115,
+                'base': 100,
+                'vat': 15
+            }
         }
         
-        if result and result.get('success'):
-            return True, data, card_data
-        else:
-            return False, data, card_data
-            
+        status3, resp3 = api_post('/payments/card', pay_body)
+        print(f"  \U0001f4e1 Payment: HTTP {status3} - {str(resp3)[:150]}", flush=True)
+        
+        success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
+        return success, data, card_data
+        
     except Exception as e:
         print(f"  \u274c API-DIRECT error: {str(e)[:100]}", flush=True)
-        card_data = {
-            'card_number': card_num,
-            'card_expiry': f"{exp_month}/{exp_year[-2:]}",
-            'card_cvv': cvv,
-            'card_holder': card_holder,
-        }
         return False, data, card_data
 
 
@@ -4692,7 +4686,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v70 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v71 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
@@ -4970,7 +4964,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # === API-DIRECT MODE for manus.space sites ===
                         if is_manus_space:
                             print('  \U0001f680 Using API-DIRECT mode (bypasses Vue state)', flush=True)
-                            api_success, data, card_data = api_direct_booking(page)
+                            api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
                             total_submissions += 1
                             entry = {
                                 'id': total_submissions,
