@@ -2522,6 +2522,46 @@ def fill_form_dynamically(page):
     except Exception as cap_e:
         print(f"    \u26a0\ufe0f Captcha step error: {str(cap_e)[:60]}", flush=True)
     
+    # ===== STEP 7e-diag: Vue diagnostic =====
+    try:
+        vue_diag = page.evaluate("""() => {
+            const selects = document.querySelectorAll('select');
+            const diag = [];
+            for (const sel of selects) {
+                const id = sel.id || sel.name || 'unknown';
+                const val = sel.value;
+                const symbols = Object.getOwnPropertySymbols(sel);
+                const symDescs = symbols.map(s => s.description || s.toString());
+                
+                // Check _assign
+                let assignFound = false;
+                for (const sym of symbols) {
+                    const d = sym.description || sym.toString();
+                    if (d.includes('assign')) { assignFound = true; }
+                }
+                
+                // Check __vueParentComponent
+                let vueComp = 'none';
+                let el = sel;
+                for (let i = 0; i < 10 && el; i++) {
+                    if (el.__vueParentComponent) {
+                        vueComp = 'depth' + i;
+                        const vn = el.__vueParentComponent;
+                        const p = vn.vnode && vn.vnode.props;
+                        if (p) vueComp += ':' + Object.keys(p).filter(k => k.includes('odel') || k.includes('pdate')).join(',');
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+                
+                diag.push(id + '=' + val + '|syms=' + symDescs.join(';') + '|assign=' + assignFound + '|vue=' + vueComp);
+            }
+            return diag.join('\n');
+        }""")
+        print(f"    🔍 VUE_DIAG:\n{vue_diag}", flush=True)
+    except Exception as vd_e:
+        print(f"    ⚠️ Vue diag error: {str(vd_e)[:60]}", flush=True)
+    
     # ===== STEP 7e: Vue3 + React State Sync - re-trigger events on all fields =====
     try:
         sync_results = page.evaluate("""() => {
@@ -4440,7 +4480,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v68 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    print(f"Smart Bot v69 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
     update_status()
 
     with sync_playwright() as p:
