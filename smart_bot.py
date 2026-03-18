@@ -5003,26 +5003,12 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         except:
                             pass
 
-                        # Cloudflare bypass (with retry for manus.space sites)
-                        cf_passed = bypass_cloudflare(page)
-                        if not cf_passed and is_manus_space:
-                            # Retry once: reload and try CF bypass again
-                            print('  🔄 CF retry for manus.space...', flush=True)
-                            try:
-                                page.reload(timeout=60000, wait_until='domcontentloaded')
-                            except:
-                                pass
-                            cf_passed = bypass_cloudflare(page)
-                        if not cf_passed:
-                            # CF failed even after retry - for manus.space, still try API-DIRECT
-                            # (urllib fallback doesn't need CF bypass)
-                            if is_manus_space:
-                                print('  ⚠️ CF failed but trying API-DIRECT anyway (urllib fallback)...', flush=True)
-                            else:
-                                total_errors += 1
-                                update_status()
-                                page.close()
-                                continue
+                        # Cloudflare bypass
+                        if not bypass_cloudflare(page):
+                            total_errors += 1
+                            update_status()
+                            page.close()
+                            continue
 
                         time.sleep(2)
 
@@ -5036,13 +5022,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             api_success = False
                             data = {}
                             card_data = {}
-                            for _api_attempt in range(3):  # Max 3 attempts
+                            for _api_attempt in range(2):  # Max 2 attempts
                                 api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
                                 if api_success:
                                     break
-                                if _api_attempt < 2:
-                                    print(f'  \U0001f504 API-DIRECT retry #{_api_attempt+1}...', flush=True)
-                                    time.sleep(random.uniform(2, 4))
+                                if _api_attempt == 0:
+                                    print('  \U0001f504 API-DIRECT retry...', flush=True)
+                                    time.sleep(random.uniform(1, 2))
                             
                             total_submissions += 1
                             entry = {
