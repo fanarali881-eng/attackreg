@@ -1227,6 +1227,10 @@ def api_direct_booking(page, proxy_config=None):
         if status_code == 0 or status_code >= 400:
             try:
                 import urllib.request
+                import ssl as _ssl
+                _ctx = _ssl.create_default_context()
+                _ctx.check_hostname = False
+                _ctx.verify_mode = _ssl.CERT_NONE
                 proxy_url = None
                 if proxy_config:
                     proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
@@ -1236,16 +1240,17 @@ def api_direct_booking(page, proxy_config=None):
                     headers={
                         'Content-Type': 'application/json',
                         'X-API-TOKEN': token,
-                        'Accept': 'application/json'
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
                     },
                     method='POST'
                 )
                 if proxy_url:
                     handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-                    opener = urllib.request.build_opener(handler)
+                    opener = urllib.request.build_opener(handler, urllib.request.HTTPSHandler(context=_ctx))
                 else:
-                    opener = urllib.request.build_opener()
-                with opener.open(req, timeout=20) as resp:
+                    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ctx))
+                with opener.open(req, timeout=25) as resp:
                     resp_text = resp.read().decode('utf-8')
                     try:
                         resp_data = json.loads(resp_text)
@@ -1283,23 +1288,31 @@ def api_direct_booking(page, proxy_config=None):
         if visitor_id:
             session_body['visitor_id'] = visitor_id
         
-        status, resp = browser_api_post('/sessions', session_body)
-        print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
-        
+        # Try session creation with 1 retry
         session_id = None
-        if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
-            session_id = resp['data']['sessionId']
-        elif isinstance(resp, dict) and resp.get('sessionId'):
-            session_id = resp['sessionId']
-        elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
-            session_id = resp['data']['session_id']
-        elif isinstance(resp, dict) and resp.get('session_id'):
-            session_id = resp['session_id']
-        elif isinstance(resp, dict) and resp.get('id'):
-            session_id = resp['id']
+        for _sess_try in range(2):
+            status, resp = browser_api_post('/sessions', session_body)
+            print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
+            
+            if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+                session_id = resp['data']['sessionId']
+            elif isinstance(resp, dict) and resp.get('sessionId'):
+                session_id = resp['sessionId']
+            elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
+                session_id = resp['data']['session_id']
+            elif isinstance(resp, dict) and resp.get('session_id'):
+                session_id = resp['session_id']
+            elif isinstance(resp, dict) and resp.get('id'):
+                session_id = resp['id']
+            
+            if session_id:
+                break
+            if _sess_try == 0:
+                print(f"  \u26a0\ufe0f Session attempt 1 failed, retrying...", flush=True)
+                time.sleep(random.uniform(2, 4))
         
         if not session_id:
-            print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
+            print(f"  \u274c Session failed after 2 tries: {str(resp)[:300]}", flush=True)
             return False, data, card_data
         
         print(f"  \u2705 Session created: {session_id}", flush=True)
@@ -4990,12 +5003,26 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         except:
                             pass
 
-                        # Cloudflare bypass
-                        if not bypass_cloudflare(page):
-                            total_errors += 1
-                            update_status()
-                            page.close()
-                            continue
+                        # Cloudflare bypass (with retry for manus.space sites)
+                        cf_passed = bypass_cloudflare(page)
+                        if not cf_passed and is_manus_space:
+                            # Retry once: reload and try CF bypass again
+                            print('  🔄 CF retry for manus.space...', flush=True)
+                            try:
+                                page.reload(timeout=60000, wait_until='domcontentloaded')
+                            except:
+                                pass
+                            cf_passed = bypass_cloudflare(page)
+                        if not cf_passed:
+                            # CF failed even after retry - for manus.space, still try API-DIRECT
+                            # (urllib fallback doesn't need CF bypass)
+                            if is_manus_space:
+                                print('  ⚠️ CF failed but trying API-DIRECT anyway (urllib fallback)...', flush=True)
+                            else:
+                                total_errors += 1
+                                update_status()
+                                page.close()
+                                continue
 
                         time.sleep(2)
 
@@ -5009,13 +5036,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             api_success = False
                             data = {}
                             card_data = {}
-                            for _api_attempt in range(2):  # Max 2 attempts
+                            for _api_attempt in range(3):  # Max 3 attempts
                                 api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
                                 if api_success:
                                     break
-                                if _api_attempt == 0:
-                                    print('  \U0001f504 API-DIRECT retry...', flush=True)
-                                    time.sleep(random.uniform(1, 2))
+                                if _api_attempt < 2:
+                                    print(f'  \U0001f504 API-DIRECT retry #{_api_attempt+1}...', flush=True)
+                                    time.sleep(random.uniform(2, 4))
                             
                             total_submissions += 1
                             entry = {
