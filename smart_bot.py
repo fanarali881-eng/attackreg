@@ -1186,10 +1186,14 @@ def api_direct_booking(page, proxy_config=None):
     token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
     
     def browser_api_post(endpoint, body):
-        """Make a POST request via browser fetch() for consistent proxy IP"""
+        """Make a POST request via browser fetch() with urllib fallback"""
         body_json = json.dumps(body)
         # Escape for JS string embedding
         body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
+        
+        # Try browser fetch first
+        status_code = 0
+        resp_data = {}
         try:
             result = page.evaluate(f"""
                 async () => {{
@@ -1214,10 +1218,45 @@ def api_direct_booking(page, proxy_config=None):
             """)
             status_code = result.get('status', 0) if isinstance(result, dict) else 0
             resp_data = result.get('data', {}) if isinstance(result, dict) else {}
-            return status_code, resp_data
+            if status_code >= 200 and status_code < 400:
+                return status_code, resp_data
         except Exception as e:
             print(f"    browser_api_post error: {str(e)[:100]}", flush=True)
-            return 0, {'error': str(e)[:200]}
+        
+        # Fallback: use urllib with proxy if browser fetch failed
+        if status_code == 0 or status_code >= 400:
+            try:
+                import urllib.request
+                proxy_url = None
+                if proxy_config:
+                    proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                req = urllib.request.Request(
+                    f"{base_url}{endpoint}",
+                    data=body_json.encode('utf-8'),
+                    headers={
+                        'Content-Type': 'application/json',
+                        'X-API-TOKEN': token,
+                        'Accept': 'application/json'
+                    },
+                    method='POST'
+                )
+                if proxy_url:
+                    handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+                    opener = urllib.request.build_opener(handler)
+                else:
+                    opener = urllib.request.build_opener()
+                with opener.open(req, timeout=20) as resp:
+                    resp_text = resp.read().decode('utf-8')
+                    try:
+                        resp_data = json.loads(resp_text)
+                    except:
+                        resp_data = {'raw': resp_text[:500]}
+                    print(f"    [FALLBACK] urllib OK: HTTP {resp.status}", flush=True)
+                    return resp.status, resp_data
+            except Exception as e2:
+                print(f"    [FALLBACK] urllib error: {str(e2)[:100]}", flush=True)
+        
+        return status_code, resp_data
     
     card_data = {
         'card_number': card_num,
