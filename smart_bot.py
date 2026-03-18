@@ -1288,31 +1288,23 @@ def api_direct_booking(page, proxy_config=None):
         if visitor_id:
             session_body['visitor_id'] = visitor_id
         
-        # Try session creation with 1 retry
+        status, resp = browser_api_post('/sessions', session_body)
+        print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
+        
         session_id = None
-        for _sess_try in range(2):
-            status, resp = browser_api_post('/sessions', session_body)
-            print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
-            
-            if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
-                session_id = resp['data']['sessionId']
-            elif isinstance(resp, dict) and resp.get('sessionId'):
-                session_id = resp['sessionId']
-            elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
-                session_id = resp['data']['session_id']
-            elif isinstance(resp, dict) and resp.get('session_id'):
-                session_id = resp['session_id']
-            elif isinstance(resp, dict) and resp.get('id'):
-                session_id = resp['id']
-            
-            if session_id:
-                break
-            if _sess_try == 0:
-                print(f"  \u26a0\ufe0f Session attempt 1 failed, retrying...", flush=True)
-                time.sleep(random.uniform(2, 4))
+        if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+            session_id = resp['data']['sessionId']
+        elif isinstance(resp, dict) and resp.get('sessionId'):
+            session_id = resp['sessionId']
+        elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
+            session_id = resp['data']['session_id']
+        elif isinstance(resp, dict) and resp.get('session_id'):
+            session_id = resp['session_id']
+        elif isinstance(resp, dict) and resp.get('id'):
+            session_id = resp['id']
         
         if not session_id:
-            print(f"  \u274c Session failed after 2 tries: {str(resp)[:300]}", flush=True)
+            print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
             return False, data, card_data
         
         print(f"  \u2705 Session created: {session_id}", flush=True)
