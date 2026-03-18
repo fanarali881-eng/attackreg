@@ -1342,7 +1342,26 @@ def api_direct_booking(page, proxy_config=None):
         
         time.sleep(random.uniform(1, 3))
         
-        # Step 3: Submit payment (via browser fetch - same IP as session+booking)
+        # Step 3: Fill payment form in browser (the site needs form filling, not API)
+        # Wait for payment page to load after booking
+        print('  💳 Waiting for payment page...', flush=True)
+        time.sleep(random.uniform(3, 5))
+        
+        # Try to fill payment form in the browser
+        try:
+            pay_filled, pay_card_data = fill_payment(page)
+            if pay_card_data:
+                card_data.update(pay_card_data)
+            if pay_filled:
+                print('  ✅ Payment form filled and submitted!', flush=True)
+                success = (status == 200 or status == 201)
+                return success, data, card_data
+            else:
+                print('  ⚠️ Payment form not found, trying API fallback...', flush=True)
+        except Exception as pay_err:
+            print(f'  ⚠️ Payment form error: {str(pay_err)[:100]}, trying API fallback...', flush=True)
+        
+        # Fallback: try payment via API if form filling failed
         pay_body = {
             'session_id': int(session_id),
             'cardNumber': card_num,
@@ -1358,7 +1377,7 @@ def api_direct_booking(page, proxy_config=None):
         }
         
         status3, resp3 = browser_api_post('/payments/card', pay_body)
-        print(f"  \U0001f4e1 Payment (browser): HTTP {status3} - {str(resp3)[:150]}", flush=True)
+        print(f"  \U0001f4e1 Payment API fallback: HTTP {status3} - {str(resp3)[:150]}", flush=True)
         
         success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
         return success, data, card_data
