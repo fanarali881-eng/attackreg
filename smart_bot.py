@@ -4819,6 +4819,37 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     if time.time() >= end_time:
                         break
 
+                    # For manus.space: create fresh context each iteration for new IP
+                    if is_manus_space and i > 0:
+                        try:
+                            context.close()
+                        except:
+                            pass
+                        context = browser.new_context(**context_opts)
+                        context.add_init_script("""
+                            (function() {
+                                Object.defineProperty(navigator, 'platform', {
+                                    get: function() { return 'iPhone'; },
+                                    configurable: true
+                                });
+                                Object.defineProperty(navigator, 'maxTouchPoints', {
+                                    get: function() { return 5; },
+                                    configurable: true
+                                });
+                                Object.defineProperty(navigator, 'vendor', {
+                                    get: function() { return 'Apple Computer, Inc.'; },
+                                    configurable: true
+                                });
+                                if (navigator.userAgentData) {
+                                    Object.defineProperty(navigator, 'userAgentData', {
+                                        get: function() { return undefined; },
+                                        configurable: true
+                                    });
+                                }
+                            })();
+                        """)
+                        print(f'  🔄 New context created (fresh IP)', flush=True)
+
                     page = context.new_page()
                     print(f"\n👤 Instance {i+1}/{num_instances}")
 
