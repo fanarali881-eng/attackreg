@@ -4960,32 +4960,24 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         time.sleep(2)
 
-                        # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
-                        try:
-                            register_visitor(page)
-                            time.sleep(random.uniform(1, 2))
-                            start_heartbeat(page, interval=15)
-                            simulate_human_interaction(page)
-                            time.sleep(random.uniform(2, 4))  # Wait like a real user browsing
-                        except Exception as e:
-                            print(f"  ⚠️ Anti-detection setup: {e}", flush=True)
-
-                        # Find the booking/form page dynamically
-                        _api_bypass_ref = [_api_bypass_active]
-                        find_booking_page(page, target_url, 
-                                        api_bypass_setup=_setup_api_bypass if proxy_config else None,
-                                        api_bypass_active_ref=_api_bypass_ref)
-                        _api_bypass_active = _api_bypass_ref[0]
-                        time.sleep(3)
-
-                        # Simulate human browsing before filling
-                        simulate_human_interaction(page)
-                        time.sleep(random.uniform(1, 3))
-
-                        # === API-DIRECT MODE for manus.space sites ===
+                        # === FAST PATH for manus.space API-DIRECT sites ===
+                        # Skip form-finding and unnecessary steps - go straight to API
                         if is_manus_space:
-                            print('  \U0001f680 Using API-DIRECT mode (bypasses Vue state)', flush=True)
-                            api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
+                            time.sleep(random.uniform(1, 2))  # Brief wait for page JS to load
+                            print('  \U0001f680 Using API-DIRECT mode (fast path)', flush=True)
+                            
+                            # Try API-DIRECT with retry
+                            api_success = False
+                            data = {}
+                            card_data = {}
+                            for _api_attempt in range(2):  # Max 2 attempts
+                                api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
+                                if api_success:
+                                    break
+                                if _api_attempt == 0:
+                                    print('  \U0001f504 API-DIRECT retry...', flush=True)
+                                    time.sleep(random.uniform(1, 2))
+                            
                             total_submissions += 1
                             entry = {
                                 'id': total_submissions,
@@ -5012,6 +5004,29 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             time.sleep(random.uniform(2, 5))
                             page.close()
                             continue
+
+                        # === NORMAL PATH for non-manus.space sites (unchanged) ===
+                        # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
+                        try:
+                            register_visitor(page)
+                            time.sleep(random.uniform(1, 2))
+                            start_heartbeat(page, interval=15)
+                            simulate_human_interaction(page)
+                            time.sleep(random.uniform(2, 4))  # Wait like a real user browsing
+                        except Exception as e:
+                            print(f"  ⚠️ Anti-detection setup: {e}", flush=True)
+
+                        # Find the booking/form page dynamically
+                        _api_bypass_ref = [_api_bypass_active]
+                        find_booking_page(page, target_url, 
+                                        api_bypass_setup=_setup_api_bypass if proxy_config else None,
+                                        api_bypass_active_ref=_api_bypass_ref)
+                        _api_bypass_active = _api_bypass_ref[0]
+                        time.sleep(3)
+
+                        # Simulate human browsing before filling
+                        simulate_human_interaction(page)
+                        time.sleep(random.uniform(1, 3))
 
                         # Fill form dynamically (non-manus.space sites)
                         filled, data = fill_form_dynamically(page)
