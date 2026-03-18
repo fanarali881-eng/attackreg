@@ -4710,8 +4710,24 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                 browser = p.chromium.launch(headless=False, args=browser_args)
 
-                # Detect if target is a manus.space site (needs local file serving)
+                # Detect if target is a manus.space site (uses dataflowptech.com API)
+                # Check URL first, then check page HTML for dataflowptech/manuscdn markers
                 is_manus_space = 'manus.space' in target_url.lower()
+                if not is_manus_space:
+                    try:
+                        import urllib.request as _ur
+                        _check_req = _ur.Request(target_url, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
+                        if proxy_config:
+                            _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                            _opener = _ur.build_opener(_ur.ProxyHandler({'http': _proxy_url, 'https': _proxy_url}), _ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
+                        else:
+                            _opener = _ur.build_opener(_ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
+                        _html_check = _opener.open(_check_req, timeout=15).read().decode('utf-8', errors='ignore')[:50000]
+                        if 'dataflowptech.com' in _html_check or 'manuscdn.com' in _html_check or 'data-flow-apis.cc' in _html_check or 'api.manus.im' in _html_check:
+                            is_manus_space = True
+                            print(f'  🔍 Detected manus.space-type site (dataflowptech/manuscdn found in HTML)', flush=True)
+                    except Exception as _detect_err:
+                        print(f'  ⚠️ manus.space detection check failed: {str(_detect_err)[:80]}', flush=True)
 
                 # Always use mobile emulation - most target sites require mobile UA
                 context_opts = {
