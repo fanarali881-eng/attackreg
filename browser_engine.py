@@ -659,6 +659,9 @@ def run_browser_wave(wave_num, site_info, wave_size, stats, lock, stop_event):
     proxy_port = os.environ.get('PROXY_PORT', '31112')
     
     if proxy_user:
+        # Auto-add Saudi Arabia country if not already specified
+        if '_country-' not in proxy_pass:
+            proxy_pass = proxy_pass + '_country-SaudiArabia'
         proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
     else:
         proxy_url = None
