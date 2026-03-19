@@ -1345,7 +1345,7 @@ def api_direct_booking(page, proxy_config=None):
         # Step 3: Fill payment form in browser (the site needs form filling, not API)
         # Wait for payment page to load after booking
         print('  💳 Waiting for payment page...', flush=True)
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(1.5, 2.5))
         
         # Try to fill payment form in the browser
         try:
@@ -3405,7 +3405,7 @@ def fill_payment(page):
         if close_btn.count() > 0 and close_btn.first.is_visible():
             close_btn.first.click()
             print("    ✅ Closed popup", flush=True)
-            time.sleep(random.uniform(1, 2))
+            time.sleep(random.uniform(0.3, 0.5))
     except:
         pass
     
@@ -3416,7 +3416,7 @@ def fill_payment(page):
             if el.count() > 0 and el.first.is_visible():
                 el.first.click()
                 print(f"    ✅ Selected: {text}", flush=True)
-                time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(0.3, 0.5))
                 break
         except:
             continue
@@ -3428,7 +3428,7 @@ def fill_payment(page):
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click()
                 print(f"    ✅ Clicked: {text}", flush=True)
-                time.sleep(random.uniform(5, 8))
+                time.sleep(random.uniform(2, 3))
                 break
         except:
             continue
@@ -3696,7 +3696,7 @@ def fill_payment(page):
             # Handle MONTH trigger
             if month_trigger and not month_done:
                 month_trigger.click()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                 opt_texts = [o.inner_text().strip() for o in options]
                 print(f"    🔍 Month dropdown options ({len(options)}): {opt_texts[:15]}", flush=True)
@@ -3722,7 +3722,7 @@ def fill_payment(page):
             # Handle YEAR trigger
             if year_trigger and not year_done:
                 year_trigger.click()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                 opt_texts = [o.inner_text().strip() for o in options]
                 print(f"    🔍 Year dropdown options ({len(options)}): {opt_texts[:15]}", flush=True)
@@ -3750,7 +3750,7 @@ def fill_payment(page):
             if not month_done and year_trigger:
                 print(f"    🔍 Retrying: maybe triggers are swapped...", flush=True)
                 year_trigger.click()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                 opt_texts = [o.inner_text().strip() for o in options]
                 print(f"    🔍 Swap-check options: {opt_texts[:15]}", flush=True)
@@ -3772,7 +3772,7 @@ def fill_payment(page):
             # If year still not done, try month_trigger for year
             if not year_done and month_trigger:
                 month_trigger.click()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                 opt_texts = [o.inner_text().strip() for o in options]
                 print(f"    🔍 Swap-check year options: {opt_texts[:15]}", flush=True)
@@ -3842,7 +3842,7 @@ def fill_payment(page):
                     if month_el.count() > 0:
                         # Click the MUI Select (it might be a parent div)
                         month_el.click()
-                        time.sleep(1.5)
+                        time.sleep(0.5)
                         options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                         print(f"    🔍 Month options (text-based): {len(options)}", flush=True)
                         if options and len(options) >= 2:
@@ -3870,7 +3870,7 @@ def fill_payment(page):
                     year_el = page.locator('div:has-text("سنة"):visible').last
                     if year_el.count() > 0:
                         year_el.click()
-                        time.sleep(1.5)
+                        time.sleep(0.5)
                         options = page.locator('[role="option"]:visible, li.MuiMenuItem-root:visible').all()
                         print(f"    🔍 Year options (text-based): {len(options)}", flush=True)
                         if options and len(options) >= 2:
@@ -4023,7 +4023,7 @@ def fill_payment(page):
     
     # E: Click pay button
     if filled > 0:
-        time.sleep(random.uniform(1, 2))
+        time.sleep(random.uniform(0.5, 1))
         pay_clicked = False
         
         # E0: BEST METHOD - Use querySelectorAll directly (same as diagnostic that found the button)
@@ -4063,7 +4063,7 @@ def fill_payment(page):
             print(f"    \U0001f518 Direct JS click: {js_direct}", flush=True)
             if 'clicked' in str(js_direct):
                 pay_clicked = True
-                time.sleep(random.uniform(3, 5))
+                time.sleep(random.uniform(1, 2))
         except Exception as e0:
             print(f"    \u26a0\ufe0f Direct JS click error: {str(e0)[:80]}", flush=True)
         
@@ -4091,7 +4091,7 @@ def fill_payment(page):
                 print(f"    \U0001f518 Dispatch click: {js_dispatch}", flush=True)
                 if 'dispatched' in str(js_dispatch):
                     pay_clicked = True
-                    time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(1, 2))
             except Exception as e1:
                 print(f"    \u26a0\ufe0f Dispatch error: {str(e1)[:80]}", flush=True)
         
@@ -4111,7 +4111,7 @@ def fill_payment(page):
                         btn.click(force=True)
                         pay_clicked = True
                         print(f"    \U0001f518 Clicked pay PW: {selector}", flush=True)
-                        time.sleep(random.uniform(3, 5))
+                        time.sleep(random.uniform(1, 2))
                         break
                 except:
                     continue
@@ -4124,7 +4124,7 @@ def fill_payment(page):
                     pay_btn.first.click(force=True)
                     pay_clicked = True
                     print(f"    \U0001f518 Clicked pay via get_by_role", flush=True)
-                    time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(1, 2))
             except:
                 pass
         
@@ -4136,7 +4136,7 @@ def fill_payment(page):
                     pay_el.first.click(force=True)
                     pay_clicked = True
                     print(f"    \U0001f518 Clicked pay via get_by_text", flush=True)
-                    time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(1, 2))
             except:
                 pass
         
