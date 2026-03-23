@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Client } from 'ssh2';
+import https from 'https';
+import http from 'http';
 
 const TEST_SERVER = { host: '46.101.52.177', username: 'root' };
 
@@ -59,6 +61,102 @@ async function runSSHCommand(server, command, timeout = 30000) {
   });
 }
 
+// Direct proxy check without SSH - fallback method
+async function checkProxyDirect(proxyHost, proxyPort, proxyUser, proxyPass) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = (result) => { if (!resolved) { resolved = true; resolve(result); } };
+
+    const timer = setTimeout(() => {
+      done({ ok: false, error: 'timeout' });
+    }, 25000);
+
+    const auth = Buffer.from(`${proxyUser}:${proxyPass}`).toString('base64');
+
+    const options = {
+      host: proxyHost,
+      port: parseInt(proxyPort),
+      method: 'CONNECT',
+      path: 'ipv4.icanhazip.com:443',
+      headers: {
+        'Host': 'ipv4.icanhazip.com:443',
+        'Proxy-Authorization': `Basic ${auth}`
+      },
+      timeout: 20000
+    };
+
+    const req = http.request(options);
+
+    req.on('connect', (res, socket) => {
+      if (res.statusCode === 200) {
+        const tlsOptions = {
+          host: 'ipv4.icanhazip.com',
+          socket: socket,
+          rejectUnauthorized: false
+        };
+
+        const tls = require('tls');
+        const tlsSocket = tls.connect(tlsOptions, () => {
+          tlsSocket.write('GET / HTTP/1.1\r\nHost: ipv4.icanhazip.com\r\nConnection: close\r\n\r\n');
+        });
+
+        let data = '';
+        tlsSocket.on('data', (chunk) => { data += chunk.toString(); });
+        tlsSocket.on('end', () => {
+          clearTimeout(timer);
+          try {
+            const body = data.split('\r\n\r\n').pop().trim();
+            const ip = body.split('\n').pop().trim();
+            if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+              // Get geo info
+              const geoReq = http.get(`http://ip-api.com/json/${ip}`, { timeout: 10000 }, (geoRes) => {
+                let geoData = '';
+                geoRes.on('data', (c) => { geoData += c.toString(); });
+                geoRes.on('end', () => {
+                  try {
+                    const geo = JSON.parse(geoData);
+                    done({ ok: true, ip, country: geo.country || '?', cc: geo.countryCode || '' });
+                  } catch(e) {
+                    done({ ok: true, ip, country: '?', cc: '' });
+                  }
+                });
+              });
+              geoReq.on('error', () => { done({ ok: true, ip, country: '?', cc: '' }); });
+            } else {
+              done({ ok: false, error: 'empty_ip' });
+            }
+          } catch(e) {
+            done({ ok: false, error: 'parse_error' });
+          }
+        });
+        tlsSocket.on('error', (e) => { clearTimeout(timer); done({ ok: false, error: e.message }); });
+      } else if (res.statusCode === 407) {
+        clearTimeout(timer);
+        done({ ok: false, error: 'auth_failed' });
+      } else if (res.statusCode === 402) {
+        clearTimeout(timer);
+        done({ ok: false, error: 'no_balance' });
+      } else {
+        clearTimeout(timer);
+        done({ ok: false, error: `proxy_status_${res.statusCode}` });
+      }
+    });
+
+    req.on('error', (e) => {
+      clearTimeout(timer);
+      done({ ok: false, error: e.message });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      clearTimeout(timer);
+      done({ ok: false, error: 'timeout' });
+    });
+
+    req.end();
+  });
+}
+
 export async function POST(req) {
   if (!validateApiKey(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -71,12 +169,9 @@ export async function POST(req) {
       return NextResponse.json({ status: 'error', message: 'بيانات ناقصة' });
     }
 
-    // The password from the UI is the BASE password (e.g. j7HGTQiRnys66RIM)
-    // visit.py automatically appends _country-SaudiArabia_session-xxx
-    // For proxy check, we test with _country-SaudiArabia appended
     const testPassword = password.includes('_country-') ? password : `${password}_country-SaudiArabia`;
 
-    // Use base64 encoding to safely pass credentials through shell
+    // Try SSH method first, fallback to direct check
     const credsB64 = Buffer.from(JSON.stringify({
       user: username,
       pass: testPassword,
@@ -109,24 +204,24 @@ except Exception as e:
     print(json.dumps({'ok': False, 'error': str(e)[:200]}))
 "`;
 
-    const result = await runSSHCommand(TEST_SERVER, cmd, 30000);
+    const result = await runSSHCommand(TEST_SERVER, cmd, 15000);
 
-    if (result.status === 'error') {
-      return NextResponse.json({ status: 'error', message: 'تعذر الاتصال بالسيرفر: ' + result.output.substring(0, 100) });
-    }
-
-    // Parse JSON from output
-    const lines = result.output.split('\n');
     let jsonData = null;
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line.trim());
-        if (typeof parsed.ok !== 'undefined') { jsonData = parsed; break; }
-      } catch(e) {}
+
+    if (result.status === 'success') {
+      // SSH worked - parse result
+      const lines = result.output.split('\n');
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line.trim());
+          if (typeof parsed.ok !== 'undefined') { jsonData = parsed; break; }
+        } catch(e) {}
+      }
     }
 
+    // If SSH failed or didn't return valid data, try direct check
     if (!jsonData) {
-      return NextResponse.json({ status: 'error', message: 'فشل الفحص: ' + result.output.substring(0, 200) });
+      jsonData = await checkProxyDirect(host, port, username, testPassword);
     }
 
     if (jsonData.ok) {
@@ -143,7 +238,8 @@ except Exception as e:
         'auth_failed': '❌ خطأ بالمصادقة - تأكد من كلمة المرور',
         'no_balance': '⚠️ الرصيد خلص - يجب إضافة رصيد',
         'proxy_error': '❌ فشل الاتصال بالبروكسي',
-        'empty_ip': '❌ البروكسي ما رجع IP'
+        'empty_ip': '❌ البروكسي ما رجع IP',
+        'timeout': '❌ انتهت المهلة - البروكسي بطيء'
       };
       const msg = errorMap[jsonData.error] || `❌ خطأ: ${jsonData.error}`;
       const status = jsonData.error === 'no_balance' ? 'expired' : 'error';
