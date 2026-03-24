@@ -13,16 +13,18 @@ const DEFAULT_SERVERS = [
   { host: '46.101.87.130', username: 'root' }
 ];
 
-// v16 Setup: install pip3 + patchright (undetected) + playwright (fallback) + Xvfb + all system deps
+// v17 Setup: install pip3 + patchright (undetected) + playwright (fallback) + Xvfb + all system deps
+// Compatible with Ubuntu 22.04 (libasound2) and 24.04 (libasound2t64)
 const SETUP_COMMAND = `export DEBIAN_FRONTEND=noninteractive && \
-apt-get update -qq && apt-get install -y -qq python3-pip libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1 xvfb 2>/dev/null; \
+apt-get update -qq && apt-get install -y -qq python3-pip libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libxshmfence1 xvfb 2>/dev/null; \
+apt-get install -y -qq libasound2t64 2>/dev/null || apt-get install -y -qq libasound2 2>/dev/null; \
 pip3 install patchright curl_cffi 'python-socketio[client]' websocket-client requests playwright --break-system-packages -q 2>/dev/null; \
 pip3 install patchright curl_cffi 'python-socketio[client]' websocket-client requests playwright -q 2>/dev/null; \
 python3 -m patchright install chromium 2>/dev/null; \
 python3 -m playwright install chromium 2>/dev/null; \
 python3 -m playwright install-deps 2>/dev/null; \
 (pgrep -f 'Xvfb :99' || nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /dev/null 2>&1 &); \
-echo SETUP_COMPLETE_V16`;
+echo SETUP_COMPLETE_V17`;
 
 function sanitizeUrl(url) {
   if (!url || typeof url !== 'string') return null;
