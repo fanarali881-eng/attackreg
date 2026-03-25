@@ -2,15 +2,18 @@ import { NextResponse } from 'next/server';
 import { Client } from 'ssh2';
 
 const DEFAULT_SERVERS = [
-  { host: '138.68.141.40', username: 'root' },
-  { host: '144.126.234.13', username: 'root' },
-  { host: '46.101.52.177', username: 'root' },
   { host: '142.93.41.217', username: 'root' },
   { host: '167.99.94.250', username: 'root' },
   { host: '165.22.118.138', username: 'root' },
   { host: '138.68.177.243', username: 'root' },
   { host: '167.172.61.206', username: 'root' },
-  { host: '46.101.87.130', username: 'root' }
+  { host: '46.101.87.130', username: 'root' },
+  { host: '138.68.181.63', username: 'root' },
+  { host: '161.35.170.149', username: 'root' },
+  { host: '165.232.43.207', username: 'root' },
+  { host: '178.62.101.245', username: 'root' },
+  { host: '138.68.141.39', username: 'root' },
+  { host: '157.245.47.200', username: 'root' }
 ];
 
 // v17 Setup: install pip3 + patchright (undetected) + playwright (fallback) + Xvfb + all system deps
