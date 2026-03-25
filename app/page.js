@@ -38,6 +38,8 @@ export default function Home() {
       { host: '157.245.47.200', username: 'root' }
     ];
   });
+  const [serverSha, setServerSha] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null);
   const [newHost, setNewHost] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [newUsername, setNewUsername] = useState('root');
@@ -111,6 +113,52 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('proxyPass', proxyPass); }, [proxyPass]);
   useEffect(() => { localStorage.setItem('captchaService', captchaService); }, [captchaService]);
   useEffect(() => { localStorage.setItem('servers', JSON.stringify(servers)); }, [servers]);
+
+  // GitHub sync: fetch servers on load
+  const fetchServersFromGitHub = async () => {
+    try {
+      setSyncStatus('loading');
+      const res = await fetch('/api/servers', {
+        headers: { 'x-api-key': panelApiKey }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.servers && Array.isArray(data.servers) && data.servers.length > 0) {
+          setServers(data.servers);
+          setServerSha(data.sha);
+          setSyncStatus('synced');
+        } else {
+          setSyncStatus('empty');
+        }
+      } else {
+        setSyncStatus('error');
+      }
+    } catch (e) {
+      setSyncStatus('error');
+    }
+  };
+
+  const saveServersToGitHub = async (newServers) => {
+    try {
+      setSyncStatus('saving');
+      const res = await fetch('/api/servers', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': panelApiKey },
+        body: JSON.stringify({ servers: newServers, sha: serverSha })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setServerSha(data.sha);
+        setSyncStatus('synced');
+      } else {
+        setSyncStatus('error');
+      }
+    } catch (e) {
+      setSyncStatus('error');
+    }
+  };
+
+  useEffect(() => { fetchServersFromGitHub(); }, []);
 
   const addLog = (msg) => setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
 
@@ -310,13 +358,17 @@ export default function Home() {
   const addServer = () => {
     if (!newHost) return addLog('❌ الرجاء إدخال عنوان IP');
     if (servers.find(s => s.host === newHost)) return addLog('❌ السيرفر موجود');
-    setServers(prev => [...prev, { host: newHost, username: newUsername || 'root' }]);
+    const updated = [...servers, { host: newHost, username: newUsername || 'root' }];
+    setServers(updated);
+    saveServersToGitHub(updated);
     addLog(`✅ تمت إضافة: ${newHost}`);
     setNewHost(''); setNewUsername('root');
   };
 
   const removeServer = (host) => {
-    setServers(prev => prev.filter(s => s.host !== host));
+    const updated = servers.filter(s => s.host !== host);
+    setServers(updated);
+    saveServersToGitHub(updated);
     addLog(`🗑️ تم حذف: ${host}`);
   };
 
@@ -1049,10 +1101,16 @@ export default function Home() {
               {/* Servers */}
               <div style={{ marginBottom:'14px' }}>
                 <button onClick={() => setShowServerPanel(!showServerPanel)} style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'13px', color:'#facc15', cursor:'pointer', background:'none', border:'none', fontFamily:ff }}>
-                  🖥️ السيرفرات ({servers.length}) {showServerPanel ? '▲' : '▼'}
+                  🖥️ السيرفرات ({servers.length}) {syncStatus === 'synced' ? '☁️' : syncStatus === 'loading' || syncStatus === 'saving' ? '⏳' : syncStatus === 'error' ? '⚠️' : ''} {showServerPanel ? '▲' : '▼'}
                 </button>
                 {showServerPanel && (
                   <div style={{ border:'1px solid #14532d', borderRadius:'8px', padding:'12px', marginTop:'8px', backgroundColor:'#000' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                      <span style={{ fontSize:'11px', color: syncStatus === 'synced' ? '#4ade80' : syncStatus === 'error' ? '#ef4444' : '#facc15' }}>
+                        {syncStatus === 'synced' ? '☁️ متزامن' : syncStatus === 'loading' ? '⏳ يحمّل...' : syncStatus === 'saving' ? '⏳ يحفظ...' : syncStatus === 'error' ? '⚠️ خطأ بالمزامنة' : '⚪ محلي'}
+                      </span>
+                      <button onClick={fetchServersFromGitHub} style={{ fontSize:'11px', color:'#06b6d4', cursor:'pointer', background:'none', border:'1px solid #06b6d4', padding:'2px 8px', borderRadius:'4px', fontFamily:ff }}>🔄 مزامنة</button>
+                    </div>
                     {servers.map((sv, i) => (
                       <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', backgroundColor:'#111827', padding:'6px 10px', borderRadius:'6px', fontSize:'13px', color:'#4ade80', marginBottom:'6px' }}>
                         <span>🖥️ {sv.host}</span>
