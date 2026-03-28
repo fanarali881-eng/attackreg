@@ -319,7 +319,7 @@ export async function POST(req) {
       const results = await Promise.all(
         serverList.map(async (server) => {
           const escapedUrl = safeUrl.replace(/'/g, "'\\''");
-          const fullCmd = `killall -9 python3 2>/dev/null; sleep 1; ` +
+          const fullCmd = `killall -9 python3 2>/dev/null; rm -f /root/visit_status.json; sleep 1; ` +
             `(pgrep -f 'Xvfb :99' || nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /dev/null 2>&1 &); sleep 1; ` +
             `for i in $(seq 1 20); do docker start flaresolverr$i 2>/dev/null; done; ` +
             `DISPLAY=:99 ${proxyEnv} WAVE_SIZE=${safeWaveSize} STAY_TIME=${safeStayTime} ` +
