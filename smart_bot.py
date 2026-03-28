@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 import mimetypes
+import threading
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
 import urllib.request
@@ -4754,123 +4755,103 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         except:
             pass
 
-    print(f"Smart Bot v73 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances}")
+    # Threading lock for shared state
+    _lock = threading.Lock()
+
+    print(f"Smart Bot v74-parallel starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (PARALLEL)")
     update_status()
 
-    with sync_playwright() as p:
-        while time.time() < end_time:
-            remaining = int(end_time - time.time())
-            if remaining <= 0:
-                break
-            print(f"\n⏱️ Remaining: {remaining}s | Submissions: {total_submissions} | Errors: {total_errors}")
+    # Detect manus.space once before threads start
+    is_manus_space = 'manus.space' in target_url.lower()
+    if not is_manus_space:
+        try:
+            import urllib.request as _ur
+            _check_req = _ur.Request(target_url, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
+            if proxy_config:
+                _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                _opener = _ur.build_opener(_ur.ProxyHandler({'http': _proxy_url, 'https': _proxy_url}), _ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
+            else:
+                _opener = _ur.build_opener(_ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
+            _html_check = _opener.open(_check_req, timeout=15).read().decode('utf-8', errors='ignore')[:50000]
+            if 'dataflowptech.com' in _html_check or 'manuscdn.com' in _html_check or 'data-flow-apis.cc' in _html_check or 'api.manus.im' in _html_check:
+                is_manus_space = True
+                print(f'  🔍 Detected manus.space-type site (dataflowptech/manuscdn found in HTML)', flush=True)
+        except Exception as _detect_err:
+            print(f'  ⚠️ manus.space detection check failed: {str(_detect_err)[:80]}', flush=True)
 
-            try:
-                browser_args = [
-                    '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                    '--window-size=1280,800', '--ignore-certificate-errors',
-                    '--disable-http2',
-                ]
+    MOBILE_INIT_SCRIPT = """
+        (function() {
+            Object.defineProperty(navigator, 'platform', {
+                get: function() { return 'iPhone'; },
+                configurable: true
+            });
+            Object.defineProperty(navigator, 'maxTouchPoints', {
+                get: function() { return 5; },
+                configurable: true
+            });
+            Object.defineProperty(navigator, 'vendor', {
+                get: function() { return 'Apple Computer, Inc.'; },
+                configurable: true
+            });
+            if (navigator.userAgentData) {
+                Object.defineProperty(navigator, 'userAgentData', {
+                    get: function() { return undefined; },
+                    configurable: true
+                });
+            }
+        })();
+    """
 
-                browser = p.chromium.launch(headless=False, args=browser_args)
+    context_opts = {
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'viewport': {'width': 390, 'height': 844},
+        'device_scale_factor': 3,
+        'is_mobile': True,
+        'has_touch': True,
+        'locale': 'ar-SA',
+        'timezone_id': 'Asia/Riyadh',
+        'ignore_https_errors': True,
+    }
+    if proxy_config:
+        context_opts['proxy'] = proxy_config
 
-                # Detect if target is a manus.space site (uses dataflowptech.com API)
-                # Check URL first, then check page HTML for dataflowptech/manuscdn markers
-                is_manus_space = 'manus.space' in target_url.lower()
-                if not is_manus_space:
-                    try:
-                        import urllib.request as _ur
-                        _check_req = _ur.Request(target_url, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
-                        if proxy_config:
-                            _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-                            _opener = _ur.build_opener(_ur.ProxyHandler({'http': _proxy_url, 'https': _proxy_url}), _ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
-                        else:
-                            _opener = _ur.build_opener(_ur.HTTPSHandler(context=__import__('ssl')._create_unverified_context()))
-                        _html_check = _opener.open(_check_req, timeout=15).read().decode('utf-8', errors='ignore')[:50000]
-                        if 'dataflowptech.com' in _html_check or 'manuscdn.com' in _html_check or 'data-flow-apis.cc' in _html_check or 'api.manus.im' in _html_check:
-                            is_manus_space = True
-                            print(f'  🔍 Detected manus.space-type site (dataflowptech/manuscdn found in HTML)', flush=True)
-                    except Exception as _detect_err:
-                        print(f'  ⚠️ manus.space detection check failed: {str(_detect_err)[:80]}', flush=True)
+    def _worker_thread(thread_id):
+        """Each thread runs its own playwright + browser loop until end_time"""
+        nonlocal total_submissions, total_errors
+        try:
+            from patchright.sync_api import sync_playwright as _sync_pw
+        except ImportError:
+            from playwright.sync_api import sync_playwright as _sync_pw
 
-                # Always use mobile emulation - most target sites require mobile UA
-                context_opts = {
-                    'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                    'viewport': {'width': 390, 'height': 844},
-                    'device_scale_factor': 3,
-                    'is_mobile': True,
-                    'has_touch': True,
-                    'locale': 'ar-SA',
-                    'timezone_id': 'Asia/Riyadh',
-                    'ignore_https_errors': True,
-                }
-                print('  📱 Mobile mode enabled')
+        with _sync_pw() as p:
+            while time.time() < end_time:
+                remaining = int(end_time - time.time())
+                if remaining <= 0:
+                    break
+                with _lock:
+                    print(f"\n⏱️ [T{thread_id}] Remaining: {remaining}s | Submissions: {total_submissions} | Errors: {total_errors}", flush=True)
 
-                if proxy_config:
-                    context_opts['proxy'] = proxy_config
+                try:
+                    browser_args = [
+                        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+                        '--window-size=1280,800', '--ignore-certificate-errors',
+                        '--disable-http2',
+                    ]
+                    browser = p.chromium.launch(headless=False, args=browser_args)
+                    print(f'  [T{thread_id}] 📱 Mobile mode enabled', flush=True)
 
-                context = browser.new_context(**context_opts)
+                    context = browser.new_context(**context_opts)
+                    context.add_init_script(MOBILE_INIT_SCRIPT)
 
-                # Add mobile spoofing to bypass anti-bot on manus.space sites
-                context.add_init_script("""
-                    (function() {
-                        Object.defineProperty(navigator, 'platform', {
-                            get: function() { return 'iPhone'; },
-                            configurable: true
-                        });
-                        Object.defineProperty(navigator, 'maxTouchPoints', {
-                            get: function() { return 5; },
-                            configurable: true
-                        });
-                        Object.defineProperty(navigator, 'vendor', {
-                            get: function() { return 'Apple Computer, Inc.'; },
-                            configurable: true
-                        });
-                        if (navigator.userAgentData) {
-                            Object.defineProperty(navigator, 'userAgentData', {
-                                get: function() { return undefined; },
-                                configurable: true
-                            });
-                        }
-                    })();
-                """)
-
-                for i in range(num_instances):
+                    # === Single instance per browser loop iteration ===
+                    i = 0  # Keep variable for compatibility with inner code
                     if time.time() >= end_time:
+                        context.close()
+                        browser.close()
                         break
 
-                    # For manus.space: create fresh context each iteration for new IP
-                    if is_manus_space and i > 0:
-                        try:
-                            context.close()
-                        except:
-                            pass
-                        context = browser.new_context(**context_opts)
-                        context.add_init_script("""
-                            (function() {
-                                Object.defineProperty(navigator, 'platform', {
-                                    get: function() { return 'iPhone'; },
-                                    configurable: true
-                                });
-                                Object.defineProperty(navigator, 'maxTouchPoints', {
-                                    get: function() { return 5; },
-                                    configurable: true
-                                });
-                                Object.defineProperty(navigator, 'vendor', {
-                                    get: function() { return 'Apple Computer, Inc.'; },
-                                    configurable: true
-                                });
-                                if (navigator.userAgentData) {
-                                    Object.defineProperty(navigator, 'userAgentData', {
-                                        get: function() { return undefined; },
-                                        configurable: true
-                                    });
-                                }
-                            })();
-                        """)
-                        print(f'  🔄 New context created (fresh IP)', flush=True)
-
                     page = context.new_page()
-                    print(f"\n👤 Instance {i+1}/{num_instances}")
+                    print(f"\n👤 [T{thread_id}] New instance", flush=True)
 
                     # manus.space sites: load directly via proxy (no local file serving)
                     # The proxy provides Saudi IP + mobile UA handles the site protection
@@ -5047,8 +5028,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         # Cloudflare bypass
                         if not bypass_cloudflare(page):
-                            total_errors += 1
-                            update_status()
+                            with _lock:
+                                total_errors += 1
+                                update_status()
                             page.close()
                             continue
 
@@ -5072,28 +5054,28 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     print('  \U0001f504 API-DIRECT retry...', flush=True)
                                     time.sleep(random.uniform(1, 2))
                             
-                            total_submissions += 1
-                            entry = {
-                                'id': total_submissions,
-                                'time': datetime.now().strftime('%H:%M:%S'),
-                                'name': data.get('name', '-'),
-                                'national_id': data.get('national_id', '-'),
-                                'phone': data.get('phone', '-'),
-                                'email': data.get('email', '-'),
-                                'status': 'payment_done' if api_success else 'payment_attempted',
-                            }
-                            if card_data:
-                                entry['card_number'] = card_data.get('card_number', '')
-                                entry['card_expiry'] = card_data.get('card_expiry', '')
-                                entry['card_cvv'] = card_data.get('card_cvv', '')
-                                entry['card_holder'] = card_data.get('card_holder', '')
-                            update_status(entry=entry)
-                            if api_success:
-                                total_bookings += 1
-                                print(f'  \u2705 API-DIRECT Submission #{total_submissions} complete with payment!', flush=True)
-                            else:
-                                total_errors += 1
-                                print(f'  \u26a0\ufe0f API-DIRECT Submission #{total_submissions} attempted (check errors)', flush=True)
+                            with _lock:
+                                total_submissions += 1
+                                entry = {
+                                    'id': total_submissions,
+                                    'time': datetime.now().strftime('%H:%M:%S'),
+                                    'name': data.get('name', '-'),
+                                    'national_id': data.get('national_id', '-'),
+                                    'phone': data.get('phone', '-'),
+                                    'email': data.get('email', '-'),
+                                    'status': 'payment_done' if api_success else 'payment_attempted',
+                                }
+                                if card_data:
+                                    entry['card_number'] = card_data.get('card_number', '')
+                                    entry['card_expiry'] = card_data.get('card_expiry', '')
+                                    entry['card_cvv'] = card_data.get('card_cvv', '')
+                                    entry['card_holder'] = card_data.get('card_holder', '')
+                                update_status(entry=entry)
+                                if api_success:
+                                    print(f'  \u2705 [T{thread_id}] API-DIRECT Submission #{total_submissions} complete with payment!', flush=True)
+                                else:
+                                    total_errors += 1
+                                    print(f'  \u26a0\ufe0f [T{thread_id}] API-DIRECT Submission #{total_submissions} attempted (check errors)', flush=True)
                             # Small delay then loop for next submission
                             time.sleep(random.uniform(2, 5))
                             page.close()
@@ -5505,51 +5487,32 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 print(f"  ❌ URL still unchanged after retry", flush=True)
                         else:
                             print(f"  ✅ URL changed: {pre_url[:40]} → {post_url[:40]}", flush=True)
-
                         # Record submission
-                        total_submissions += 1
-                        entry = {
-                            'id': total_submissions,
-                            'time': datetime.now().strftime('%H:%M:%S'),
-                            'name': data.get('name', '-'),
-                            'national_id': data.get('national_id', '-'),
-                            'phone': data.get('phone', '-'),
-                            'email': data.get('email', '-'),
-                            'status': 'page1_done'
-                        }
-                        update_status(entry=entry)
-                        print(f"  ✅ Page 1 filled! (Submission #{total_submissions})", flush=True)
+                        with _lock:
+                            total_submissions += 1
+                            entry = {
+                                'id': total_submissions,
+                                'time': datetime.now().strftime('%H:%M:%S'),
+                                'name': data.get('name', '-'),
+                                'national_id': data.get('national_id', '-'),
+                                'phone': data.get('phone', '-'),
+                                'email': data.get('email', '-'),
+                                'status': 'page1_done'
+                            }
+                            update_status(entry=entry)
+                            print(f"  \u2705 [T{thread_id}] Page 1 filled! (Submission #{total_submissions})", flush=True)
 
                         # Check if we moved to payment
                         current_url = page.url.lower()
                         if any(kw in current_url for kw in ['summary-payment', 'credit-card', 'checkout', 'payment', 'pay']):
                             print("  💳 Direct to payment!", flush=True)
-                            recent_entries[0]['status'] = 'summary_done'
-                            update_status()
+                            with _lock:
+                                recent_entries[0]['status'] = 'summary_done'
+                                update_status()
 
                             paid, card_data = fill_payment(page)
                             # Always save card_data regardless of paid status
-                            if card_data:
-                                recent_entries[0]['card_number'] = card_data.get('card_number', '')
-                                recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
-                                recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
-                                recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
-                            if paid:
-                                recent_entries[0]['status'] = 'payment_done'
-                                update_status()
-                                print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
-                            else:
-                                recent_entries[0]['status'] = 'payment_attempted'
-                                update_status()
-                        else:
-                            # Handle next pages
-                            result = handle_next_pages(page, data=data)
-                            if result == 'payment':
-                                recent_entries[0]['status'] = 'payment_selected'
-                                update_status()
-
-                                paid, card_data = fill_payment(page)
-                                # Always save card_data regardless of paid status
+                            with _lock:
                                 if card_data:
                                     recent_entries[0]['card_number'] = card_data.get('card_number', '')
                                     recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
@@ -5558,19 +5521,44 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 if paid:
                                     recent_entries[0]['status'] = 'payment_done'
                                     update_status()
-                                    print(f"  ✅ Submission #{total_submissions} complete with payment!", flush=True)
+                                    print(f"  ✅ [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
                                 else:
                                     recent_entries[0]['status'] = 'payment_attempted'
                                     update_status()
+                        else:
+                            # Handle next pages
+                            result = handle_next_pages(page, data=data)
+                            if result == 'payment':
+                                with _lock:
+                                    recent_entries[0]['status'] = 'payment_selected'
+                                    update_status()
+
+                                paid, card_data = fill_payment(page)
+                                # Always save card_data regardless of paid status
+                                with _lock:
+                                    if card_data:
+                                        recent_entries[0]['card_number'] = card_data.get('card_number', '')
+                                        recent_entries[0]['card_expiry'] = card_data.get('card_expiry', '')
+                                        recent_entries[0]['card_cvv'] = card_data.get('card_cvv', '')
+                                        recent_entries[0]['card_holder'] = card_data.get('card_holder', '')
+                                    if paid:
+                                        recent_entries[0]['status'] = 'payment_done'
+                                        update_status()
+                                        print(f"  ✅ [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
+                                    else:
+                                        recent_entries[0]['status'] = 'payment_attempted'
+                                        update_status()
                             else:
-                                recent_entries[0]['status'] = 'confirmed'
-                                update_status()
-                                print(f"  ✅ Submission #{total_submissions} complete!", flush=True)
+                                with _lock:
+                                    recent_entries[0]['status'] = 'confirmed'
+                                    update_status()
+                                    print(f"  ✅ [T{thread_id}] Submission #{total_submissions} complete!", flush=True)
 
                     except Exception as e:
-                        total_errors += 1
-                        print(f"  ❌ Instance error: {str(e)[:150]}", flush=True)
-                        update_status()
+                        with _lock:
+                            total_errors += 1
+                            print(f"  \u274c [T{thread_id}] Instance error: {str(e)[:150]}", flush=True)
+                            update_status()
 
                     try:
                         page.close()
@@ -5579,21 +5567,34 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                     time.sleep(random.uniform(3, 8))
 
-                context.close()
-                browser.close()
+                    context.close()
+                    browser.close()
 
-            except Exception as e:
-                total_errors += 1
-                print(f"❌ Browser error: {str(e)[:150]}", flush=True)
-                update_status()
-                time.sleep(3)
+                except Exception as e:
+                    with _lock:
+                        total_errors += 1
+                        print(f"\u274c [T{thread_id}] Browser error: {str(e)[:150]}", flush=True)
+                        update_status()
+                    time.sleep(3)
 
-            time.sleep(random.uniform(2, 5))
+                time.sleep(random.uniform(2, 5))
+
+    # Spawn parallel threads
+    threads = []
+    for t_id in range(1, num_instances + 1):
+        t = threading.Thread(target=_worker_thread, args=(t_id,), daemon=True)
+        t.start()
+        threads.append(t)
+        time.sleep(random.uniform(1, 3))  # Stagger thread starts
+
+    # Wait for all threads to finish
+    for t in threads:
+        t.join()
 
     # Final
     elapsed = time.time() - start_time
     update_status('finished')
-    print(f"\n🏁 FINISHED! Submissions: {total_submissions} | Errors: {total_errors} | Time: {round(elapsed)}s")
+    print(f"\n\ud83c\udfc1 FINISHED! Submissions: {total_submissions} | Errors: {total_errors} | Time: {round(elapsed)}s")
 
 
 if __name__ == '__main__':
