@@ -119,7 +119,7 @@ export async function POST(req) {
 
     } else if (action === 'deploy') {
       // Download all 3 script files + turnstile solver directly on each server from GitHub
-      const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attack/main';
+      const ghBase = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
       const ghBaseReg = 'https://raw.githubusercontent.com/fanarali881-eng/attackreg/main';
       const files = ['visit.py', 'browser_engine.py', 'detection_engine.py'];
       const downloadCmds = files.map(f => 
