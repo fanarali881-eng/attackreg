@@ -429,7 +429,7 @@ SELECT_KEYWORDS = {
     'registration_type': {
         'ar': ['نوع التسجيل', 'التسجيل'],
         'en': ['registration_type', 'reg_type'],
-        'preferred': 'خصوصى',
+        'preferred': None,
         'exclude_options': ['هيئة دبلوماسية', 'دبلوماسي', 'نقل عام'],
     },
     'time_slot': {
