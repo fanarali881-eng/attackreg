@@ -374,9 +374,56 @@ def solve_captcha_image(page):
         return None
 
 
-def gen_cardholder_name():
-    first_en = random.choice(['Mohammed', 'Abdullah', 'Fahad', 'Saud', 'Khalid', 'Sultan', 'Turki', 'Bandar', 'Faisal', 'Ahmad', 'Omar', 'Youssef', 'Ibrahim', 'Nasser', 'Saad', 'Majed', 'Nayef', 'Mishari', 'Hamad', 'Ali'])
-    last_en = random.choice(['Alotaibi', 'Alharbi', 'Alqahtani', 'Alshamri', 'Aldosari', 'Almutairi', 'Alghamdi', 'Alzahrani', 'Alsubaie', 'Alshehri', 'Aljohani', 'Alanazi', 'Alrashidi', 'Almalki', 'Albulawi', 'Alsalmi'])
+# Arabic to English transliteration map for cardholder name (first + last only)
+_AR_TO_EN = {
+    # Male first names
+    'محمد': 'Mohammed', 'عبدالله': 'Abdullah', 'فهد': 'Fahad', 'سعود': 'Saud',
+    'خالد': 'Khalid', 'عبدالرحمن': 'Abdulrahman', 'سلطان': 'Sultan', 'تركي': 'Turki',
+    'بندر': 'Bandar', 'نايف': 'Nayef', 'فيصل': 'Faisal', 'ماجد': 'Majed',
+    'أحمد': 'Ahmad', 'عمر': 'Omar', 'يوسف': 'Youssef', 'إبراهيم': 'Ibrahim',
+    'عبدالعزيز': 'Abdulaziz', 'مشعل': 'Mishaal', 'سعد': 'Saad', 'حمد': 'Hamad',
+    'ناصر': 'Nasser', 'مساعد': 'Musaed', 'راشد': 'Rashid', 'وليد': 'Waleed',
+    'طلال': 'Talal', 'بدر': 'Badr', 'هاني': 'Hani', 'زياد': 'Ziad',
+    'عادل': 'Adel', 'صالح': 'Saleh', 'علي': 'Ali', 'حسن': 'Hassan',
+    'حسين': 'Hussain', 'عبدالملك': 'Abdulmalik', 'منصور': 'Mansour', 'دخيل': 'Dakheel',
+    'متعب': 'Muteb', 'مشاري': 'Mishari', 'عبدالإله': 'Abdulilah', 'رائد': 'Raed',
+    # Female first names
+    'نورة': 'Noura', 'سارة': 'Sarah', 'فاطمة': 'Fatimah', 'مريم': 'Mariam',
+    'هيفاء': 'Haifa', 'ريم': 'Reem', 'لمى': 'Lama', 'دانة': 'Dana',
+    'العنود': 'Alanoud', 'هند': 'Hind', 'أمل': 'Amal', 'منال': 'Manal',
+    'عبير': 'Abeer', 'لطيفة': 'Latifa', 'موضي': 'Moudi', 'نوف': 'Nouf',
+    'بدور': 'Budoor', 'غادة': 'Ghada', 'شيخة': 'Sheikha', 'حصة': 'Hessa',
+    'جواهر': 'Jawaher', 'مها': 'Maha', 'رقية': 'Ruqaya', 'خلود': 'Khulood',
+    # Last names
+    'العتيبي': 'Alotaibi', 'الحربي': 'Alharbi', 'القحطاني': 'Alqahtani',
+    'الشمري': 'Alshamri', 'الدوسري': 'Aldosari', 'المطيري': 'Almutairi',
+    'الغامدي': 'Alghamdi', 'الزهراني': 'Alzahrani', 'السبيعي': 'Alsubaie',
+    'البقمي': 'Albugami', 'الشهري': 'Alshehri', 'العمري': 'Alomari',
+    'الأحمدي': 'Alahmadi', 'الثبيتي': 'Althubaiti', 'المالكي': 'Almalki',
+    'الجهني': 'Aljohani', 'البلوي': 'Albulawi', 'العنزي': 'Alanazi',
+    'الرشيدي': 'Alrashidi', 'السهلي': 'Alsahli', 'الخالدي': 'Alkhalidi',
+    'الحازمي': 'Alhazmi', 'الفيفي': 'Alfifi', 'الشهراني': 'Alshahrani',
+    'الأسمري': 'Alasmari', 'الوادعي': 'Alwadei', 'الكلبي': 'Alkalbi',
+    'النفيعي': 'Alnufaie', 'السلمي': 'Alsulami', 'الثقفي': 'Althaqafi',
+    'الطويرقي': 'Altuwairqi', 'الحارثي': 'Alharthi', 'الزبيدي': 'Alzubaidi',
+    'اليامي': 'Alyami', 'المري': 'Almari', 'الرويلي': 'Alruwaili',
+    'السحيمي': 'Alsuhaimi', 'الصاعدي': 'Alsaedi', 'الحمادي': 'Alhammadi',
+    'العلياني': 'Alalyani',
+}
+
+def gen_cardholder_name(arabic_name=None):
+    """Generate English cardholder name from the Arabic name (first + last only).
+    If arabic_name is provided, transliterate it. Otherwise fallback to random."""
+    if arabic_name:
+        parts = arabic_name.split()
+        first_ar = parts[0] if len(parts) >= 1 else ''
+        last_ar = parts[-1] if len(parts) >= 2 else ''
+        first_en = _AR_TO_EN.get(first_ar, first_ar)
+        last_en = _AR_TO_EN.get(last_ar, last_ar)
+        return f"{first_en} {last_en}"
+    # Fallback: random
+    first_en = random.choice(['Mohammed', 'Abdullah', 'Fahad', 'Saud', 'Khalid', 'Sultan', 'Turki', 'Bandar', 'Faisal', 'Ahmad'])
+    last_en = random.choice(['Alotaibi', 'Alharbi', 'Alqahtani', 'Alshamri', 'Aldosari', 'Almutairi', 'Alghamdi', 'Alzahrani'])
     return f"{first_en} {last_en}"
 
 
@@ -1241,7 +1288,7 @@ def api_direct_booking(page, proxy_config=None):
     email = gen_email()
     plate = gen_plate_number()
     card_num, bank = gen_card_number()
-    card_holder = gen_cardholder_name()
+    card_holder = gen_cardholder_name(name)
     cvv = gen_cvv()
     exp_month = gen_card_expiry_month()
     exp_year = gen_card_expiry_year()
@@ -1433,7 +1480,7 @@ def api_direct_booking(page, proxy_config=None):
         
         # Try to fill payment form in the browser
         try:
-            pay_filled, pay_card_data = fill_payment(page)
+            pay_filled, pay_card_data = fill_payment(page, name)
             if pay_card_data:
                 card_data.update(pay_card_data)
             if pay_filled:
@@ -3463,7 +3510,7 @@ def fill_form_dynamically(page):
 
 # ============ FILL PAYMENT ============
 
-def fill_payment(page):
+def fill_payment(page, arabic_name=None):
     """Handle full payment flow: close popup -> select card -> continue -> fill card -> pay"""
     print("  💳 Starting payment flow...", flush=True)
     
@@ -3471,7 +3518,7 @@ def fill_payment(page):
     exp_month = gen_card_expiry_month()
     exp_year = gen_card_expiry_year()
     cvv = gen_cvv()
-    holder = gen_cardholder_name()
+    holder = gen_cardholder_name(arabic_name)
     
     print(f"  💳 Card: {card_num[:4]}****{card_num[-4:]} ({bank}) | {exp_month}/{exp_year} | {holder}", flush=True)
     
@@ -5415,7 +5462,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     }
                                     update_status(entry=entry)
                                     print(f"  ✅ Page 1 filled! Going to payment... (Submission #{total_submissions})", flush=True)
-                                    paid, card_data = fill_payment(page)
+                                    paid, card_data = fill_payment(page, data.get('name'))
                                     # Always save card_data regardless of paid status
                                     if card_data:
                                         recent_entries[0]['card_number'] = card_data.get('card_number', '')
@@ -5593,7 +5640,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 recent_entries[0]['status'] = 'summary_done'
                                 update_status()
 
-                            paid, card_data = fill_payment(page)
+                            paid, card_data = fill_payment(page, data.get('name'))
                             # Always save card_data regardless of paid status
                             with _lock:
                                 if card_data:
@@ -5604,7 +5651,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 if paid:
                                     recent_entries[0]['status'] = 'payment_done'
                                     update_status()
-                                    print(f"  ✅ [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
+                                    print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
                                 else:
                                     recent_entries[0]['status'] = 'payment_attempted'
                                     update_status()
@@ -5616,7 +5663,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     recent_entries[0]['status'] = 'payment_selected'
                                     update_status()
 
-                                paid, card_data = fill_payment(page)
+                                paid, card_data = fill_payment(page, data.get('name'))
                                 # Always save card_data regardless of paid status
                                 with _lock:
                                     if card_data:
