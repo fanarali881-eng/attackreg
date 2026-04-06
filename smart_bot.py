@@ -112,10 +112,27 @@ def gen_saudi_phone():
     prefixes = ['50', '53', '54', '55', '56', '57', '58', '59']
     return '05' + random.choice(prefixes)[1] + ''.join([str(random.randint(0, 9)) for _ in range(7)])
 
+# Set to track all generated names and prevent any repetition
+_used_names = set()
+
 def gen_name():
+    """Generate a unique 4-part Saudi name (first + father + grandfather + family).
+    Names never repeat across the entire bot session."""
+    for _ in range(1000):
+        first = random.choice(SAUDI_MALE_FIRST if random.random() > 0.3 else SAUDI_FEMALE_FIRST)
+        father = random.choice(SAUDI_MALE_FIRST)
+        grandfather = random.choice(SAUDI_MALE_FIRST)
+        last = random.choice(SAUDI_LAST)
+        full_name = f"{first} {father} {grandfather} {last}"
+        if full_name not in _used_names:
+            _used_names.add(full_name)
+            return full_name
+    # Fallback: if somehow all combinations exhausted, add random digits
     first = random.choice(SAUDI_MALE_FIRST if random.random() > 0.3 else SAUDI_FEMALE_FIRST)
+    father = random.choice(SAUDI_MALE_FIRST)
+    grandfather = random.choice(SAUDI_MALE_FIRST)
     last = random.choice(SAUDI_LAST)
-    return f"{first} {last}"
+    return f"{first} {father} {grandfather} {last}"
 
 def gen_email():
     user = ''.join(random.choices(string.ascii_lowercase, k=random.randint(6, 10)))
