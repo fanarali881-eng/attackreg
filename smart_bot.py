@@ -65,18 +65,25 @@ SAUDI_CITIES = [
 PLATE_LETTERS_AR = ['أ', 'ب', 'ح', 'د', 'ر', 'س', 'ص', 'ط', 'ع', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي']
 
 SAUDI_BANK_BINS = {
-    'Al Rajhi': ['554575', '968205', '458838', '458837', '468564', '468565'],
-    'Al Ahli (NCB)': ['554180', '556676', '556675', '588850', '968202', '417633', '417634'],
-    'Riyad Bank': ['559322', '558563', '968209', '454313', '454314', '489318'],
-    'SABB': ['422818', '422819', '605141', '968204', '431361'],
-    'Saudi Fransi': ['440795', '552360', '588845', '968208', '440647'],
+    'Al Rajhi': ['554575', '968205', '458838', '458837', '468564', '468565', '409201', '429927', '445827', '457553', '484783'],
+    'Saudi National Bank (SNB)': ['554180', '556676', '556675', '588850', '968202', '417633', '417634',
+        '223379', '223398', '412113', '430258', '430259', '430260', '445303', '450766', '465154',
+        '482052', '483178', '485005', '485042', '512220', '512464', '515079', '515530', '516138',
+        '518694', '519310', '519341', '523954', '524197', '524388', '525688', '528597', '529415',
+        '531505', '532446', '533964', '534797', '535311', '535825', '536369', '539034', '540613',
+        '545205', '548255', '549699', '552075', '552077', '555610'],
+    'Riyad Bank': ['559322', '558563', '968209', '454313', '454314', '489318', '454683', '457927'],
+    'SABB': ['422818', '422819', '605141', '968204', '431361', '456893'],
+    'Saudi Fransi': ['440795', '552360', '588845', '968208', '440647', '457865'],
     'Arab National Bank': ['455036', '455037', '549400', '588848', '968203'],
-    'Alinma Bank': ['552363', '968206', '426897', '485457'],
+    'Alinma Bank': ['552363', '968206', '426897', '485457', '432328'],
     'Bank Al-Jazira': ['445564', '968211', '409201'],
-    'Saudi Investment Bank': ['552384', '589206', '968207'],
+    'Saudi Investment Bank': ['552384', '589206', '968207', '483010'],
     'Samba': ['552250', '552089', '446392', '446672'],
     'Al Bilad Bank': ['636120', '968201', '468540'],
-    'Alawwal Bank': ['552438', '552375', '558854', '558848', '557606', '548979', '512060'],
+    'Saudi Awwal Bank (SAB)': ['552438', '552375', '558854', '558848', '557606', '548979', '512060'],
+    'D360 Bank': ['428068', '431266', '433521', '435733', '442463', '459931'],
+    'Gulf International Bank (GIB)': ['400399', '404116', '414026', '417487', '422862'],
 }
 
 
@@ -166,21 +173,56 @@ def gen_email():
 def gen_plate_number():
     return str(random.randint(1, 9999))
 
+# Persistent card number tracking - never repeat even across restarts
+_USED_CARDS_FILE = '/root/used_cards.txt'
+_used_cards = set()
+
+def _load_used_cards():
+    """Load previously used card numbers from file on disk."""
+    global _used_cards
+    try:
+        if os.path.exists(_USED_CARDS_FILE):
+            with open(_USED_CARDS_FILE, 'r', encoding='utf-8') as f:
+                _used_cards = set(line.strip() for line in f if line.strip())
+            print(f"  \U0001f4b3 Loaded {len(_used_cards)} previously used card numbers", flush=True)
+    except Exception as e:
+        print(f"  \u26a0\ufe0f Could not load used cards: {e}", flush=True)
+
+def _save_card(card_num):
+    """Append a new card number to the persistent file."""
+    try:
+        with open(_USED_CARDS_FILE, 'a', encoding='utf-8') as f:
+            f.write(card_num + '\n')
+    except:
+        pass
+
+# Load cards from previous runs on startup
+_load_used_cards()
+
 def gen_card_number():
-    bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
-    bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
-    remaining_length = 15 - len(bin_prefix)
-    digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
-    total = 0
-    for i, d in enumerate(digits):
-        if i % 2 == 0:
-            doubled = d * 2
-            total += doubled - 9 if doubled > 9 else doubled
-        else:
-            total += d
-    check = (10 - (total % 10)) % 10
-    digits.append(check)
-    return ''.join(str(d) for d in digits), bank_name
+    """Generate a unique card number with valid Luhn checksum.
+    Card numbers never repeat - not in this session and not in any previous session."""
+    for _ in range(1000):
+        bank_name = random.choice(list(SAUDI_BANK_BINS.keys()))
+        bin_prefix = random.choice(SAUDI_BANK_BINS[bank_name])
+        remaining_length = 15 - len(bin_prefix)
+        digits = [int(d) for d in bin_prefix] + [random.randint(0, 9) for _ in range(remaining_length)]
+        total = 0
+        for i, d in enumerate(digits):
+            if i % 2 == 0:
+                doubled = d * 2
+                total += doubled - 9 if doubled > 9 else doubled
+            else:
+                total += d
+        check = (10 - (total % 10)) % 10
+        digits.append(check)
+        card_num = ''.join(str(d) for d in digits)
+        if card_num not in _used_cards:
+            _used_cards.add(card_num)
+            _save_card(card_num)
+            return card_num, bank_name
+    # Fallback (practically impossible)
+    return card_num, bank_name
 
 def gen_card_expiry():
     month = f"{random.randint(1, 12):02d}"
