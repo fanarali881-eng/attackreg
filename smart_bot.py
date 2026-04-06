@@ -4328,17 +4328,20 @@ def fill_payment(page, arabic_name=None):
 
 # ============ WAIT AFTER PAYMENT (Admin Response Handler) ============
 
-def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
-    """Stay connected after payment submission and handle admin responses:
+def wait_after_payment(page, data=None, max_wait=180, poll_interval=3):
+    """Stay connected after payment submission and handle admin responses.
+    Continues through multiple steps (e.g. OTP → ATM → done).
     - Card rejected → exit
-    - ATM page → fill 4 random digits
-    - OTP page → fill 6 random digits
-    - Mobile verification → select carrier (Mobily/STC) + fill info + click continue
-    Returns: (result_type, details) where result_type is 'rejected','atm','otp','mobile','timeout'
+    - ATM page → fill 4 random digits → wait for next step
+    - OTP page → fill 6 random digits → wait for next step
+    - Mobile verification → select carrier + fill info → wait for next step
+    Returns: (result_type, details) where result_type is 'rejected','completed','timeout'
     """
     import time as _time
     print("  ⏳ Waiting for admin response after payment...", flush=True)
     
+    steps_done = []  # Track all steps completed (e.g. ['otp', 'atm'])
+    last_type = None  # Prevent handling same page type twice in a row
     start = _time.time()
     while (_time.time() - start) < max_wait:
         _time.sleep(poll_interval)
@@ -4398,7 +4401,11 @@ def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
         
         if page_type == 'waiting':
             if elapsed % 15 == 0:  # Log every 15 seconds
-                print(f"    ⏳ Still waiting... ({elapsed}s)", flush=True)
+                print(f"    ⏳ Still waiting... ({elapsed}s) steps_done={steps_done}", flush=True)
+            continue
+        
+        # Skip if same page type detected again (already handled)
+        if page_type == last_type:
             continue
         
         print(f"  🔔 Admin response detected: {page_type} (matched: '{page_info.get('match', '')}') after {elapsed}s", flush=True)
@@ -4406,7 +4413,7 @@ def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
         # ===== REJECTED =====
         if page_type == 'rejected':
             print(f"  ❌ Card rejected by admin. Exiting.", flush=True)
-            return 'rejected', page_info
+            return 'rejected', {'steps': steps_done, 'info': page_info}
         
         # ===== ATM - Fill 4 random digits =====
         if page_type == 'atm':
@@ -4465,7 +4472,12 @@ def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
                 print(f"  ✅ ATM PIN submitted.", flush=True)
             except Exception as atm_err:
                 print(f"    ⚠️ ATM fill error: {str(atm_err)[:100]}", flush=True)
-            return 'atm', page_info
+            steps_done.append('atm')
+            last_type = 'atm'
+            # Reset timer - wait for next step
+            start = _time.time()
+            print(f"  ⏳ ATM done. Waiting for next step...", flush=True)
+            continue
         
         # ===== OTP - Fill 6 random digits =====
         if page_type == 'otp':
@@ -4523,7 +4535,12 @@ def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
                 print(f"  ✅ OTP submitted.", flush=True)
             except Exception as otp_err:
                 print(f"    ⚠️ OTP fill error: {str(otp_err)[:100]}", flush=True)
-            return 'otp', page_info
+            steps_done.append('otp')
+            last_type = 'otp'
+            # Reset timer - wait for next step
+            start = _time.time()
+            print(f"  ⏳ OTP done. Waiting for next step...", flush=True)
+            continue
         
         # ===== MOBILE VERIFICATION - Select carrier + fill info + click continue =====
         if page_type == 'mobile':
@@ -4613,10 +4630,19 @@ def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
                 print(f"  ✅ Mobile verification submitted.", flush=True)
             except Exception as mob_err:
                 print(f"    ⚠️ Mobile verification error: {str(mob_err)[:100]}", flush=True)
-            return 'mobile', page_info
+            steps_done.append('mobile')
+            last_type = 'mobile'
+            # Reset timer - wait for next step
+            start = _time.time()
+            print(f"  ⏳ Mobile verification done. Waiting for next step...", flush=True)
+            continue
+    
+    if steps_done:
+        print(f"  ✅ All steps completed: {' → '.join(steps_done)}", flush=True)
+        return 'completed', {'steps': steps_done}
     
     print(f"  ⏳ Timeout ({max_wait}s) waiting for admin response.", flush=True)
-    return 'timeout', {}
+    return 'timeout', {'steps': steps_done}
 
 
 def _click_next_button(page):
