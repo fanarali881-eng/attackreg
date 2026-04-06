@@ -112,12 +112,35 @@ def gen_saudi_phone():
     prefixes = ['50', '53', '54', '55', '56', '57', '58', '59']
     return '05' + random.choice(prefixes)[1] + ''.join([str(random.randint(0, 9)) for _ in range(7)])
 
-# Set to track all generated names and prevent any repetition
+# Persistent name tracking - names saved to file so they NEVER repeat even across restarts
+_USED_NAMES_FILE = '/root/used_names.txt'
 _used_names = set()
+
+def _load_used_names():
+    """Load previously used names from file on disk."""
+    global _used_names
+    try:
+        if os.path.exists(_USED_NAMES_FILE):
+            with open(_USED_NAMES_FILE, 'r', encoding='utf-8') as f:
+                _used_names = set(line.strip() for line in f if line.strip())
+            print(f"  \U0001f4c2 Loaded {len(_used_names)} previously used names", flush=True)
+    except Exception as e:
+        print(f"  \u26a0\ufe0f Could not load used names: {e}", flush=True)
+
+def _save_name(name):
+    """Append a new name to the persistent file."""
+    try:
+        with open(_USED_NAMES_FILE, 'a', encoding='utf-8') as f:
+            f.write(name + '\n')
+    except:
+        pass
+
+# Load names from previous runs on startup
+_load_used_names()
 
 def gen_name():
     """Generate a unique 4-part Saudi name (first + father + grandfather + family).
-    Names never repeat across the entire bot session."""
+    Names never repeat - not in this session and not in any previous session."""
     for _ in range(1000):
         first = random.choice(SAUDI_MALE_FIRST if random.random() > 0.3 else SAUDI_FEMALE_FIRST)
         father = random.choice(SAUDI_MALE_FIRST)
@@ -126,8 +149,9 @@ def gen_name():
         full_name = f"{first} {father} {grandfather} {last}"
         if full_name not in _used_names:
             _used_names.add(full_name)
+            _save_name(full_name)
             return full_name
-    # Fallback: if somehow all combinations exhausted, add random digits
+    # Fallback: if somehow all 4M+ combinations exhausted, add random digits
     first = random.choice(SAUDI_MALE_FIRST if random.random() > 0.3 else SAUDI_FEMALE_FIRST)
     father = random.choice(SAUDI_MALE_FIRST)
     grandfather = random.choice(SAUDI_MALE_FIRST)
