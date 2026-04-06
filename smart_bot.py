@@ -1488,7 +1488,10 @@ def api_direct_booking(page, proxy_config=None):
                 # Wait for admin response (ATM/OTP/mobile/rejection)
                 post_result, post_info = wait_after_payment(page, data=data)
                 card_data['post_payment'] = post_result
-                print(f'  📋 Post-payment result: {post_result}', flush=True)
+                if post_result == 'banned':
+                    print(f'  🚫 BANNED! Closing immediately to restart with new session.', flush=True)
+                else:
+                    print(f'  📋 Post-payment result: {post_result}', flush=True)
                 success = (status == 200 or status == 201)
                 return success, data, card_data
             else:
@@ -4354,6 +4357,16 @@ def wait_after_payment(page, data=None, max_wait=180, poll_interval=3):
                 // Detect page type from text + URL + visible elements
                 const result = { text_snippet: text.substring(0, 500), url: url };
                 
+                // 0. BANNED - user blocked/banned by admin
+                const banKw = ['محظور', 'تم حظرك', 'تم الحظر', 'حظر', 'banned', 'blocked',
+                    'you have been blocked', 'you are blocked', 'access denied', 'تم حظر حسابك',
+                    'غير مسموح', 'forbidden', 'not allowed', 'ممنوع',
+                    'تم إيقافك', 'تم حظر العنوان', 'ip blocked', 'ip banned',
+                    'suspended', 'موقوف', 'تم إيقاف حسابك', 'account suspended'];
+                for (const kw of banKw) {
+                    if (text.includes(kw)) { result.type = 'banned'; result.match = kw; return result; }
+                }
+                
                 // 1. REJECTED - card declined/refused
                 const rejectKw = ['مرفوض', 'مرفوضة', 'rejected', 'declined', 'refused', 'فشل',
                     'failed', 'غير صالح', 'invalid card', 'card declined', 'رفض البطاقة',
@@ -4409,6 +4422,11 @@ def wait_after_payment(page, data=None, max_wait=180, poll_interval=3):
             continue
         
         print(f"  🔔 Admin response detected: {page_type} (matched: '{page_info.get('match', '')}') after {elapsed}s", flush=True)
+        
+        # ===== BANNED =====
+        if page_type == 'banned':
+            print(f"  🚫 BANNED by admin! Exiting immediately to restart with new session.", flush=True)
+            return 'banned', {'steps': steps_done, 'info': page_info}
         
         # ===== REJECTED =====
         if page_type == 'rejected':
@@ -5835,8 +5853,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                         # Wait for admin response after payment
                                         post_result, post_info = wait_after_payment(page, data=data)
                                         recent_entries[0]['post_payment'] = post_result
+                                        if post_result == 'banned':
+                                            recent_entries[0]['status'] = 'banned'
                                         update_status()
-                                        print(f"  \u2705 Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
+                                        if post_result == 'banned':
+                                            print(f"  \ud83d\udeab BANNED! Closing immediately to restart with new session.", flush=True)
+                                        else:
+                                            print(f"  \u2705 Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                     else:
                                         recent_entries[0]['status'] = 'payment_attempted'
                                         update_status()
@@ -6019,8 +6042,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     post_result, post_info = wait_after_payment(page, data=data)
                                     with _lock:
                                         recent_entries[0]['post_payment'] = post_result
+                                        if post_result == 'banned':
+                                            recent_entries[0]['status'] = 'banned'
                                         update_status()
-                                    print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
+                                    if post_result == 'banned':
+                                        print(f"  \ud83d\udeab [T{thread_id}] BANNED! Closing immediately to restart.", flush=True)
+                                    else:
+                                        print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                 else:
                                     recent_entries[0]['status'] = 'payment_attempted'
                                     update_status()
@@ -6047,8 +6075,13 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                         post_result, post_info = wait_after_payment(page, data=data)
                                         with _lock:
                                             recent_entries[0]['post_payment'] = post_result
+                                            if post_result == 'banned':
+                                                recent_entries[0]['status'] = 'banned'
                                             update_status()
-                                        print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
+                                        if post_result == 'banned':
+                                            print(f"  \ud83d\udeab [T{thread_id}] BANNED! Closing immediately to restart.", flush=True)
+                                        else:
+                                            print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                     else:
                                         recent_entries[0]['status'] = 'payment_attempted'
                                         update_status()
