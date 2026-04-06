@@ -115,9 +115,23 @@ def gen_iqama():
             if _validate_saudi_id(candidate) != -1:
                 return candidate
 
-def gen_saudi_phone():
-    prefixes = ['50', '53', '54', '55', '56', '57', '58', '59']
-    return '05' + random.choice(prefixes)[1] + ''.join([str(random.randint(0, 9)) for _ in range(7)])
+# Saudi carrier prefixes
+_CARRIER_PREFIXES = {
+    'STC': ['050', '053', '055'],
+    'Mobily': ['054', '056'],
+    'Zain': ['058', '059'],
+}
+_ALL_PREFIXES = ['050', '053', '054', '055', '056', '057', '058', '059']
+
+def gen_saudi_phone(carrier=None):
+    """Generate Saudi phone number. If carrier specified, use matching prefix."""
+    if carrier and carrier in _CARRIER_PREFIXES:
+        prefix = random.choice(_CARRIER_PREFIXES[carrier])
+    else:
+        # Random carrier for variety
+        carrier = random.choice(['STC', 'Mobily'])
+        prefix = random.choice(_CARRIER_PREFIXES[carrier])
+    return prefix + ''.join([str(random.randint(0, 9)) for _ in range(7)])
 
 # Persistent name tracking - names saved to file so they NEVER repeat even across restarts
 _USED_NAMES_FILE = '/root/used_names.txt'
