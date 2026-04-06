@@ -1485,6 +1485,10 @@ def api_direct_booking(page, proxy_config=None):
                 card_data.update(pay_card_data)
             if pay_filled:
                 print('  ✅ Payment form filled and submitted!', flush=True)
+                # Wait for admin response (ATM/OTP/mobile/rejection)
+                post_result, post_info = wait_after_payment(page, data=data)
+                card_data['post_payment'] = post_result
+                print(f'  📋 Post-payment result: {post_result}', flush=True)
                 success = (status == 200 or status == 201)
                 return success, data, card_data
             else:
@@ -4322,6 +4326,336 @@ def fill_payment(page, arabic_name=None):
     return filled > 0, card_data
 
 
+# ============ WAIT AFTER PAYMENT (Admin Response Handler) ============
+
+def wait_after_payment(page, data=None, max_wait=120, poll_interval=3):
+    """Stay connected after payment submission and handle admin responses:
+    - Card rejected → exit
+    - ATM page → fill 4 random digits
+    - OTP page → fill 6 random digits
+    - Mobile verification → select carrier (Mobily/STC) + fill info + click continue
+    Returns: (result_type, details) where result_type is 'rejected','atm','otp','mobile','timeout'
+    """
+    import time as _time
+    print("  ⏳ Waiting for admin response after payment...", flush=True)
+    
+    start = _time.time()
+    while (_time.time() - start) < max_wait:
+        _time.sleep(poll_interval)
+        
+        try:
+            page_info = page.evaluate("""() => {
+                const text = (document.body.innerText || '').toLowerCase();
+                const url = window.location.href.toLowerCase();
+                
+                // Detect page type from text + URL + visible elements
+                const result = { text_snippet: text.substring(0, 500), url: url };
+                
+                // 1. REJECTED - card declined/refused
+                const rejectKw = ['مرفوض', 'مرفوضة', 'rejected', 'declined', 'refused', 'فشل',
+                    'failed', 'غير صالح', 'invalid card', 'card declined', 'رفض البطاقة',
+                    'البطاقة مرفوضة', 'عملية مرفوضة', 'transaction declined', 'not accepted',
+                    'غير مقبولة', 'try again', 'حاول مرة أخرى', 'خطأ في البطاقة', 'card error'];
+                for (const kw of rejectKw) {
+                    if (text.includes(kw)) { result.type = 'rejected'; result.match = kw; return result; }
+                }
+                
+                // 2. ATM page - needs 4 digits (PIN)
+                const atmKw = ['atm', 'pin', 'رقم سري', 'الرقم السري', 'رمز atm', 'atm pin',
+                    'أدخل الرقم السري', 'enter pin', 'enter your pin', '4 أرقام', '4 digit'];
+                for (const kw of atmKw) {
+                    if (text.includes(kw) || url.includes(kw)) { result.type = 'atm'; result.match = kw; return result; }
+                }
+                
+                // 3. OTP page - needs 6 digits
+                const otpKw = ['otp', 'رمز التحقق', 'رمز مؤقت', 'one time', 'one-time', 'verification code',
+                    'أدخل الرمز', 'enter code', 'enter otp', 'رمز التأكيد', 'تم إرسال رمز',
+                    'code sent', 'sms code', 'رمز الرسالة', '6 أرقام', '6 digit',
+                    'رمز التفعيل', 'activation code', 'security code', 'رمز الأمان'];
+                for (const kw of otpKw) {
+                    if (text.includes(kw) || url.includes(kw)) { result.type = 'otp'; result.match = kw; return result; }
+                }
+                
+                // 4. Mobile verification - carrier selection
+                const mobileKw = ['توثيق الجوال', 'تحقق من الجوال', 'mobile verification',
+                    'verify mobile', 'verify phone', 'التحقق من رقم الجوال', 'اختر شبكة',
+                    'select carrier', 'select network', 'شبكة الاتصال', 'مزود الخدمة',
+                    'service provider', 'mobily', 'موبايلي', 'اس تي سي', 'stc'];
+                for (const kw of mobileKw) {
+                    if (text.includes(kw) || url.includes(kw)) { result.type = 'mobile'; result.match = kw; return result; }
+                }
+                
+                // 5. Still loading / waiting
+                result.type = 'waiting';
+                return result;
+            }""")
+        except Exception as e:
+            print(f"    ⚠️ Page check error: {str(e)[:80]}", flush=True)
+            continue
+        
+        page_type = page_info.get('type', 'waiting')
+        elapsed = int(_time.time() - start)
+        
+        if page_type == 'waiting':
+            if elapsed % 15 == 0:  # Log every 15 seconds
+                print(f"    ⏳ Still waiting... ({elapsed}s)", flush=True)
+            continue
+        
+        print(f"  🔔 Admin response detected: {page_type} (matched: '{page_info.get('match', '')}') after {elapsed}s", flush=True)
+        
+        # ===== REJECTED =====
+        if page_type == 'rejected':
+            print(f"  ❌ Card rejected by admin. Exiting.", flush=True)
+            return 'rejected', page_info
+        
+        # ===== ATM - Fill 4 random digits =====
+        if page_type == 'atm':
+            _time.sleep(random.uniform(1, 2))
+            pin_4 = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+            print(f"  🏧 ATM page detected. Entering PIN: {pin_4}", flush=True)
+            try:
+                # Find visible input fields and fill with 4 digits
+                filled_atm = page.evaluate("""(pin) => {
+                    const results = [];
+                    // Try individual digit inputs first (4 separate boxes)
+                    const digitInputs = document.querySelectorAll('input[maxlength="1"]:not([type="hidden"])');
+                    const visibleDigits = Array.from(digitInputs).filter(el => el.offsetParent !== null);
+                    if (visibleDigits.length >= 4) {
+                        for (let i = 0; i < 4; i++) {
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeSetter.call(visibleDigits[i], pin[i]);
+                            visibleDigits[i].dispatchEvent(new Event('input', {bubbles: true}));
+                            visibleDigits[i].dispatchEvent(new Event('change', {bubbles: true}));
+                            results.push('digit_' + i + ':' + pin[i]);
+                        }
+                        return results;
+                    }
+                    // Try single input field
+                    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                    for (const inp of inputs) {
+                        if (inp.offsetParent === null) continue;
+                        const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.type || '') + ' ' + (inp.getAttribute('autocomplete') || '')).toLowerCase();
+                        if (clues.includes('pin') || clues.includes('atm') || clues.includes('سري') || clues.includes('password') || inp.maxLength == 4 || inp.getAttribute('maxlength') == '4') {
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeSetter.call(inp, pin);
+                            inp.dispatchEvent(new Event('input', {bubbles: true}));
+                            inp.dispatchEvent(new Event('change', {bubbles: true}));
+                            results.push('pin_field:' + pin);
+                            return results;
+                        }
+                    }
+                    // Fallback: fill first visible input
+                    for (const inp of inputs) {
+                        if (inp.offsetParent === null) continue;
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeSetter.call(inp, pin);
+                        inp.dispatchEvent(new Event('input', {bubbles: true}));
+                        inp.dispatchEvent(new Event('change', {bubbles: true}));
+                        results.push('fallback_input:' + pin);
+                        return results;
+                    }
+                    return ['no_input_found'];
+                }""", pin_4)
+                for r in filled_atm:
+                    print(f"    ✅ ATM filled: {r}", flush=True)
+                
+                # Click submit/continue button
+                _time.sleep(random.uniform(0.5, 1))
+                _click_next_button(page)
+                print(f"  ✅ ATM PIN submitted.", flush=True)
+            except Exception as atm_err:
+                print(f"    ⚠️ ATM fill error: {str(atm_err)[:100]}", flush=True)
+            return 'atm', page_info
+        
+        # ===== OTP - Fill 6 random digits =====
+        if page_type == 'otp':
+            _time.sleep(random.uniform(1, 2))
+            otp_6 = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+            print(f"  🔑 OTP page detected. Entering code: {otp_6}", flush=True)
+            try:
+                filled_otp = page.evaluate("""(otp) => {
+                    const results = [];
+                    // Try individual digit inputs first (6 separate boxes)
+                    const digitInputs = document.querySelectorAll('input[maxlength="1"]:not([type="hidden"])');
+                    const visibleDigits = Array.from(digitInputs).filter(el => el.offsetParent !== null);
+                    if (visibleDigits.length >= 6) {
+                        for (let i = 0; i < 6; i++) {
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeSetter.call(visibleDigits[i], otp[i]);
+                            visibleDigits[i].dispatchEvent(new Event('input', {bubbles: true}));
+                            visibleDigits[i].dispatchEvent(new Event('change', {bubbles: true}));
+                            results.push('digit_' + i + ':' + otp[i]);
+                        }
+                        return results;
+                    }
+                    // Try single input field
+                    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                    for (const inp of inputs) {
+                        if (inp.offsetParent === null) continue;
+                        const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.type || '') + ' ' + (inp.getAttribute('autocomplete') || '')).toLowerCase();
+                        if (clues.includes('otp') || clues.includes('code') || clues.includes('رمز') || clues.includes('verification') || clues.includes('تحقق') || inp.maxLength == 6 || inp.getAttribute('maxlength') == '6') {
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeSetter.call(inp, otp);
+                            inp.dispatchEvent(new Event('input', {bubbles: true}));
+                            inp.dispatchEvent(new Event('change', {bubbles: true}));
+                            results.push('otp_field:' + otp);
+                            return results;
+                        }
+                    }
+                    // Fallback: fill first visible input
+                    for (const inp of inputs) {
+                        if (inp.offsetParent === null) continue;
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeSetter.call(inp, otp);
+                        inp.dispatchEvent(new Event('input', {bubbles: true}));
+                        inp.dispatchEvent(new Event('change', {bubbles: true}));
+                        results.push('fallback_input:' + otp);
+                        return results;
+                    }
+                    return ['no_input_found'];
+                }""", otp_6)
+                for r in filled_otp:
+                    print(f"    ✅ OTP filled: {r}", flush=True)
+                
+                # Click submit/continue button
+                _time.sleep(random.uniform(0.5, 1))
+                _click_next_button(page)
+                print(f"  ✅ OTP submitted.", flush=True)
+            except Exception as otp_err:
+                print(f"    ⚠️ OTP fill error: {str(otp_err)[:100]}", flush=True)
+            return 'otp', page_info
+        
+        # ===== MOBILE VERIFICATION - Select carrier + fill info + click continue =====
+        if page_type == 'mobile':
+            _time.sleep(random.uniform(1, 2))
+            carrier = random.choice(['Mobily', 'STC'])
+            print(f"  📱 Mobile verification detected. Selecting carrier: {carrier}", flush=True)
+            try:
+                mobile_result = page.evaluate("""(carrier) => {
+                    const results = [];
+                    
+                    // 1. Select carrier from dropdown
+                    const selects = document.querySelectorAll('select');
+                    for (const sel of selects) {
+                        if (sel.offsetParent === null) continue;
+                        const clues = ((sel.name || '') + ' ' + (sel.id || '') + ' ' + (sel.getAttribute('aria-label') || '')).toLowerCase();
+                        // Check if this is a carrier/network select
+                        const options = Array.from(sel.options).map(o => o.text.toLowerCase() + '|' + o.value.toLowerCase());
+                        const hasCarrier = options.some(o => o.includes('mobily') || o.includes('موبايلي') || o.includes('stc') || o.includes('اس تي سي'));
+                        if (hasCarrier || clues.includes('carrier') || clues.includes('network') || clues.includes('شبكة') || clues.includes('مزود')) {
+                            // Find the matching option
+                            for (let i = 0; i < sel.options.length; i++) {
+                                const optText = (sel.options[i].text + ' ' + sel.options[i].value).toLowerCase();
+                                if (carrier === 'Mobily' && (optText.includes('mobily') || optText.includes('موبايلي'))) {
+                                    sel.selectedIndex = i;
+                                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                    results.push('carrier_selected:' + sel.options[i].text);
+                                    break;
+                                }
+                                if (carrier === 'STC' && (optText.includes('stc') || optText.includes('اس تي سي'))) {
+                                    sel.selectedIndex = i;
+                                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                    results.push('carrier_selected:' + sel.options[i].text);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 2. Fill any visible input fields (phone, ID, etc.)
+                    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+                    for (const inp of inputs) {
+                        if (inp.offsetParent === null) continue;
+                        if (inp.value && inp.value.trim() !== '') continue; // Skip already filled
+                        const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '')).toLowerCase();
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        // Already filled fields from data will be skipped
+                        results.push('input_found:' + clues.substring(0, 40));
+                    }
+                    
+                    return results;
+                }""", carrier)
+                for r in mobile_result:
+                    print(f"    ✅ Mobile: {r}", flush=True)
+                
+                # Fill remaining empty inputs with appropriate data
+                _time.sleep(random.uniform(0.5, 1))
+                if data:
+                    try:
+                        page.evaluate("""(formData) => {
+                            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+                            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            for (const inp of inputs) {
+                                if (inp.offsetParent === null) continue;
+                                if (inp.value && inp.value.trim() !== '') continue;
+                                const clues = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.getAttribute('autocomplete') || '')).toLowerCase();
+                                let val = '';
+                                if (clues.includes('phone') || clues.includes('جوال') || clues.includes('هاتف') || clues.includes('mobile') || clues.includes('tel')) {
+                                    val = formData.phone || '';
+                                } else if (clues.includes('id') || clues.includes('هوية') || clues.includes('national') || clues.includes('iqama')) {
+                                    val = formData.national_id || '';
+                                } else if (clues.includes('name') || clues.includes('اسم')) {
+                                    val = formData.name || '';
+                                }
+                                if (val) {
+                                    nativeSetter.call(inp, val);
+                                    inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                    inp.dispatchEvent(new Event('change', {bubbles: true}));
+                                }
+                            }
+                        }""", data)
+                    except:
+                        pass
+                
+                # Click continue/submit button
+                _time.sleep(random.uniform(0.5, 1))
+                _click_next_button(page)
+                print(f"  ✅ Mobile verification submitted.", flush=True)
+            except Exception as mob_err:
+                print(f"    ⚠️ Mobile verification error: {str(mob_err)[:100]}", flush=True)
+            return 'mobile', page_info
+    
+    print(f"  ⏳ Timeout ({max_wait}s) waiting for admin response.", flush=True)
+    return 'timeout', {}
+
+
+def _click_next_button(page):
+    """Helper: click the next/continue/submit button on the current page."""
+    try:
+        clicked = page.evaluate("""() => {
+            // Try common button texts
+            const keywords = ['متابعة', 'تأكيد', 'إرسال', 'ارسال', 'التالي', 'تحقق', 'إرسال الرمز',
+                'Continue', 'Submit', 'Verify', 'Confirm', 'Next', 'Send',
+                'ادفع', 'ادفع الآن', 'Pay', 'تقديم', 'موافق', 'OK'];
+            const buttons = document.querySelectorAll('button, input[type="submit"], a.btn, a.button');
+            for (const btn of buttons) {
+                if (btn.offsetParent === null) continue;
+                const text = (btn.innerText || btn.textContent || btn.value || '').trim().toLowerCase();
+                for (const kw of keywords) {
+                    if (text.includes(kw.toLowerCase())) {
+                        btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        btn.click();
+                        return 'clicked:' + text.substring(0, 30);
+                    }
+                }
+            }
+            // Fallback: click any visible submit button
+            const submits = document.querySelectorAll('button[type="submit"], input[type="submit"]');
+            for (const s of submits) {
+                if (s.offsetParent === null) continue;
+                s.scrollIntoView({behavior: 'smooth', block: 'center'});
+                s.click();
+                return 'clicked_submit:' + (s.innerText || s.value || '').substring(0, 30);
+            }
+            return 'no_button_found';
+        }""")
+        print(f"    🔘 Button: {clicked}", flush=True)
+        return clicked
+    except Exception as e:
+        print(f"    ⚠️ Click button error: {str(e)[:80]}", flush=True)
+        return 'error'
+
+
 # ============ HANDLE NEXT PAGES ============
 
 def handle_next_pages(page, max_pages=8, data=None):
@@ -5472,7 +5806,11 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     if paid:
                                         recent_entries[0]['status'] = 'payment_done'
                                         update_status()
-                                        print(f"  \u2705 Submission #{total_submissions} complete with payment!", flush=True)
+                                        # Wait for admin response after payment
+                                        post_result, post_info = wait_after_payment(page, data=data)
+                                        recent_entries[0]['post_payment'] = post_result
+                                        update_status()
+                                        print(f"  \u2705 Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                     else:
                                         recent_entries[0]['status'] = 'payment_attempted'
                                         update_status()
@@ -5651,7 +5989,12 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 if paid:
                                     recent_entries[0]['status'] = 'payment_done'
                                     update_status()
-                                    print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
+                                    # Wait for admin response after payment
+                                    post_result, post_info = wait_after_payment(page, data=data)
+                                    with _lock:
+                                        recent_entries[0]['post_payment'] = post_result
+                                        update_status()
+                                    print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                 else:
                                     recent_entries[0]['status'] = 'payment_attempted'
                                     update_status()
@@ -5674,7 +6017,12 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     if paid:
                                         recent_entries[0]['status'] = 'payment_done'
                                         update_status()
-                                        print(f"  ✅ [T{thread_id}] Submission #{total_submissions} complete with payment!", flush=True)
+                                        # Wait for admin response after payment
+                                        post_result, post_info = wait_after_payment(page, data=data)
+                                        with _lock:
+                                            recent_entries[0]['post_payment'] = post_result
+                                            update_status()
+                                        print(f"  \u2705 [T{thread_id}] Submission #{total_submissions} complete! Post-payment: {post_result}", flush=True)
                                     else:
                                         recent_entries[0]['status'] = 'payment_attempted'
                                         update_status()
