@@ -11,8 +11,8 @@ Architecture: Uses subprocess-based Patchright to avoid greenlet/threading issue
 Each visitor runs in its own process via subprocess.
 
 Server Specs: 4 vCPU / 8GB RAM / 160GB Disk
-Safe Limit: 20 concurrent browser visitors per server (8GB RAM)
-Total: 9 servers x 20 = ~180 real browser visitors
+Safe Limit: 30 concurrent browser visitors per server (8GB RAM)
+Total: 18 servers x 30 = ~540 real browser visitors
 """
 
 import threading
@@ -68,10 +68,10 @@ def ensure_patchright_installed():
 
 
 # ============ SAFE LIMITS FOR 8GB RAM ============
-MAX_BROWSER_VISITORS = 20          # Max concurrent real browsers per server
-WAVE_SIZE_BROWSER = 5              # Visitors per wave (small, accumulate)
+MAX_BROWSER_VISITORS = 30          # Max concurrent real browsers per server (raised for accumulation)
+WAVE_SIZE_BROWSER = 10             # Visitors per wave (raised for faster accumulation)
 MEMORY_CHECK_INTERVAL = 30
-MAX_MEMORY_PERCENT = 75
+MAX_MEMORY_PERCENT = 85
 PAGE_READ_TIME_MIN = 15            # Min seconds on each page (longer = more realistic)
 PAGE_READ_TIME_MAX = 45            # Max seconds on each page
 MAX_PAGES_PER_VISIT = 30

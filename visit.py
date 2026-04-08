@@ -2092,16 +2092,16 @@ def run(url, duration_min, manual_socket=None):
         total_waves = max(1, duration_min * 4)  # 4 waves per minute
         WAVE_INTERVAL_ACTUAL = 15
     elif site_info['mode'] == 'browser':
-        # Browser mode v3: Real Playwright browsers (heavy, ~400MB each)
-        # 5 visitors per wave, every 30s, max 20 per server
+        # Browser mode v3: Real Playwright browsers
+        # 10 visitors per wave, every 15s, max 30 per server
         # All visitors STAY until time is up = accumulate real browsers
-        total_waves = max(1, duration_min * 2)  # 2 waves per minute
-        WAVE_INTERVAL_ACTUAL = 30
+        total_waves = max(1, duration_min * 4)  # 4 waves per minute (faster accumulation)
+        WAVE_INTERVAL_ACTUAL = 15
     else:
         total_waves = max(1, duration_min * 2)
         WAVE_INTERVAL_ACTUAL = WAVE_INTERVAL
     
-    browser_wave_size = 5  # Visitors per wave in browser mode v3 (real Playwright, 8GB RAM)
+    browser_wave_size = 10  # Visitors per wave in browser mode v3 (raised for faster accumulation)
     total_visits = total_waves * (browser_wave_size if site_info['mode'] == 'browser' else WAVE_SIZE)
     
     print(f"\n{'='*60}", flush=True)
@@ -2113,8 +2113,8 @@ def run(url, duration_min, manual_socket=None):
         print(f"\U0001f310 BROWSER MODE v3: Real Playwright Browsers", flush=True)
         print(f"  Each visitor = real Chrome browser executing JavaScript", flush=True)
         print(f"  Visitors/wave: {browser_wave_size} (PERSISTENT - stay until end)", flush=True)
-        print(f"  Max per server: 20 (safe for 8GB RAM)", flush=True)
-        print(f"  Expected accumulation: ~{min(browser_wave_size * total_waves, 20)} active visitors", flush=True)
+        print(f"  Max per server: 30 (optimized for 8GB RAM)", flush=True)
+        print(f"  Expected accumulation: ~{min(browser_wave_size * total_waves, 30)} active visitors", flush=True)
     else:
         tls_status = 'curl_cffi \u2705' if HAS_CFFI else 'No \u274c'
         print(f"TLS Spoof: {tls_status}", flush=True)
