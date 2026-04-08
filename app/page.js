@@ -94,7 +94,7 @@ export default function Home() {
 
   // ===== SMART BOT MODE =====
   const [mode, setMode] = useState('attack'); // 'attack' or 'smart'
-  const [sesInstances, setSesInstances] = useState('3');
+  const [sesInstances, setSesInstances] = useState('7');
   const [sesDuration, setSesDuration] = useState('10');
   const [sesPhase, setSesPhase] = useState('idle'); // idle, deploying, running, finished
   const [sesStatus, setSesStatus] = useState([]);
