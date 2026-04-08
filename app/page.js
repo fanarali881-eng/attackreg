@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 
 export default function Home() {
   const [url, setUrl] = useState('');
-  const [durationMin, setDurationMin] = useState('5');
+  const [durationMin, setDurationMin] = useState('10');
   const [waveSize, setWaveSize] = useState('200');
   const [stayTime, setStayTime] = useState('35');
   const [logs, setLogs] = useState([]);
