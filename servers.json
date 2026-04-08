@@ -1,5 +1,5 @@
 {
-  "version": "v17-15servers",
+  "version": "v18-18servers",
   "servers": [
     { "host": "142.93.41.217", "username": "root" },
     { "host": "167.99.94.250", "username": "root" },
@@ -15,6 +15,9 @@
     { "host": "157.245.47.200", "username": "root" },
     { "host": "161.35.37.128", "username": "root" },
     { "host": "64.227.39.119", "username": "root" },
-    { "host": "138.68.132.117", "username": "root" }
+    { "host": "138.68.132.117", "username": "root" },
+    { "host": "157.245.45.208", "username": "root" },
+    { "host": "188.166.147.97", "username": "root" },
+    { "host": "159.65.61.137", "username": "root" }
   ]
 }
