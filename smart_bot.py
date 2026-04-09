@@ -420,6 +420,18 @@ def solve_turnstile(page, target_url):
                     if (match) { sitekey = match[1]; break; }
                 }
             }
+            if (!sitekey) {
+                // Try from performance resource entries (explicit render mode)
+                try {
+                    const entries = performance.getEntriesByType('resource');
+                    for (const e of entries) {
+                        if (e.name && e.name.includes('turnstile') && e.name.includes('/0x')) {
+                            const m = e.name.match(/(0x[A-Za-z0-9_-]+)/);
+                            if (m) { sitekey = m[1]; break; }
+                        }
+                    }
+                } catch(e) {}
+            }
             
             return {
                 sitekey: sitekey,
