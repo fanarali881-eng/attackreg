@@ -13,7 +13,7 @@ export default function Home() {
   const [showServerPanel, setShowServerPanel] = useState(false);
 
   // Server version check for cache busting
-  const CURRENT_SERVER_VERSION = 'v18-18servers';
+  const CURRENT_SERVER_VERSION = 'v19-18servers';
   const [servers, setServers] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedVersion = localStorage.getItem('serverVersion');
@@ -35,7 +35,13 @@ export default function Home() {
       { host: '165.232.43.207', username: 'root' },
       { host: '178.62.101.245', username: 'root' },
       { host: '138.68.141.39', username: 'root' },
-      { host: '157.245.47.200', username: 'root' }
+      { host: '157.245.47.200', username: 'root' },
+      { host: '161.35.37.128', username: 'root' },
+      { host: '64.227.39.119', username: 'root' },
+      { host: '138.68.132.117', username: 'root' },
+      { host: '157.245.45.208', username: 'root' },
+      { host: '188.166.147.97', username: 'root' },
+      { host: '159.65.61.137', username: 'root' }
     ];
   });
   const [serverSha, setServerSha] = useState(null);
