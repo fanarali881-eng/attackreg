@@ -13,7 +13,7 @@ export default function Home() {
   const [showServerPanel, setShowServerPanel] = useState(false);
 
   // Server version check for cache busting
-  const CURRENT_SERVER_VERSION = 'v16-12servers';
+  const CURRENT_SERVER_VERSION = 'v18-18servers';
   const [servers, setServers] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedVersion = localStorage.getItem('serverVersion');

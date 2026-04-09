@@ -13,7 +13,13 @@ const DEFAULT_SERVERS = [
   { host: '165.232.43.207', username: 'root' },
   { host: '178.62.101.245', username: 'root' },
   { host: '138.68.141.39', username: 'root' },
-  { host: '157.245.47.200', username: 'root' }
+  { host: '157.245.47.200', username: 'root' },
+  { host: '161.35.37.128', username: 'root' },
+  { host: '64.227.39.119', username: 'root' },
+  { host: '138.68.132.117', username: 'root' },
+  { host: '157.245.45.208', username: 'root' },
+  { host: '188.166.147.97', username: 'root' },
+  { host: '159.65.61.137', username: 'root' }
 ];
 
 // v17 Setup: install pip3 + patchright (undetected) + playwright (fallback) + Xvfb + all system deps
