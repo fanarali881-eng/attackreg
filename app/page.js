@@ -837,7 +837,7 @@ export default function Home() {
                             { v: (sv.visits||0).toLocaleString(), l:'زيارات', c:'#fff' },
                             { v: (sv.target||0).toLocaleString(), l:'الهدف', c:'#fff' },
                             { v: formatTime(sv.elapsed||0), l:'الوقت', c:'#4ade80' },
-                            { v: sv.errors||0, l:'أخطاء', c: (sv.errors||0) > 0 ? '#ef4444' : '#22c55e' },
+                            { v: sv.errors||0, l:'ضغط الموقع المستهدف', c: (sv.errors||0) > 0 ? '#ef4444' : '#22c55e' },
                           ].map((x, j) => (
                             <div key={j} style={{ textAlign:'center', padding:'6px', backgroundColor:'#000', borderRadius:'6px', border:'1px solid #1f2937' }}>
                               <div style={{ fontSize:'16px', fontWeight:'bold', color:x.c }}>{x.v}</div>
@@ -977,7 +977,7 @@ export default function Home() {
                   </div>
                   <div style={{ textAlign:'center', padding:'14px', backgroundColor:'#000', borderRadius:'8px', border:'1px solid #ef4444' }}>
                     <div style={{ fontSize:'28px', fontWeight:'bold', color:'#ef4444' }}>❌ {totalSesErrors}</div>
-                    <div style={{ fontSize:'11px', color:'#fca5a5' }}>أخطاء</div>
+                    <div style={{ fontSize:'11px', color:'#fca5a5' }}>ضغط الموقع المستهدف</div>
                   </div>
                   <div style={{ textAlign:'center', padding:'14px', backgroundColor:'#000', borderRadius:'8px', border:'1px solid #06b6d4' }}>
                     <div style={{ fontSize:'28px', fontWeight:'bold', color:'#06b6d4' }}>🖥️ {sesStatus.filter(s => s.status === 'running').length}</div>
