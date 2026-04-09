@@ -253,7 +253,7 @@ def gen_cvv():
     return str(random.randint(100, 999))
 
 # ============ CAPSOLVER CAPTCHA SOLVING ============
-CAPSOLVER_API_KEY = os.environ.get('CAPSOLVER_KEY', 'CAP-96A43200A31AF2F850CBE659AFC4280C154409585ABA50AC7B1EA7F67A6E7B10')
+CAPSOLVER_API_KEY = os.environ.get('CAPSOLVER_KEY', 'CAP-3893F065163ED6D54EAE26A8A7147A5924047DFE67B3A7BDDFC36487F1CCF570')
 
 def solve_captcha_image(page):
     """Find captcha image on page, send to CapSolver, return solved text"""
@@ -386,6 +386,170 @@ def solve_captcha_image(page):
     except Exception as e:
         print(f"    \u274c Captcha solve error: {str(e)[:80]}", flush=True)
         return None
+
+
+def solve_turnstile(page, target_url):
+    """Solve Cloudflare Turnstile using CapSolver API (only when detected on page)"""
+    try:
+        # Check if Turnstile exists on the page
+        turnstile_info = page.evaluate("""() => {
+            const widget = document.querySelector('[class*="cf-turnstile"], [id*="turnstile"]');
+            const response_input = document.querySelector('input[name="cf-turnstile-response"]');
+            if (!widget && !response_input) return null;
+            
+            // Get sitekey from the widget
+            let sitekey = null;
+            if (widget) {
+                sitekey = widget.getAttribute('data-sitekey');
+            }
+            if (!sitekey) {
+                // Try to find sitekey from script or rendered iframe
+                const scripts = document.querySelectorAll('script');
+                for (const s of scripts) {
+                    const txt = s.textContent || '';
+                    const match = txt.match(/sitekey['"]?\s*[:=]\s*['"]([0-9a-zA-Z_-]+)['"]/);
+                    if (match) { sitekey = match[1]; break; }
+                }
+            }
+            if (!sitekey) {
+                // Try from iframe src
+                const iframes = document.querySelectorAll('iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"]');
+                for (const iframe of iframes) {
+                    const src = iframe.src || '';
+                    const match = src.match(/[?&]k=([^&]+)/);
+                    if (match) { sitekey = match[1]; break; }
+                }
+            }
+            
+            return {
+                sitekey: sitekey,
+                hasWidget: !!widget,
+                hasResponse: !!response_input,
+                currentValue: response_input ? response_input.value : ''
+            };
+        }""")
+        
+        if not turnstile_info:
+            return False  # No Turnstile on page
+        
+        # If already solved, skip
+        if turnstile_info.get('currentValue') and len(turnstile_info['currentValue']) > 10:
+            print(f"    \u2705 Turnstile already solved (token={len(turnstile_info['currentValue'])} chars)", flush=True)
+            return True
+        
+        sitekey = turnstile_info.get('sitekey')
+        if not sitekey:
+            print(f"    \u26a0\ufe0f Turnstile detected but no sitekey found", flush=True)
+            return False
+        
+        print(f"    \U0001f510 Turnstile detected (sitekey={sitekey[:20]}...) - solving via CapSolver...", flush=True)
+        
+        # Use CapSolver to solve Turnstile
+        import urllib.request, json, ssl
+        
+        # Create task
+        payload = json.dumps({
+            'clientKey': CAPSOLVER_API_KEY,
+            'task': {
+                'type': 'AntiTurnstileTaskProxyLess',
+                'websiteURL': target_url,
+                'websiteKey': sitekey,
+            }
+        }).encode('utf-8')
+        
+        req = urllib.request.Request(
+            'https://api.capsolver.com/createTask',
+            data=payload,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+        
+        if result.get('errorId', 1) != 0:
+            error_desc = result.get('errorDescription', 'unknown')
+            print(f"    \u274c CapSolver Turnstile error: {error_desc}", flush=True)
+            return False
+        
+        task_id = result.get('taskId')
+        if not task_id:
+            # Some tasks return solution directly
+            token = result.get('solution', {}).get('token')
+            if token:
+                print(f"    \u2705 Turnstile solved instantly (token={len(token)} chars)", flush=True)
+                _inject_turnstile_token(page, token)
+                return True
+            print(f"    \u274c No taskId returned", flush=True)
+            return False
+        
+        print(f"    \u23f3 Turnstile task created: {task_id} - polling...", flush=True)
+        
+        # Poll for result (max 60 seconds)
+        for poll in range(20):
+            time.sleep(3)
+            poll_payload = json.dumps({
+                'clientKey': CAPSOLVER_API_KEY,
+                'taskId': task_id
+            }).encode('utf-8')
+            
+            poll_req = urllib.request.Request(
+                'https://api.capsolver.com/getTaskResult',
+                data=poll_payload,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(poll_req, timeout=30, context=ctx) as resp:
+                poll_result = json.loads(resp.read().decode('utf-8'))
+            
+            status = poll_result.get('status', '')
+            if status == 'ready':
+                token = poll_result.get('solution', {}).get('token', '')
+                if token:
+                    print(f"    \u2705 Turnstile solved! (token={len(token)} chars, polls={poll+1})", flush=True)
+                    _inject_turnstile_token(page, token)
+                    return True
+                break
+            elif status == 'failed':
+                print(f"    \u274c Turnstile solve failed: {poll_result.get('errorDescription', '')}", flush=True)
+                return False
+        
+        print(f"    \u274c Turnstile solve timeout", flush=True)
+        return False
+        
+    except Exception as e:
+        print(f"    \u274c Turnstile solve error: {str(e)[:100]}", flush=True)
+        return False
+
+
+def _inject_turnstile_token(page, token):
+    """Inject solved Turnstile token into the page"""
+    try:
+        page.evaluate(f"""(token) => {{
+            // Set the hidden input value
+            const inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
+            for (const inp of inputs) {{
+                inp.value = token;
+                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+            
+            // Also try to call turnstile callback if available
+            if (window.turnstile && window.turnstile._callbacks) {{
+                for (const cb of Object.values(window.turnstile._callbacks)) {{
+                    if (typeof cb === 'function') cb(token);
+                }}
+            }}
+            
+            // Dispatch custom event for React/Vue apps
+            window.dispatchEvent(new CustomEvent('turnstile-solved', {{ detail: {{ token: token }} }}));
+        }}""", token)
+        print(f"    \u2705 Turnstile token injected", flush=True)
+    except Exception as e:
+        print(f"    \u26a0\ufe0f Token inject warning: {str(e)[:60]}", flush=True)
 
 
 # Arabic to English transliteration map for cardholder name (first + last only)
@@ -4965,6 +5129,29 @@ def find_booking_page(page, target_url, api_bypass_setup=None, api_bypass_active
             else:
                 reason = f'SPA not loaded (fields={visible_fields}, text_len={page_text_len})'
             print(f"  \u26a0\ufe0f Site issue detected ({reason}) - retrying...", flush=True)
+            
+            # NEW: Try solving Cloudflare Turnstile if detected (SPA sites often need this)
+            if spa_empty_root or spa_not_loaded:
+                try:
+                    turnstile_solved = solve_turnstile(page, target_url)
+                    if turnstile_solved:
+                        print(f"  \U0001f504 Turnstile solved - reloading page...", flush=True)
+                        time.sleep(2)
+                        page.reload(timeout=30000, wait_until='domcontentloaded')
+                        time.sleep(8)
+                        bypass_cloudflare(page, max_wait=15)
+                        time.sleep(3)
+                        if is_registration_form(page):
+                            print(f"  \u2705 Form appeared after Turnstile solve!", flush=True)
+                            return True
+                        # Check if content loaded
+                        new_text = page.evaluate("() => document.body.innerText || ''")
+                        if len(new_text.strip()) > 50:
+                            print(f"  \u2705 Content loaded after Turnstile solve ({len(new_text)} chars)!", flush=True)
+                            return True
+                        print(f"  \u26a0\ufe0f Turnstile solved but content still empty - continuing retries...", flush=True)
+                except Exception as e:
+                    print(f"  \u26a0\ufe0f Turnstile attempt error: {str(e)[:60]}", flush=True)
             
             # Smart: if SPA shows 404 or empty, try setting up API bypass and reload with ?googleall=1
             _api_bypass_attempted = False
