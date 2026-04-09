@@ -68,7 +68,7 @@ def ensure_patchright_installed():
 
 
 # ============ SAFE LIMITS FOR 8GB RAM ============
-MAX_BROWSER_VISITORS = 30          # Max concurrent real browsers per server (raised for accumulation)
+MAX_BROWSER_VISITORS = 20          # Max concurrent real browsers per server (stable for 8GB RAM)
 WAVE_SIZE_BROWSER = 10             # Visitors per wave (raised for faster accumulation)
 MEMORY_CHECK_INTERVAL = 30
 MAX_MEMORY_PERCENT = 85
