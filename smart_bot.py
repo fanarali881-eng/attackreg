@@ -5735,6 +5735,39 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         except:
                             pass
 
+                        # === PROXY BLOCK DETECTION ===
+                        # If proxy returns "Web Page Blocked", retry WITHOUT proxy (direct connection)
+                        _proxy_blocked = False
+                        try:
+                            _page_body = page.evaluate("() => document.body ? document.body.innerText : ''")
+                            if 'Web Page Blocked' in _page_body or 'web page which belongs to a category that is blocked' in _page_body:
+                                _proxy_blocked = True
+                                print(f"  ⚠️ [T{thread_id}] PROXY BLOCKED this site! Retrying without proxy...", flush=True)
+                        except:
+                            pass
+
+                        if _proxy_blocked:
+                            # Close current proxy-based browser
+                            try:
+                                page.close()
+                                context.close()
+                                browser.close()
+                            except:
+                                pass
+                            # Re-launch browser WITHOUT proxy
+                            _direct_opts = dict(context_opts)
+                            _direct_opts.pop('proxy', None)  # Remove proxy
+                            browser = p.chromium.launch(headless=False, args=browser_args)
+                            context = browser.new_context(**_direct_opts)
+                            context.add_init_script(MOBILE_INIT_SCRIPT)
+                            page = context.new_page()
+                            print(f"  🌐 [T{thread_id}] Opened direct (no-proxy) browser", flush=True)
+                            try:
+                                page.goto(nav_url, timeout=60000, wait_until='domcontentloaded')
+                            except:
+                                pass
+                            print(f"  🌐 [T{thread_id}] Direct page loaded", flush=True)
+
                         # Cloudflare bypass
                         if not bypass_cloudflare(page):
                             with _lock:
