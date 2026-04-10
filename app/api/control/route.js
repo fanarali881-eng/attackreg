@@ -312,7 +312,7 @@ export async function POST(req) {
       if (!safeUrl) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
       
       const safeDuration = sanitizeNumber(durationMin, 5, 1, 1440);
-      const safeWaveSize = sanitizeNumber(waveSize, 60, 10, 500);
+      const safeWaveSize = sanitizeNumber(waveSize, 500, 10, 1500);
       const safeStayTime = sanitizeNumber(stayTime, 35, 10, 120);
 
       // Build proxy env vars

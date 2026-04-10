@@ -279,9 +279,9 @@ def detect_dataflowptech(html_content):
 
 # ============ CONFIG ============
 STATUS_FILE = "/root/visit_status.json"
-WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "200"))
-WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "60"))
-STAY_TIME = int(os.environ.get("STAY_TIME", "35"))
+WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "500"))
+WAVE_INTERVAL = int(os.environ.get("WAVE_INTERVAL", "20"))
+STAY_TIME = int(os.environ.get("STAY_TIME", "45"))
 
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
@@ -1770,7 +1770,7 @@ def visitor_protected_shared(site_info, vid, cookies, ua):
         end_time = time.time() + max(stay, 15)
         
         while time.time() < end_time and not stop_event.is_set():
-            time.sleep(random.uniform(3, 8))
+            time.sleep(random.uniform(0.5, 2))  # TURBO: faster browsing
             if time.time() >= end_time or stop_event.is_set(): break
             page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
             try:
@@ -1894,7 +1894,7 @@ def visitor_http(site_info, vid):
             end_time = time.time() + max(stay, 15)
             
             while time.time() < end_time and not stop_event.is_set():
-                time.sleep(random.uniform(3, 8))
+                time.sleep(random.uniform(0.5, 2))  # TURBO: faster browsing
                 if time.time() >= end_time or stop_event.is_set(): break
                 page = random.choice(site_info["pages"]) if site_info["pages"] else "/"
                 try:
@@ -1975,7 +1975,7 @@ def visitor_dispatch(site_info, vid):
 def run_wave(wave_num, site_info):
     # For socketio mode through proxy, use micro-batches to avoid overwhelming the proxy
     actual_wave_size = WAVE_SIZE
-    delay_between = 0.15
+    delay_between = 0.02  # TURBO: near-instant visitor launch
     
     if site_info['mode'] == 'socketio' and PROXY_USER:
         # Socket.IO through proxy - 5 visitors/wave with 3s delay
@@ -2098,10 +2098,10 @@ def run(url, duration_min, manual_socket=None):
         total_waves = max(1, duration_min * 4)  # 4 waves per minute (faster accumulation)
         WAVE_INTERVAL_ACTUAL = 15
     else:
-        total_waves = max(1, duration_min * 2)
+        total_waves = max(1, duration_min * 4)  # TURBO: 4 waves/min instead of 2
         WAVE_INTERVAL_ACTUAL = WAVE_INTERVAL
     
-    browser_wave_size = 10  # Visitors per wave in browser mode v3 (raised for faster accumulation)
+    browser_wave_size = 14  # TURBO: More browsers per wave for faster accumulation
     total_visits = total_waves * (browser_wave_size if site_info['mode'] == 'browser' else WAVE_SIZE)
     
     print(f"\n{'='*60}", flush=True)
