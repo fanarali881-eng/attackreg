@@ -1503,37 +1503,47 @@ def api_direct_booking(page, proxy_config=None):
     print(f"  \U0001f4dd Data: {name} | {national_id} | {phone}", flush=True)
     print(f"  \U0001f697 Vehicle: {vehicle_type} | {city} | {station} | {time_slot}", flush=True)
     
-    # Auto-detect API base and token from page JS (fallback to legacy values)
+    # Auto-detect API base and token from page JS bundle (fallback to legacy values)
     _detected_base = None
     _detected_token = None
     try:
-        _detected = page.evaluate("""() => {
+        _detected = page.evaluate("""async () => {
+            let base = null, token = null;
+            // Find all external JS script sources
             const scripts = document.querySelectorAll('script[src]');
             for (const s of scripts) {
+                const src = s.getAttribute('src') || '';
+                // Only check app JS bundles (index-*.js or assets/*.js)
+                if (!src.includes('index-') && !src.includes('assets/')) continue;
                 try {
-                    const text = document.querySelector('script[src="' + s.src + '"]')?.textContent || '';
+                    const fullUrl = src.startsWith('http') ? src : (window.location.origin + src);
+                    const resp = await fetch(fullUrl);
+                    const text = await resp.text();
+                    // Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
+                    const baseMatch = text.match(/["'](https:\/\/data-flow-apis\.cc)["']/) || text.match(/["'](https:\/\/dataflowptech\.com)["']/);
+                    if (baseMatch) base = baseMatch[1];
+                    // Pattern: long hex token with underscore separator
+                    const tokenMatch = text.match(/["']([a-f0-9]{20,}_[a-f0-9]{40,})["']/);
+                    if (tokenMatch) token = tokenMatch[1];
+                    // Also try without underscore (old format)
+                    if (!token) {
+                        const tokenMatch2 = text.match(/["']([a-f0-9]{50,})["']/);
+                        if (tokenMatch2) token = tokenMatch2[1];
+                    }
+                    if (base && token) break;
                 } catch(e) {}
             }
-            // Check inline scripts and global vars
-            const allText = document.documentElement.innerHTML;
-            let base = null, token = null;
-            // Pattern: const xxx="https://data-flow-apis.cc" or similar
-            const baseMatch = allText.match(/["'](https:\/\/[a-zA-Z0-9._-]+\.cc)["']/) || allText.match(/["'](https:\/\/dataflowptech\.com\/api\/v1)["']/);
-            if (baseMatch) base = baseMatch[1];
-            // Pattern: token is a long hex string after the base URL
-            const tokenMatch = allText.match(/["']([a-f0-9_]{40,})["']/);
-            if (tokenMatch) token = tokenMatch[1];
             return {base: base, token: token};
         }""")
         if _detected and isinstance(_detected, dict):
             _detected_base = _detected.get('base')
             _detected_token = _detected.get('token')
     except Exception as _det_err:
-        print(f"  ⚠️ Auto-detect API failed: {str(_det_err)[:80]}", flush=True)
+        print(f"  \u26a0\ufe0f Auto-detect API failed: {str(_det_err)[:80]}", flush=True)
     
     base_url = _detected_base or 'https://dataflowptech.com/api/v1'
     token = _detected_token or 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
-    print(f"  🔗 API: {base_url} | Token: {token[:20]}...", flush=True)
+    print(f"  \U0001f517 API: {base_url} | Token: {token[:20]}...", flush=True)
     
     def browser_api_post(endpoint, body):
         """Make a POST request via browser fetch() with urllib fallback"""
