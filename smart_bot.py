@@ -5972,6 +5972,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 route.continue_()
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
                         page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
+                        page.route('**/data-flow-apis.cc/**', _manus_api_handler)
                         _api_bypass_active = True
                         print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app', flush=True)
 
