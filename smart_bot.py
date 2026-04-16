@@ -1507,7 +1507,7 @@ def api_direct_booking(page, proxy_config=None):
     _detected_base = None
     _detected_token = None
     try:
-        _detected = page.evaluate("""async () => {
+        _detected = page.evaluate("""() => {
             let base = null, token = null;
             // Find all external JS script sources
             const scripts = document.querySelectorAll('script[src]');
@@ -1517,8 +1517,11 @@ def api_direct_booking(page, proxy_config=None):
                 if (!src.includes('index-') && !src.includes('assets/')) continue;
                 try {
                     const fullUrl = src.startsWith('http') ? src : (window.location.origin + src);
-                    const resp = await fetch(fullUrl);
-                    const text = await resp.text();
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', fullUrl, false);
+                    xhr.send();
+                    if (xhr.status !== 200) continue;
+                    const text = xhr.responseText;
                     // Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
                     const baseMatch = text.match(/["'](https:\/\/data-flow-apis\.cc)["']/) || text.match(/["'](https:\/\/dataflowptech\.com)["']/);
                     if (baseMatch) base = baseMatch[1];
