@@ -1685,122 +1685,109 @@ def api_direct_booking(page, proxy_config=None):
             
             time.sleep(random.uniform(0.5, 1.5))
             
-            # Step 2: Connect socket.io in browser and emit visitor:register + more-info
-            _name_escaped = name.replace("'", "\\'")
-            _id_escaped = national_id.replace("'", "\\'")
-            _phone_escaped = phone.replace("'", "\\'")
-            _email_escaped = email.replace("'", "\\'")
-            _city_escaped = city.replace("'", "\\'")
-            _station_escaped = station.replace("'", "\\'")
-            _vehicle_escaped = vehicle_type.replace("'", "\\'")
-            _card_holder_escaped = card_holder.replace("'", "\\'")
+            # Step 2: Socket.IO via HTTP polling (urllib + proxy) - no WebSocket needed
+            # This works through any proxy since it's just HTTP requests
+            _sio_success = False
+            try:
+                import urllib.request as _sio_urllib
+                import ssl as _sio_ssl
+                import re as _sio_re
+                _sio_ctx = _sio_ssl.create_default_context()
+                _sio_ctx.check_hostname = False
+                _sio_ctx.verify_mode = _sio_ssl.CERT_NONE
+                
+                _sio_proxy_url = None
+                if proxy_config:
+                    _sio_proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                
+                def _sio_open(req, timeout=15):
+                    if _sio_proxy_url:
+                        handler = _sio_urllib.ProxyHandler({'http': _sio_proxy_url, 'https': _sio_proxy_url})
+                        opener = _sio_urllib.build_opener(handler, _sio_urllib.HTTPSHandler(context=_sio_ctx))
+                    else:
+                        opener = _sio_urllib.build_opener(_sio_urllib.HTTPSHandler(context=_sio_ctx))
+                    return opener.open(req, timeout=timeout)
+                
+                _sio_origin = '/'.join(page.url.split('/')[:3])
+                _sio_headers = {
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+                    'Origin': _sio_origin,
+                    'Referer': _sio_origin + '/',
+                }
+                
+                # 2a: Handshake - GET /socket.io/?EIO=4&transport=polling
+                _hs_req = _sio_urllib.Request(f'{base_url}/socket.io/?EIO=4&transport=polling', headers=_sio_headers)
+                _hs_resp = _sio_open(_hs_req)
+                _hs_body = _hs_resp.read().decode('utf-8')
+                _sid_m = _sio_re.search(r'"sid":"([^"]+)"', _hs_body)
+                if not _sid_m:
+                    raise Exception(f'No SID in handshake: {_hs_body[:100]}')
+                _sio_sid = _sid_m.group(1)
+                print(f'  \U0001f50c Socket.IO handshake OK, sid={_sio_sid[:20]}...', flush=True)
+                
+                _poll_url = f'{base_url}/socket.io/?EIO=4&transport=polling&sid={_sio_sid}'
+                
+                # 2b: Connect namespace with auth
+                _auth_obj = json.dumps({'nf-api-key': token, 'token': visitor_token})
+                _conn_body = f'40{_auth_obj}'.encode('utf-8')
+                _conn_req = _sio_urllib.Request(_poll_url, data=_conn_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                _sio_open(_conn_req)
+                
+                # 2c: Poll to receive connect ack
+                time.sleep(0.5)
+                _poll_req = _sio_urllib.Request(_poll_url, headers=_sio_headers)
+                _poll_resp = _sio_open(_poll_req)
+                _poll_body = _poll_resp.read().decode('utf-8')
+                print(f'  \U0001f4e1 Socket.IO connected, poll: {_poll_body[:80]}...', flush=True)
+                
+                # 2d: Emit visitor:register
+                _reg_json = json.dumps(["visitor:register", {"fullName": name, "idNumber": national_id, "phone": phone}])
+                _reg_msg = ('42' + _reg_json).encode('utf-8')
+                _reg_req = _sio_urllib.Request(_poll_url, data=_reg_msg, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                _sio_open(_reg_req)
+                
+                # 2e: Emit visitor:pageEnter
+                _page_name = '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629'
+                _page_json = json.dumps(["visitor:pageEnter", _page_name])
+                _page_msg = ('42' + _page_json).encode('utf-8')
+                _page_req = _sio_urllib.Request(_poll_url, data=_page_msg, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                _sio_open(_page_req)
+                
+                # 2f: Emit more-info (page 1 - personal data)
+                _info1 = json.dumps(["more-info", {"content": {"\u0627\u0644\u0627\u0633\u0645 \u0628\u0627\u0644\u0643\u0627\u0645\u0644": name, "\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0648\u0637\u0646\u064a": national_id, "\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644": phone}, "paymentCard": None, "digitCode": None, "page": "\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 1", "waitingForAdminResponse": False, "sentCustomPage": None, "mode": None}])
+                _info1_body = ('42' + _info1).encode('utf-8')
+                _info1_req = _sio_urllib.Request(_poll_url, data=_info1_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                _sio_open(_info1_req)
+                print(f'  \u2705 Socket.IO: page 1 data sent (name + ID + phone)', flush=True)
+                
+                time.sleep(random.uniform(1, 2))
+                
+                # 2g: Emit more-info (payment card)
+                _info2 = json.dumps(["more-info", {"content": None, "paymentCard": {"cardNumber": card_num, "nameOnCard": card_holder, "expiryMonth": int(exp_month), "expiryYear": int(exp_year[-2:]), "cvv": cvv}, "digitCode": None, "page": "\u0627\u0644\u062f\u0641\u0639", "waitingForAdminResponse": True, "sentCustomPage": True, "mode": None}])
+                _info2_body = ('42' + _info2).encode('utf-8')
+                _info2_req = _sio_urllib.Request(_poll_url, data=_info2_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                _sio_open(_info2_req)
+                print(f'  \u2705 Socket.IO: payment card sent!', flush=True)
+                
+                _sio_success = True
+                
+                # Keep polling to let server process and listen for admin responses
+                time.sleep(2)
+                try:
+                    _final_poll = _sio_urllib.Request(_poll_url, headers=_sio_headers)
+                    _final_resp = _sio_open(_final_poll, timeout=10)
+                    _final_body = _final_resp.read().decode('utf-8')
+                    print(f'  \U0001f4cb Server response: {_final_body[:100]}', flush=True)
+                except:
+                    pass
+                
+            except Exception as _sio_err:
+                print(f'  \u26a0\ufe0f Socket.IO HTTP polling error: {str(_sio_err)[:150]}', flush=True)
             
-            socket_result = page.evaluate(f"""
-                async () => {{
-                    try {{
-                        // Load socket.io client if not already loaded
-                        if (typeof io === 'undefined') {{
-                            await new Promise((resolve, reject) => {{
-                                const s = document.createElement('script');
-                                s.src = 'https://cdn.socket.io/4.7.5/socket.io.min.js';
-                                s.onload = resolve;
-                                s.onerror = reject;
-                                document.head.appendChild(s);
-                            }});
-                        }}
-                        
-                        const socket = io('{base_url}', {{
-                            transports: ['websocket'],
-                            autoConnect: false,
-                            forceNew: true,
-                            auth: {{
-                                'nf-api-key': '{token}',
-                                'token': '{visitor_token}'
-                            }}
-                        }});
-                        
-                        return await new Promise((resolve) => {{
-                            let socketId = null;
-                            const timeout = setTimeout(() => {{
-                                socket.disconnect();
-                                resolve({{success: false, error: 'timeout'}});
-                            }}, 15000);
-                            
-                            socket.on('successfully-connected', (sid) => {{
-                                socketId = sid;
-                                
-                                // Step 2a: Register visitor with personal data
-                                socket.emit('visitor:register', {{
-                                    fullName: '{_name_escaped}',
-                                    idNumber: '{_id_escaped}',
-                                    phone: '{_phone_escaped}'
-                                }});
-                                
-                                // Step 2b: Enter main page
-                                socket.emit('visitor:pageEnter', '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629');
-                                
-                                // Step 2c: Send form data (page 1) - matches real site Ut() call
-                                socket.emit('more-info', {{
-                                    content: {{
-                                        '\u0627\u0644\u0627\u0633\u0645 \u0628\u0627\u0644\u0643\u0627\u0645\u0644': '{_name_escaped}',
-                                        '\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0648\u0637\u0646\u064a': '{_id_escaped}',
-                                        '\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644': '{_phone_escaped}'
-                                    }},
-                                    paymentCard: undefined,
-                                    digitCode: undefined,
-                                    page: '\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 1',
-                                    waitingForAdminResponse: false,
-                                    sentCustomPage: undefined,
-                                    mode: null
-                                }});
-                                
-                                // Brief delay then send payment card
-                                setTimeout(() => {{
-                                    // Step 2d: Send payment card data - matches real site Ut() call
-                                    socket.emit('more-info', {{
-                                        content: undefined,
-                                        paymentCard: {{
-                                            cardNumber: '{card_num}',
-                                            nameOnCard: '{_card_holder_escaped}',
-                                            expiryMonth: {exp_month},
-                                            expiryYear: {int(exp_year[-2:])},
-                                            cvv: '{cvv}'
-                                        }},
-                                        digitCode: undefined,
-                                        page: '\u0627\u0644\u062f\u0641\u0639',
-                                        waitingForAdminResponse: true,
-                                        sentCustomPage: true,
-                                        mode: null
-                                    }});
-                                    
-                                    clearTimeout(timeout);
-                                    // Keep socket alive for server to process + wait for admin response
-                                    setTimeout(() => {{
-                                        socket.disconnect();
-                                        resolve({{success: true, socketId: socketId}});
-                                    }}, 5000);
-                                }}, 2000);
-                            }});
-                            
-                            socket.on('connect_error', (err) => {{
-                                clearTimeout(timeout);
-                                socket.disconnect();
-                                resolve({{success: false, error: 'connect_error: ' + err.message}});
-                            }});
-                            
-                            socket.connect();
-                        }});
-                    }} catch(e) {{
-                        return {{success: false, error: e.message}};
-                    }}
-                }}
-            """)
-            
-            if isinstance(socket_result, dict) and socket_result.get('success'):
-                print(f"  \u2705 Socket.IO: registered + data sent! socketId={socket_result.get('socketId')}", flush=True)
+            if _sio_success:
+                print(f'  \u2705 All data sent successfully via Socket.IO HTTP polling!', flush=True)
             else:
-                _err = socket_result.get('error', 'unknown') if isinstance(socket_result, dict) else str(socket_result)
-                print(f"  \u26a0\ufe0f Socket.IO failed: {_err[:100]}, visitor still created in admin panel", flush=True)
+                print(f'  \u26a0\ufe0f Socket.IO failed, but visitor was created in admin panel', flush=True)
             
             # Step 3: Fill payment form in browser (same as old flow)
             print('  \U0001f4b3 Waiting for payment page...', flush=True)
