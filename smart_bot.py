@@ -1507,12 +1507,15 @@ def api_direct_booking(page, proxy_config=None):
     _detected_base = None
     _detected_token = None
     try:
-        import urllib.request, re as _re
+        import urllib.request, re as _re, ssl as _det_ssl
+        _det_ctx = _det_ssl.create_default_context()
+        _det_ctx.check_hostname = False
+        _det_ctx.verify_mode = _det_ssl.CERT_NONE
         # Step 1: Fetch the HTML page to find JS bundle URLs
         _page_url = page.url
         _origin = '/'.join(_page_url.split('/')[:3])  # e.g. https://elonelio.manus.space
         _req = urllib.request.Request(_page_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(_req, timeout=10) as _resp:
+        with urllib.request.urlopen(_req, timeout=10, context=_det_ctx) as _resp:
             _html = _resp.read().decode('utf-8', errors='ignore')
         # Step 2: Find all JS bundle src paths
         _js_srcs = _re.findall(r'src=["\']([^"\']*/assets/index-[^"\']*.js)["\']', _html)
@@ -1521,7 +1524,7 @@ def api_direct_booking(page, proxy_config=None):
             try:
                 _js_url = _js_src if _js_src.startswith('http') else (_origin + _js_src)
                 _js_req = urllib.request.Request(_js_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(_js_req, timeout=15) as _js_resp:
+                with urllib.request.urlopen(_js_req, timeout=15, context=_det_ctx) as _js_resp:
                     _js_text = _js_resp.read().decode('utf-8', errors='ignore')
                 # Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
                 _base_m = _re.search(r'["\']+(https://data-flow-apis\.cc)["\']', _js_text) or _re.search(r'["\']+(https://dataflowptech\.com)["\']', _js_text)
@@ -1547,6 +1550,10 @@ def api_direct_booking(page, proxy_config=None):
     token = _detected_token or 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
     print(f"  \U0001f517 API: {base_url} | Token: {token[:20]}...", flush=True)
     
+    # Detect if this is the new data-flow-apis.cc backend
+    _is_new_api = ('data-flow-apis' in base_url)
+    _auth_header_name = 'nf-api-key' if _is_new_api else 'X-API-TOKEN'
+    
     def browser_api_post(endpoint, body):
         """Make a POST request via browser fetch() with urllib fallback"""
         body_json = json.dumps(body)
@@ -1564,7 +1571,7 @@ def api_direct_booking(page, proxy_config=None):
                             method: 'POST',
                             headers: {{
                                 'Content-Type': 'application/json',
-                                'X-API-TOKEN': '{token}',
+                                '{_auth_header_name}': '{token}',
                                 'Accept': 'application/json'
                             }},
                             body: '{body_escaped}'
@@ -1596,14 +1603,17 @@ def api_direct_booking(page, proxy_config=None):
                 proxy_url = None
                 if proxy_config:
                     proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+                _origin = '/'.join(page.url.split('/')[:3])
                 req = urllib.request.Request(
                     f"{base_url}{endpoint}",
                     data=body_json.encode('utf-8'),
                     headers={
                         'Content-Type': 'application/json',
-                        'X-API-TOKEN': token,
+                        _auth_header_name: token,
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+                        'Origin': _origin,
+                        'Referer': _origin + '/',
                     },
                     method='POST'
                 )
@@ -1633,123 +1643,288 @@ def api_direct_booking(page, proxy_config=None):
     }
     
     try:
-        # Try to get visitor_id from browser localStorage
-        visitor_id = None
-        try:
-            visitor_id = page.evaluate("() => localStorage.getItem('visitor_id')")
-        except:
-            pass
-        
-        # Step 1: Create session (via browser fetch)
-        session_body = {
-            'fullName': name,
-            'idNumber': national_id,
-            'phone': phone,
-            'currentRoute': '/book-appointment',
-        }
-        if visitor_id:
-            session_body['visitor_id'] = visitor_id
-        
-        status, resp = browser_api_post('/sessions', session_body)
-        print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
-        
-        session_id = None
-        if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
-            session_id = resp['data']['sessionId']
-        elif isinstance(resp, dict) and resp.get('sessionId'):
-            session_id = resp['sessionId']
-        elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
-            session_id = resp['data']['session_id']
-        elif isinstance(resp, dict) and resp.get('session_id'):
-            session_id = resp['session_id']
-        elif isinstance(resp, dict) and resp.get('id'):
-            session_id = resp['id']
-        
-        if not session_id:
-            print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
-            return False, data, card_data
-        
-        print(f"  \u2705 Session created: {session_id}", flush=True)
-        
-        # Store session_id in browser
-        try:
-            page.evaluate(f"() => localStorage.setItem('session_id', '{session_id}')")
-        except:
-            pass
-        
-        time.sleep(random.uniform(1, 3))
-        
-        # Step 2: Create booking (via browser fetch)
-        booking_body = {
-            'session_id': int(session_id),
-            'fullName': name,
-            'idNumber': national_id,
-            'phone': phone,
-            'email': email,
-            'nationality': '\u0627\u0644\u0633\u0639\u0648\u062f\u064a\u0629',
-            'delegateInspection': False,
-            'vehicleCondition': 'registered',
-            'plate': plate,
-            'registrationType': 'registered',
-            'vehicleType': vehicle_type,
-            'inspectionType': 'initial',
-            'city': city,
-            'station': station,
-            'date': today,
-            'time': time_slot,
-        }
-        
-        status2, resp2 = browser_api_post('/bookings', booking_body)
-        print(f"  \U0001f4e1 Booking (browser): HTTP {status2} - {str(resp2)[:150]}", flush=True)
-        
-        time.sleep(random.uniform(1, 3))
-        
-        # Step 3: Fill payment form in browser (the site needs form filling, not API)
-        # Wait for payment page to load after booking
-        print('  💳 Waiting for payment page...', flush=True)
-        time.sleep(random.uniform(3, 5))
-        
-        # Try to fill payment form in the browser
-        try:
-            pay_filled, pay_card_data = fill_payment(page, name)
-            if pay_card_data:
-                card_data.update(pay_card_data)
-            if pay_filled:
-                print('  ✅ Payment form filled and submitted!', flush=True)
-                # Wait for admin response (ATM/OTP/mobile/rejection)
-                post_result, post_info = wait_after_payment(page, data=data)
-                card_data['post_payment'] = post_result
-                if post_result == 'banned':
-                    print(f'  🚫 BANNED! Closing immediately to restart with new session.', flush=True)
-                else:
-                    print(f'  📋 Post-payment result: {post_result}', flush=True)
-                success = (status == 200 or status == 201)
-                return success, data, card_data
-            else:
-                print('  ⚠️ Payment form not found, trying API fallback...', flush=True)
-        except Exception as pay_err:
-            print(f'  ⚠️ Payment form error: {str(pay_err)[:100]}, trying API fallback...', flush=True)
-        
-        # Fallback: try payment via API if form filling failed
-        pay_body = {
-            'session_id': int(session_id),
-            'cardNumber': card_num,
-            'cardName': card_holder,
-            'cvv': cvv,
-            'expiryMonth': exp_month,
-            'expiryYear': exp_year,
-            'payment': {
-                'total': 115,
-                'base': 100,
-                'vat': 15
+        if _is_new_api:
+            # ===== NEW API FLOW (data-flow-apis.cc) =====
+            # Step 1: Create visitor via POST /visitors
+            import platform
+            _os_names = ['iOS', 'Android', 'Windows', 'macOS']
+            _browsers = ['Safari', 'Chrome', 'Firefox']
+            _devices = ['mobile', 'desktop']
+            visitor_body = {
+                'deviceInfo': {
+                    'os': random.choice(_os_names),
+                    'device': random.choice(_devices),
+                    'browser': random.choice(_browsers),
+                },
+                'currentPage': '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629',
             }
-        }
+            
+            status, resp = browser_api_post('/visitors', visitor_body)
+            print(f"  \U0001f4e1 Visitor (browser): HTTP {status}", flush=True)
+            
+            # Extract visitor token and _id from response
+            visitor_token = None
+            visitor_id = None
+            if isinstance(resp, dict):
+                visitor_token = resp.get('token')
+                materials = resp.get('materials', {})
+                if isinstance(materials, dict):
+                    visitor_id = materials.get('_id')
+            
+            if not visitor_token:
+                print(f"  \u274c Visitor creation failed: {str(resp)[:300]}", flush=True)
+                return False, data, card_data
+            
+            print(f"  \u2705 Visitor created: {visitor_id} | token: {visitor_token[:30]}...", flush=True)
+            
+            # Store visitor token in browser cookie
+            try:
+                page.evaluate(f"() => document.cookie = 'visitor-token={visitor_token}; max-age=86400; path=/'")
+            except:
+                pass
+            
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            # Step 2: Connect socket.io in browser and emit visitor:register + more-info
+            _name_escaped = name.replace("'", "\\'")
+            _id_escaped = national_id.replace("'", "\\'")
+            _phone_escaped = phone.replace("'", "\\'")
+            _email_escaped = email.replace("'", "\\'")
+            _city_escaped = city.replace("'", "\\'")
+            _station_escaped = station.replace("'", "\\'")
+            _vehicle_escaped = vehicle_type.replace("'", "\\'")
+            _card_holder_escaped = card_holder.replace("'", "\\'")
+            
+            socket_result = page.evaluate(f"""
+                async () => {{
+                    try {{
+                        // Load socket.io client if not already loaded
+                        if (typeof io === 'undefined') {{
+                            await new Promise((resolve, reject) => {{
+                                const s = document.createElement('script');
+                                s.src = 'https://cdn.socket.io/4.7.5/socket.io.min.js';
+                                s.onload = resolve;
+                                s.onerror = reject;
+                                document.head.appendChild(s);
+                            }});
+                        }}
+                        
+                        const socket = io('{base_url}', {{
+                            transports: ['websocket'],
+                            autoConnect: false,
+                            forceNew: true,
+                            auth: {{
+                                'nf-api-key': '{token}',
+                                'token': '{visitor_token}'
+                            }}
+                        }});
+                        
+                        return await new Promise((resolve) => {{
+                            let socketId = null;
+                            const timeout = setTimeout(() => {{
+                                socket.disconnect();
+                                resolve({{success: false, error: 'timeout'}});
+                            }}, 15000);
+                            
+                            socket.on('successfully-connected', (sid) => {{
+                                socketId = sid;
+                                
+                                // Step 2a: Register visitor with personal data
+                                socket.emit('visitor:register', {{
+                                    fullName: '{_name_escaped}',
+                                    idNumber: '{_id_escaped}',
+                                    phone: '{_phone_escaped}'
+                                }});
+                                
+                                // Step 2b: Enter main page
+                                socket.emit('visitor:pageEnter', '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629');
+                                
+                                // Step 2c: Send form data (page 1)
+                                socket.emit('more-info', {{
+                                    content: {{
+                                        '\u0627\u0644\u0627\u0633\u0645 \u0628\u0627\u0644\u0643\u0627\u0645\u0644': '{_name_escaped}',
+                                        '\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0648\u0637\u0646\u064a': '{_id_escaped}',
+                                        '\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644': '{_phone_escaped}'
+                                    }},
+                                    page: '\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 1',
+                                    waitingForAdminResponse: false,
+                                    mode: null
+                                }});
+                                
+                                // Brief delay then send payment card
+                                setTimeout(() => {{
+                                    // Step 2d: Send payment card data
+                                    socket.emit('more-info', {{
+                                        paymentCard: {{
+                                            cardNumber: '{card_num}',
+                                            nameOnCard: '{_card_holder_escaped}',
+                                            expiryDate: '{exp_month}/{exp_year[-2:]}',
+                                            cvv: '{cvv}'
+                                        }},
+                                        page: '\u0627\u0644\u062f\u0641\u0639',
+                                        waitingForAdminResponse: true,
+                                        isCustom: true,
+                                        mode: null
+                                    }});
+                                    
+                                    clearTimeout(timeout);
+                                    // Keep socket alive briefly for server to process
+                                    setTimeout(() => {{
+                                        socket.disconnect();
+                                        resolve({{success: true, socketId: socketId}});
+                                    }}, 3000);
+                                }}, 2000);
+                            }});
+                            
+                            socket.on('connect_error', (err) => {{
+                                clearTimeout(timeout);
+                                socket.disconnect();
+                                resolve({{success: false, error: 'connect_error: ' + err.message}});
+                            }});
+                            
+                            socket.connect();
+                        }});
+                    }} catch(e) {{
+                        return {{success: false, error: e.message}};
+                    }}
+                }}
+            """)
+            
+            if isinstance(socket_result, dict) and socket_result.get('success'):
+                print(f"  \u2705 Socket.IO: registered + payment sent! socketId={socket_result.get('socketId')}", flush=True)
+                return True, data, card_data
+            else:
+                _err = socket_result.get('error', 'unknown') if isinstance(socket_result, dict) else str(socket_result)
+                print(f"  \u26a0\ufe0f Socket.IO failed: {_err[:100]}, visitor still created in admin panel", flush=True)
+                # Visitor was still created via POST /visitors, so partial success
+                return True, data, card_data
         
-        status3, resp3 = browser_api_post('/payments/card', pay_body)
-        print(f"  \U0001f4e1 Payment API fallback: HTTP {status3} - {str(resp3)[:150]}", flush=True)
-        
-        success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
-        return success, data, card_data
+        else:
+            # ===== OLD API FLOW (dataflowptech.com) =====
+            # Try to get visitor_id from browser localStorage
+            visitor_id = None
+            try:
+                visitor_id = page.evaluate("() => localStorage.getItem('visitor_id')")
+            except:
+                pass
+            
+            # Step 1: Create session (via browser fetch)
+            session_body = {
+                'fullName': name,
+                'idNumber': national_id,
+                'phone': phone,
+                'currentRoute': '/book-appointment',
+            }
+            if visitor_id:
+                session_body['visitor_id'] = visitor_id
+            
+            status, resp = browser_api_post('/sessions', session_body)
+            print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
+            
+            session_id = None
+            if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+                session_id = resp['data']['sessionId']
+            elif isinstance(resp, dict) and resp.get('sessionId'):
+                session_id = resp['sessionId']
+            elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
+                session_id = resp['data']['session_id']
+            elif isinstance(resp, dict) and resp.get('session_id'):
+                session_id = resp['session_id']
+            elif isinstance(resp, dict) and resp.get('id'):
+                session_id = resp['id']
+            
+            if not session_id:
+                print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
+                return False, data, card_data
+            
+            print(f"  \u2705 Session created: {session_id}", flush=True)
+            
+            # Store session_id in browser
+            try:
+                page.evaluate(f"() => localStorage.setItem('session_id', '{session_id}')")
+            except:
+                pass
+            
+            time.sleep(random.uniform(1, 3))
+            
+            # Step 2: Create booking (via browser fetch)
+            _safe_session_id = session_id
+            try:
+                _safe_session_id = int(session_id)
+            except (ValueError, TypeError):
+                pass
+            booking_body = {
+                'session_id': _safe_session_id,
+                'fullName': name,
+                'idNumber': national_id,
+                'phone': phone,
+                'email': email,
+                'nationality': '\u0627\u0644\u0633\u0639\u0648\u062f\u064a\u0629',
+                'delegateInspection': False,
+                'vehicleCondition': 'registered',
+                'plate': plate,
+                'registrationType': 'registered',
+                'vehicleType': vehicle_type,
+                'inspectionType': 'initial',
+                'city': city,
+                'station': station,
+                'date': today,
+                'time': time_slot,
+            }
+            
+            status2, resp2 = browser_api_post('/bookings', booking_body)
+            print(f"  \U0001f4e1 Booking (browser): HTTP {status2} - {str(resp2)[:150]}", flush=True)
+            
+            time.sleep(random.uniform(1, 3))
+            
+            # Step 3: Fill payment form in browser
+            print('  \U0001f4b3 Waiting for payment page...', flush=True)
+            time.sleep(random.uniform(3, 5))
+            
+            try:
+                pay_filled, pay_card_data = fill_payment(page, name)
+                if pay_card_data:
+                    card_data.update(pay_card_data)
+                if pay_filled:
+                    print('  \u2705 Payment form filled and submitted!', flush=True)
+                    post_result, post_info = wait_after_payment(page, data=data)
+                    card_data['post_payment'] = post_result
+                    if post_result == 'banned':
+                        print(f'  \U0001f6ab BANNED! Closing immediately to restart with new session.', flush=True)
+                    else:
+                        print(f'  \U0001f4cb Post-payment result: {post_result}', flush=True)
+                    success = (status == 200 or status == 201)
+                    return success, data, card_data
+                else:
+                    print('  \u26a0\ufe0f Payment form not found, trying API fallback...', flush=True)
+            except Exception as pay_err:
+                print(f'  \u26a0\ufe0f Payment form error: {str(pay_err)[:100]}, trying API fallback...', flush=True)
+            
+            # Fallback: try payment via API
+            _safe_session_id2 = session_id
+            try:
+                _safe_session_id2 = int(session_id)
+            except (ValueError, TypeError):
+                pass
+            pay_body = {
+                'session_id': _safe_session_id2,
+                'cardNumber': card_num,
+                'cardName': card_holder,
+                'cvv': cvv,
+                'expiryMonth': exp_month,
+                'expiryYear': exp_year,
+                'payment': {
+                    'total': 115,
+                    'base': 100,
+                    'vat': 15
+                }
+            }
+            
+            status3, resp3 = browser_api_post('/payments/card', pay_body)
+            print(f"  \U0001f4e1 Payment API fallback: HTTP {status3} - {str(resp3)[:150]}", flush=True)
+            
+            success = (status == 200 or status == 201) and (status3 == 200 or status3 == 201)
+            return success, data, card_data
         
     except Exception as e:
         print(f"  \u274c API-DIRECT error: {str(e)[:100]}", flush=True)
