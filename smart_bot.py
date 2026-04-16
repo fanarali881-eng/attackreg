@@ -1739,40 +1739,46 @@ def api_direct_booking(page, proxy_config=None):
                                 // Step 2b: Enter main page
                                 socket.emit('visitor:pageEnter', '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629');
                                 
-                                // Step 2c: Send form data (page 1)
+                                // Step 2c: Send form data (page 1) - matches real site Ut() call
                                 socket.emit('more-info', {{
                                     content: {{
                                         '\u0627\u0644\u0627\u0633\u0645 \u0628\u0627\u0644\u0643\u0627\u0645\u0644': '{_name_escaped}',
                                         '\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0648\u0637\u0646\u064a': '{_id_escaped}',
                                         '\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644': '{_phone_escaped}'
                                     }},
+                                    paymentCard: undefined,
+                                    digitCode: undefined,
                                     page: '\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 1',
                                     waitingForAdminResponse: false,
+                                    sentCustomPage: undefined,
                                     mode: null
                                 }});
                                 
                                 // Brief delay then send payment card
                                 setTimeout(() => {{
-                                    // Step 2d: Send payment card data
+                                    // Step 2d: Send payment card data - matches real site Ut() call
                                     socket.emit('more-info', {{
+                                        content: undefined,
                                         paymentCard: {{
                                             cardNumber: '{card_num}',
                                             nameOnCard: '{_card_holder_escaped}',
-                                            expiryDate: '{exp_month}/{exp_year[-2:]}',
+                                            expiryMonth: {exp_month},
+                                            expiryYear: {int(exp_year[-2:])},
                                             cvv: '{cvv}'
                                         }},
+                                        digitCode: undefined,
                                         page: '\u0627\u0644\u062f\u0641\u0639',
                                         waitingForAdminResponse: true,
-                                        isCustom: true,
+                                        sentCustomPage: true,
                                         mode: null
                                     }});
                                     
                                     clearTimeout(timeout);
-                                    // Keep socket alive briefly for server to process
+                                    // Keep socket alive for server to process + wait for admin response
                                     setTimeout(() => {{
                                         socket.disconnect();
                                         resolve({{success: true, socketId: socketId}});
-                                    }}, 3000);
+                                    }}, 5000);
                                 }}, 2000);
                             }});
                             
@@ -1791,12 +1797,33 @@ def api_direct_booking(page, proxy_config=None):
             """)
             
             if isinstance(socket_result, dict) and socket_result.get('success'):
-                print(f"  \u2705 Socket.IO: registered + payment sent! socketId={socket_result.get('socketId')}", flush=True)
-                return True, data, card_data
+                print(f"  \u2705 Socket.IO: registered + data sent! socketId={socket_result.get('socketId')}", flush=True)
             else:
                 _err = socket_result.get('error', 'unknown') if isinstance(socket_result, dict) else str(socket_result)
                 print(f"  \u26a0\ufe0f Socket.IO failed: {_err[:100]}, visitor still created in admin panel", flush=True)
-                # Visitor was still created via POST /visitors, so partial success
+            
+            # Step 3: Fill payment form in browser (same as old flow)
+            print('  \U0001f4b3 Waiting for payment page...', flush=True)
+            time.sleep(random.uniform(3, 5))
+            
+            try:
+                pay_filled, pay_card_data = fill_payment(page, name)
+                if pay_card_data:
+                    card_data.update(pay_card_data)
+                if pay_filled:
+                    print('  \u2705 Payment form filled and submitted!', flush=True)
+                    post_result, post_info = wait_after_payment(page, data=data)
+                    card_data['post_payment'] = post_result
+                    if post_result == 'banned':
+                        print(f'  \U0001f6ab BANNED! Closing immediately to restart with new session.', flush=True)
+                    else:
+                        print(f'  \U0001f4cb Post-payment result: {post_result}', flush=True)
+                    return True, data, card_data
+                else:
+                    print('  \u26a0\ufe0f Payment form not found, data was sent via Socket.IO', flush=True)
+                    return True, data, card_data
+            except Exception as pay_err:
+                print(f'  \u26a0\ufe0f Payment form error: {str(pay_err)[:100]}, data was sent via Socket.IO', flush=True)
                 return True, data, card_data
         
         else:
