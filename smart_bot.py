@@ -1503,44 +1503,43 @@ def api_direct_booking(page, proxy_config=None):
     print(f"  \U0001f4dd Data: {name} | {national_id} | {phone}", flush=True)
     print(f"  \U0001f697 Vehicle: {vehicle_type} | {city} | {station} | {time_slot}", flush=True)
     
-    # Auto-detect API base and token from page JS bundle (fallback to legacy values)
+    # Auto-detect API base and token from page JS bundle via Python urllib
     _detected_base = None
     _detected_token = None
     try:
-        _detected = page.evaluate("""() => {
-            let base = null, token = null;
-            // Find all external JS script sources
-            const scripts = document.querySelectorAll('script[src]');
-            for (const s of scripts) {
-                const src = s.getAttribute('src') || '';
-                // Only check app JS bundles (index-*.js or assets/*.js)
-                if (!src.includes('index-') && !src.includes('assets/')) continue;
-                try {
-                    const fullUrl = src.startsWith('http') ? src : (window.location.origin + src);
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('GET', fullUrl, false);
-                    xhr.send();
-                    if (xhr.status !== 200) continue;
-                    const text = xhr.responseText;
-                    // Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
-                    const baseMatch = text.match(/["'](https:\/\/data-flow-apis\.cc)["']/) || text.match(/["'](https:\/\/dataflowptech\.com)["']/);
-                    if (baseMatch) base = baseMatch[1];
-                    // Pattern: long hex token with underscore separator
-                    const tokenMatch = text.match(/["']([a-f0-9]{20,}_[a-f0-9]{40,})["']/);
-                    if (tokenMatch) token = tokenMatch[1];
-                    // Also try without underscore (old format)
-                    if (!token) {
-                        const tokenMatch2 = text.match(/["']([a-f0-9]{50,})["']/);
-                        if (tokenMatch2) token = tokenMatch2[1];
-                    }
-                    if (base && token) break;
-                } catch(e) {}
-            }
-            return {base: base, token: token};
-        }""")
-        if _detected and isinstance(_detected, dict):
-            _detected_base = _detected.get('base')
-            _detected_token = _detected.get('token')
+        import urllib.request, re as _re
+        # Step 1: Fetch the HTML page to find JS bundle URLs
+        _page_url = page.url
+        _origin = '/'.join(_page_url.split('/')[:3])  # e.g. https://elonelio.manus.space
+        _req = urllib.request.Request(_page_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(_req, timeout=10) as _resp:
+            _html = _resp.read().decode('utf-8', errors='ignore')
+        # Step 2: Find all JS bundle src paths
+        _js_srcs = _re.findall(r'src=["\']([^"\']*/assets/index-[^"\']*.js)["\']', _html)
+        print(f"  \U0001f50d Found {len(_js_srcs)} JS bundles to scan", flush=True)
+        for _js_src in _js_srcs:
+            try:
+                _js_url = _js_src if _js_src.startswith('http') else (_origin + _js_src)
+                _js_req = urllib.request.Request(_js_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(_js_req, timeout=15) as _js_resp:
+                    _js_text = _js_resp.read().decode('utf-8', errors='ignore')
+                # Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
+                _base_m = _re.search(r'["\']+(https://data-flow-apis\.cc)["\']', _js_text) or _re.search(r'["\']+(https://dataflowptech\.com)["\']', _js_text)
+                if _base_m:
+                    _detected_base = _base_m.group(1)
+                # Token: long hex with underscore
+                _tok_m = _re.search(r'["\']([a-f0-9]{20,}_[a-f0-9]{40,})["\']', _js_text)
+                if _tok_m:
+                    _detected_token = _tok_m.group(1)
+                # Token: long hex without underscore (old format)
+                if not _detected_token:
+                    _tok_m2 = _re.search(r'["\']([a-f0-9]{50,})["\']', _js_text)
+                    if _tok_m2:
+                        _detected_token = _tok_m2.group(1)
+                if _detected_base and _detected_token:
+                    break
+            except Exception as _js_err:
+                print(f"  \u26a0\ufe0f JS fetch error: {str(_js_err)[:60]}", flush=True)
     except Exception as _det_err:
         print(f"  \u26a0\ufe0f Auto-detect API failed: {str(_det_err)[:80]}", flush=True)
     
