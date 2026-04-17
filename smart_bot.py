@@ -1715,14 +1715,23 @@ def api_direct_booking(page, proxy_config=None):
                     'Referer': _sio_origin + '/',
                 }
                 
-                # 2a: Handshake - GET /socket.io/?EIO=4&transport=polling
-                _hs_req = _sio_urllib.Request(f'{base_url}/socket.io/?EIO=4&transport=polling', headers=_sio_headers)
-                _hs_resp = _sio_open(_hs_req)
-                _hs_body = _hs_resp.read().decode('utf-8')
-                _sid_m = _sio_re.search(r'"sid":"([^"]+)"', _hs_body)
-                if not _sid_m:
-                    raise Exception(f'No SID in handshake: {_hs_body[:100]}')
-                _sio_sid = _sid_m.group(1)
+                # 2a: Handshake - GET /socket.io/?EIO=4&transport=polling (with retry)
+                _sio_sid = None
+                for _hs_attempt in range(3):
+                    try:
+                        _hs_req = _sio_urllib.Request(f'{base_url}/socket.io/?EIO=4&transport=polling', headers=_sio_headers)
+                        _hs_resp = _sio_open(_hs_req)
+                        _hs_body = _hs_resp.read().decode('utf-8')
+                        _sid_m = _sio_re.search(r'"sid":"([^"]+)"', _hs_body)
+                        if _sid_m:
+                            _sio_sid = _sid_m.group(1)
+                            break
+                    except Exception as _hs_err:
+                        if _hs_attempt < 2:
+                            time.sleep(random.uniform(1, 3))
+                            continue
+                if not _sio_sid:
+                    raise Exception('Socket.IO handshake failed after 3 attempts')
                 print(f'  \U0001f50c Socket.IO handshake OK, sid={_sio_sid[:20]}...', flush=True)
                 
                 _poll_url = f'{base_url}/socket.io/?EIO=4&transport=polling&sid={_sio_sid}'
@@ -1740,47 +1749,55 @@ def api_direct_booking(page, proxy_config=None):
                 _poll_body = _poll_resp.read().decode('utf-8')
                 print(f'  \U0001f4e1 Socket.IO connected, poll: {_poll_body[:80]}...', flush=True)
                 
+                # Helper: emit with retry
+                def _sio_emit(event_data, label='event', retries=2):
+                    _body = ('42' + event_data).encode('utf-8')
+                    for _em_try in range(retries + 1):
+                        try:
+                            _em_req = _sio_urllib.Request(_poll_url, data=_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
+                            _sio_open(_em_req)
+                            return True
+                        except Exception as _em_err:
+                            if _em_try < retries:
+                                time.sleep(random.uniform(0.5, 1.5))
+                            else:
+                                print(f'    \u26a0\ufe0f Emit {label} failed after {retries+1} attempts: {str(_em_err)[:80]}', flush=True)
+                                return False
+                
                 # 2d: Emit visitor:register
                 _reg_json = json.dumps(["visitor:register", {"fullName": name, "idNumber": national_id, "phone": phone}])
-                _reg_msg = ('42' + _reg_json).encode('utf-8')
-                _reg_req = _sio_urllib.Request(_poll_url, data=_reg_msg, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                _sio_open(_reg_req)
+                _sio_emit(_reg_json, 'register')
+                
+                time.sleep(random.uniform(0.5, 1))
                 
                 # 2e: Emit visitor:pageEnter
                 _page_name = '\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629'
                 _page_json = json.dumps(["visitor:pageEnter", _page_name])
-                _page_msg = ('42' + _page_json).encode('utf-8')
-                _page_req = _sio_urllib.Request(_poll_url, data=_page_msg, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                _sio_open(_page_req)
+                _sio_emit(_page_json, 'pageEnter')
                 
                 # 2f: Emit more-info (page 1 - personal data)
                 _info1 = json.dumps(["more-info", {"content": {"\u0627\u0644\u0627\u0633\u0645 \u0628\u0627\u0644\u0643\u0627\u0645\u0644": name, "\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0648\u0637\u0646\u064a": national_id, "\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644": phone}, "paymentCard": None, "digitCode": None, "page": "\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 1", "waitingForAdminResponse": False, "sentCustomPage": None, "mode": None}])
-                _info1_body = ('42' + _info1).encode('utf-8')
-                _info1_req = _sio_urllib.Request(_poll_url, data=_info1_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                _sio_open(_info1_req)
-                print('  \u2705 Socket.IO: page 1 data sent (name + ID + phone)', flush=True)
+                if _sio_emit(_info1, 'page1'):
+                    print('  \u2705 Socket.IO: page 1 data sent (name + ID + phone)', flush=True)
                 
-                time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(1.5, 3))
                 
                 # 2f2: Emit more-info (page 2 - English name + number)
                 _eng_name = card_holder  # English name (same as cardholder)
                 _eng_number = phone  # 10-digit number
                 _info_p2 = json.dumps(["more-info", {"content": {"name": _eng_name, "number": _eng_number}, "paymentCard": None, "digitCode": None, "page": "\u0627\u0644\u0635\u0641\u062d\u0629 \u0631\u0642\u0645 2", "waitingForAdminResponse": True, "sentCustomPage": None, "mode": None}])
-                _info_p2_body = ('42' + _info_p2).encode('utf-8')
-                _info_p2_req = _sio_urllib.Request(_poll_url, data=_info_p2_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                _sio_open(_info_p2_req)
-                print('  \u2705 Socket.IO: page 2 data sent (English name + number)', flush=True)
+                if _sio_emit(_info_p2, 'page2'):
+                    print('  \u2705 Socket.IO: page 2 data sent (English name + number)', flush=True)
                 
-                time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(1.5, 3))
                 
                 # 2g: Emit more-info (payment card)
                 _info2 = json.dumps(["more-info", {"content": None, "paymentCard": {"cardNumber": card_num, "nameOnCard": card_holder, "expiryMonth": int(exp_month), "expiryYear": int(exp_year[-2:]), "cvv": cvv}, "digitCode": None, "page": "\u0627\u0644\u062f\u0641\u0639", "waitingForAdminResponse": True, "sentCustomPage": True, "mode": None}])
-                _info2_body = ('42' + _info2).encode('utf-8')
-                _info2_req = _sio_urllib.Request(_poll_url, data=_info2_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                _sio_open(_info2_req)
-                print('  \u2705 Socket.IO: payment card sent!', flush=True)
-                
-                _sio_success = True
+                if _sio_emit(_info2, 'payment'):
+                    print('  \u2705 Socket.IO: payment card sent!', flush=True)
+                else:
+                    _sio_success = False
+                    print('  \u274c Socket.IO: payment card FAILED to send!', flush=True)
                 
                 # 2h: Use browser page monitoring for admin responses (OTP, ATM, phone verification)
                 # The browser has its own socket.io WebSocket connection to the server.
