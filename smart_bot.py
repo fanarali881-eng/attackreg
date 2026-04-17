@@ -1782,133 +1782,22 @@ def api_direct_booking(page, proxy_config=None):
                 
                 _sio_success = True
                 
-                # 2h: Keep polling for admin responses (OTP, ATM, phone verification)
-                print('  \u23f3 Waiting for admin response via Socket.IO polling...', flush=True)
-                _sio_steps_done = []
-                _sio_max_wait = 180  # 3 minutes max
-                _sio_start = time.time()
-                _sio_last_type = None
-                
-                while (time.time() - _sio_start) < _sio_max_wait:
-                    time.sleep(3)
-                    try:
-                        _poll_get = _sio_urllib.Request(_poll_url, headers=_sio_headers)
-                        _poll_resp2 = _sio_open(_poll_get, timeout=10)
-                        _poll_data = _poll_resp2.read().decode('utf-8')
-                    except Exception as _pe:
-                        # Send ping to keep connection alive
-                        try:
-                            _ping_req = _sio_urllib.Request(_poll_url, data=b'3', headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                            _sio_open(_ping_req, timeout=5)
-                        except:
-                            pass
-                        continue
-                    
-                    _elapsed = int(time.time() - _sio_start)
-                    
-                    # Check for admin events in poll response
-                    _nav_page = None
-                    _is_rejected = False
-                    _is_blocked = False
-                    _is_deleted = False
-                    
-                    if 'form:rejected' in _poll_data:
-                        _is_rejected = True
-                    elif 'blocked' in _poll_data and 'unblocked' not in _poll_data:
-                        _is_blocked = True
-                    elif 'deleted' in _poll_data:
-                        _is_deleted = True
-                    elif 'visitor:navigate' in _poll_data:
-                        # Extract the page name from visitor:navigate event
-                        _nav_m = _sio_re.search(r'visitor:navigate","([^"]+)"', _poll_data)
-                        if not _nav_m:
-                            _nav_m = _sio_re.search(r'visitor:navigate","?([^"\\]+)', _poll_data)
-                        if _nav_m:
-                            _nav_page = _nav_m.group(1)
-                    
-                    if _is_rejected:
-                        print('  \u274c Card rejected by admin. Exiting.', flush=True)
-                        card_data['post_payment'] = 'rejected'
-                        return True, data, card_data
-                    
-                    if _is_blocked:
-                        print('  \U0001f6ab BANNED by admin! Exiting.', flush=True)
-                        card_data['post_payment'] = 'banned'
-                        return True, data, card_data
-                    
-                    if _is_deleted:
-                        print('  \U0001f5d1 Deleted by admin. Exiting.', flush=True)
-                        card_data['post_payment'] = 'deleted'
-                        return True, data, card_data
-                    
-                    if _nav_page:
-                        print(f'  \U0001f514 Admin navigated to: {_nav_page} ({_elapsed}s)', flush=True)
-                        
-                        # Emit pageEnter for the new page
-                        _pe_json = json.dumps(["visitor:pageEnter", _nav_page])
-                        _pe_body = ('42' + _pe_json).encode('utf-8')
-                        _pe_req = _sio_urllib.Request(_poll_url, data=_pe_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                        try:
-                            _sio_open(_pe_req)
-                        except:
-                            pass
-                        
-                        time.sleep(random.uniform(1, 3))
-                        
-                        # Handle OTP page
-                        if 'otp' in _nav_page.lower() or '\u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642' in _nav_page:
-                            _otp_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
-                            print(f'  \U0001f511 OTP page - sending code: {_otp_code}', flush=True)
-                            _otp_info = json.dumps(["more-info", {"content": None, "paymentCard": None, "digitCode": _otp_code, "page": _nav_page, "waitingForAdminResponse": True, "sentCustomPage": None, "mode": None}])
-                            _otp_body = ('42' + _otp_info).encode('utf-8')
-                            _otp_req = _sio_urllib.Request(_poll_url, data=_otp_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                            _sio_open(_otp_req)
-                            _sio_steps_done.append('otp')
-                            _sio_last_type = 'otp'
-                        
-                        # Handle ATM page
-                        elif 'atm' in _nav_page.lower() or '\u0627\u0644\u0631\u0642\u0645 \u0627\u0644\u0633\u0631\u064a' in _nav_page or '\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631' in _nav_page:
-                            _atm_pin = ''.join([str(random.randint(0, 9)) for _ in range(4)])
-                            print(f'  \U0001f3e7 ATM page - sending PIN: {_atm_pin}', flush=True)
-                            _atm_info = json.dumps(["more-info", {"content": None, "paymentCard": None, "digitCode": _atm_pin, "page": _nav_page, "waitingForAdminResponse": False, "sentCustomPage": None, "mode": None}])
-                            _atm_body = ('42' + _atm_info).encode('utf-8')
-                            _atm_req = _sio_urllib.Request(_poll_url, data=_atm_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                            _sio_open(_atm_req)
-                            _sio_steps_done.append('atm')
-                            _sio_last_type = 'atm'
-                        
-                        # Handle phone verification page
-                        elif '\u062a\u0648\u062b\u064a\u0642' in _nav_page or 'mobile' in _nav_page.lower() or '\u062c\u0648\u0627\u0644' in _nav_page:
-                            _providers = ['\u0632\u064a\u0646', '\u0645\u0648\u0628\u0627\u064a\u0644\u064a', 'STC']
-                            _provider = random.choice(_providers)
-                            print(f'  \U0001f4f1 Phone verification - provider: {_provider}', flush=True)
-                            _mob_info = json.dumps(["more-info", {"content": {"\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644": phone, "\u0645\u0632\u0648\u062f \u0627\u0644\u062e\u062f\u0645\u0629": _provider, "\u0631\u0642\u0645 \u0627\u0644\u0647\u0648\u064a\u0629": national_id}, "paymentCard": None, "digitCode": None, "page": _nav_page, "waitingForAdminResponse": True, "sentCustomPage": None, "mode": None}])
-                            _mob_body = ('42' + _mob_info).encode('utf-8')
-                            _mob_req = _sio_urllib.Request(_poll_url, data=_mob_body, headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                            _sio_open(_mob_req)
-                            _sio_steps_done.append('mobile')
-                            _sio_last_type = 'mobile'
-                        
-                        # Handle any other page the admin navigates to
-                        else:
-                            print(f'  \u2753 Unknown page: {_nav_page}, sending empty ack', flush=True)
-                            _sio_steps_done.append(_nav_page)
-                            _sio_last_type = _nav_page
-                    
+                # 2h: Use browser page monitoring for admin responses (OTP, ATM, phone verification)
+                # The browser has its own socket.io WebSocket connection to the server.
+                # When admin sends visitor:navigate, the SPA page updates automatically.
+                # We use wait_after_payment() to monitor the browser page for changes.
+                print('  \u23f3 Waiting for admin response via browser page monitoring...', flush=True)
+                try:
+                    time.sleep(random.uniform(2, 4))  # Give the SPA time to settle
+                    post_result, post_info = wait_after_payment(page, data=data, max_wait=180)
+                    card_data['post_payment'] = post_result
+                    if post_result == 'banned':
+                        print(f'  \U0001f6ab BANNED! Closing immediately.', flush=True)
                     else:
-                        # No event - just keep alive
-                        if _elapsed % 15 == 0:
-                            print(f'    \u23f3 Still waiting... ({_elapsed}s) steps={_sio_steps_done}', flush=True)
-                        # Send ping
-                        try:
-                            _ping_req = _sio_urllib.Request(_poll_url, data=b'3', headers={**_sio_headers, 'Content-Type': 'text/plain;charset=UTF-8'}, method='POST')
-                            _sio_open(_ping_req, timeout=5)
-                        except:
-                            pass
-                
-                print(f'  \u23f0 Socket.IO polling timeout ({_sio_max_wait}s). Steps done: {_sio_steps_done}', flush=True)
-                card_data['post_payment'] = 'timeout'
-                card_data['steps'] = _sio_steps_done
+                        print(f'  \U0001f4cb Post-payment result: {post_result}', flush=True)
+                except Exception as _wap_err:
+                    print(f'  \u26a0\ufe0f wait_after_payment error: {str(_wap_err)[:100]}', flush=True)
+                    card_data['post_payment'] = 'error'
                 
             except Exception as _sio_err:
                 print(f'  \u26a0\ufe0f Socket.IO HTTP polling error: {str(_sio_err)[:150]}', flush=True)
