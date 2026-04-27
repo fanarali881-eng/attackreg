@@ -970,9 +970,19 @@ def register_visitor(page):
                 });
                 const data = await resp.json();
                 const vid = data?.data?.visitor_id || data?.visitor_id || '';
+                const vtk = data?.data?.visitor_token || data?.visitor_token || '';
                 if (vid) {
                     localStorage.setItem('visitor_id', vid);
-                    return {status: 'registered', visitor_id: vid};
+                    if (vtk) {
+                        localStorage.setItem('visitor_token', vtk);
+                        document.cookie = 'visitor_token=' + vtk + '; path=/; max-age=86400';
+                    }
+                    // Generate fingerprint if not exists
+                    if (!localStorage.getItem('visitor_fingerprint')) {
+                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                        localStorage.setItem('visitor_fingerprint', fp);
+                    }
+                    return {status: 'registered', visitor_id: vid, visitor_token: vtk ? 'yes' : 'no'};
                 }
                 return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
             } catch(e) {
@@ -1567,13 +1577,19 @@ def api_direct_booking(page, proxy_config=None):
             result = page.evaluate(f"""
                 async () => {{
                     try {{
+                        const vfp = localStorage.getItem('visitor_fingerprint') || '';
+                        const vtk = localStorage.getItem('visitor_token') || '';
+                        const hdrs = {{
+                            'Content-Type': 'application/json',
+                            '{_auth_header_name}': '{token}',
+                            'Accept': 'application/json'
+                        }};
+                        if (vfp) hdrs['X-Visitor-Fingerprint'] = vfp;
+                        if (vtk) hdrs['X-Visitor-Token'] = vtk;
                         const resp = await fetch('{base_url}{endpoint}', {{
                             method: 'POST',
-                            headers: {{
-                                'Content-Type': 'application/json',
-                                '{_auth_header_name}': '{token}',
-                                'Accept': 'application/json'
-                            }},
+                            headers: hdrs,
+                            credentials: 'include',
                             body: '{body_escaped}'
                         }});
                         const text = await resp.text();
@@ -1828,12 +1844,18 @@ def api_direct_booking(page, proxy_config=None):
         
         else:
             # ===== OLD API FLOW (dataflowptech.com) =====
-            # Try to get visitor_id from browser localStorage
+            # Try to get visitor_id, visitor_token, visitor_fingerprint from browser localStorage
             visitor_id = None
+            visitor_token = None
+            visitor_fingerprint = None
             try:
                 visitor_id = page.evaluate("() => localStorage.getItem('visitor_id')")
+                visitor_token = page.evaluate("() => localStorage.getItem('visitor_token')")
+                visitor_fingerprint = page.evaluate("() => localStorage.getItem('visitor_fingerprint')")
             except:
                 pass
+            
+            print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
             # Step 1: Create session (via browser fetch)
             session_body = {
@@ -1844,6 +1866,10 @@ def api_direct_booking(page, proxy_config=None):
             }
             if visitor_id:
                 session_body['visitor_id'] = visitor_id
+            if visitor_token:
+                session_body['visitor_token'] = visitor_token
+            if visitor_fingerprint:
+                session_body['visitor_fingerprint'] = visitor_fingerprint
             
             status, resp = browser_api_post('/sessions', session_body)
             print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
