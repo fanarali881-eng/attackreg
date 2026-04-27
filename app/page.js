@@ -50,28 +50,18 @@ export default function Home() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [newUsername, setNewUsername] = useState('root');
   const [useProxy, setUseProxy] = useState(true);
-  const [proxyHost, setProxyHost] = useState('proxy.packetstream.io');
-  const [proxyPort, setProxyPort] = useState('31112');
+  const [proxyHost, setProxyHost] = useState('brd.superproxy.io');
+  const [proxyPort, setProxyPort] = useState('33335');
   const [proxyUser, setProxyUser] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'fanar';
-    return 'fanar';
+    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'brd-customer-hl_9605b00f-zone-residential_proxy1-country-sa';
+    return 'brd-customer-hl_9605b00f-zone-residential_proxy1-country-sa';
   });
   const [proxyPass, setProxyPass] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('proxyPass');
-      if (saved && saved.includes('RlM')) {
-        const fixed = saved.replace('RlM', 'RIM');
-        localStorage.setItem('proxyPass', fixed);
-        return fixed;
-      }
-      if (saved && !saved.includes('_country-')) {
-        const fixed2 = saved + '_country-SaudiArabia';
-        localStorage.setItem('proxyPass', fixed2);
-        return fixed2;
-      }
-      return saved || 'j7HGTQiRnys66RIM_country-SaudiArabia';
+      return saved || 'f6floebu2zoc';
     }
-    return 'j7HGTQiRnys66RIM_country-SaudiArabia';
+    return 'f6floebu2zoc';
   });
   const [monitoring, setMonitoring] = useState(false);
   const [serverStatus, setServerStatus] = useState([]);

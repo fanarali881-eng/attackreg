@@ -5758,8 +5758,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
     proxy_user = os.environ.get('PROXY_USER', '')
     proxy_pass = os.environ.get('PROXY_PASS', '')
-    proxy_host = os.environ.get('PROXY_HOST', 'proxy.packetstream.io')
-    proxy_port = os.environ.get('PROXY_PORT', '31112')
+    proxy_host = os.environ.get('PROXY_HOST', 'brd.superproxy.io')
+    proxy_port = os.environ.get('PROXY_PORT', '33335')
 
     proxy_config = None
     if proxy_user and proxy_pass:
