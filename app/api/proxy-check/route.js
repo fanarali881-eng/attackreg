@@ -169,7 +169,7 @@ export async function POST(req) {
       return NextResponse.json({ status: 'error', message: 'بيانات ناقصة' });
     }
 
-    const testPassword = password.includes('_country-') ? password : `${password}_country-SaudiArabia`;
+    const testPassword = password;
 
     // Try SSH method first, fallback to direct check
     const credsB64 = Buffer.from(JSON.stringify({

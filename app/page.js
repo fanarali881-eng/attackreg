@@ -53,8 +53,8 @@ export default function Home() {
   const [proxyHost, setProxyHost] = useState('brd.superproxy.io');
   const [proxyPort, setProxyPort] = useState('33335');
   const [proxyUser, setProxyUser] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'brd-customer-hl_9605b00f-zone-residential_proxy1-country-sa';
-    return 'brd-customer-hl_9605b00f-zone-residential_proxy1-country-sa';
+    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'brd-customer-hl_9605b00f-zone-residential_proxy1';
+    return 'brd-customer-hl_9605b00f-zone-residential_proxy1';
   });
   const [proxyPass, setProxyPass] = useState(() => {
     if (typeof window !== 'undefined') {
