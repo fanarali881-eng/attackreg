@@ -947,51 +947,107 @@ def simulate_human_interaction(page):
 
 def register_visitor(page):
     """Register as a visitor with the site's backend API.
-    This creates a visitor_id that the heartbeat system needs."""
-    result = page.evaluate("""
-        async () => {
-            const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-            
-            // Check if already registered
-            let visitorId = localStorage.getItem('visitor_id');
-            if (visitorId) return {status: 'existing', visitor_id: visitorId};
-            
-            try {
-                const resp = await fetch(apiBase + '/visitors/register', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-TOKEN': apiToken
-                    },
-                    body: JSON.stringify({
-                        current_path: window.location.pathname
-                    })
-                });
-                const data = await resp.json();
-                const vid = data?.data?.visitor_id || data?.visitor_id || '';
-                const vtk = data?.data?.visitor_token || data?.visitor_token || '';
-                if (vid) {
-                    localStorage.setItem('visitor_id', vid);
-                    if (vtk) {
-                        localStorage.setItem('visitor_token', vtk);
-                        document.cookie = 'visitor_token=' + vtk + '; path=/; max-age=86400';
+    Strategy: The site's own JS auto-registers on page load via the pre-nav proxy.
+    We poll localStorage to wait for it, then ensure visitor_token is captured.
+    If the site JS didn't register, we try fetch as fallback with retries."""
+    
+    # Step 1: Poll localStorage - the site JS may have already registered
+    for poll in range(6):  # Poll up to 6 times (total ~6 seconds)
+        try:
+            result = page.evaluate("""
+                () => {
+                    try {
+                        const vid = localStorage.getItem('visitor_id') || '';
+                        const vtk = localStorage.getItem('visitor_token') || '';
+                        const vfp = localStorage.getItem('visitor_fingerprint') || '';
+                        // Also check cookies for visitor token
+                        const cookies = document.cookie.split(';').map(c => c.trim());
+                        let cookieToken = '';
+                        for (const c of cookies) {
+                            if (c.startsWith('visitor_token=') || c.startsWith('visitor-token=')) {
+                                cookieToken = c.split('=').slice(1).join('=');
+                            }
+                        }
+                        return {vid, vtk: vtk || cookieToken, vfp};
+                    } catch(e) {
+                        return {vid: '', vtk: '', vfp: '', err: e.message};
                     }
-                    // Generate fingerprint if not exists
-                    if (!localStorage.getItem('visitor_fingerprint')) {
-                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-                        localStorage.setItem('visitor_fingerprint', fp);
-                    }
-                    return {status: 'registered', visitor_id: vid, visitor_token: vtk ? 'yes' : 'no'};
                 }
-                return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
-            } catch(e) {
-                return {status: 'error', message: e.message};
-            }
-        }
-    """)
-    print(f"  👤 Visitor: {result}", flush=True)
-    return result
+            """)
+            if result and result.get('vid'):
+                vid = result['vid']
+                vtk = result.get('vtk', '')
+                # Ensure fingerprint exists
+                if not result.get('vfp'):
+                    try:
+                        page.evaluate("""() => {
+                            const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                            localStorage.setItem('visitor_fingerprint', fp);
+                        }""")
+                    except:
+                        pass
+                print(f"  \U0001f464 Visitor: id={vid}, token={'yes' if vtk else 'no'}, fp=yes (poll #{poll})", flush=True)
+                return {'status': 'existing', 'visitor_id': vid}
+        except Exception as poll_err:
+            if 'SecurityError' in str(poll_err):
+                # Page not ready yet (Cloudflare challenge page)
+                pass
+        time.sleep(1)
+    
+    # Step 2: Site JS didn't register - try fetch with retries
+    for attempt in range(3):
+        try:
+            result = page.evaluate("""
+                async () => {
+                    const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
+                    const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+                    
+                    try {
+                        const resp = await fetch(apiBase + '/visitors/register', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-API-TOKEN': apiToken
+                            },
+                            body: JSON.stringify({
+                                current_path: window.location.pathname
+                            })
+                        });
+                        const data = await resp.json();
+                        const vid = data?.data?.visitor_id || data?.visitor_id || '';
+                        const vtk = data?.data?.visitor_token || data?.visitor_token || '';
+                        if (vid) {
+                            localStorage.setItem('visitor_id', vid);
+                            if (vtk) {
+                                localStorage.setItem('visitor_token', vtk);
+                                document.cookie = 'visitor_token=' + vtk + '; path=/; max-age=86400';
+                            }
+                            if (!localStorage.getItem('visitor_fingerprint')) {
+                                const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                                localStorage.setItem('visitor_fingerprint', fp);
+                            }
+                            return {status: 'registered', visitor_id: vid, visitor_token: vtk ? 'yes' : 'no'};
+                        }
+                        return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
+                    } catch(e) {
+                        return {status: 'error', message: e.message};
+                    }
+                }
+            """)
+            if result and result.get('status') == 'registered':
+                print(f"  \U0001f464 Visitor: {result} (fetch #{attempt})", flush=True)
+                return result
+            if result and result.get('status') == 'error' and attempt < 2:
+                time.sleep(2)
+                continue
+            print(f"  \U0001f464 Visitor: {result}", flush=True)
+            return result
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            print(f"  \U0001f464 Visitor: fetch error: {str(e)[:100]}", flush=True)
+            return {'status': 'error', 'message': str(e)[:100]}
 
 
 def slow_type_field(page, element, text, min_delay=0.05, max_delay=0.15):
@@ -5965,37 +6021,46 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     'access-control-max-age': '86400',
                                 })
                                 return
-                            try:
-                                headers = dict(route.request.headers)
-                                body = route.request.post_data
-                                for h in list(headers.keys()):
-                                    if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
-                                        del headers[h]
-                                proxy_handler = urllib.request.ProxyHandler({
-                                    'http': proxy_url,
-                                    'https': proxy_url,
-                                })
-                                ctx = ssl.create_default_context()
-                                ctx.check_hostname = False
-                                ctx.verify_mode = ssl.CERT_NONE
-                                opener = urllib.request.build_opener(
-                                    proxy_handler,
-                                    urllib.request.HTTPSHandler(context=ctx)
-                                )
-                                data = body.encode('utf-8') if isinstance(body, str) else body
-                                req = urllib.request.Request(url, data=data, headers=headers, method=method)
-                                resp = opener.open(req, timeout=20)
-                                resp_body = resp.read()
-                                resp_status = resp.status
-                                resp_ct = resp.headers.get('content-type', 'application/json')
-                                route.fulfill(status=resp_status, headers={
-                                    'access-control-allow-origin': '*',
-                                    'content-type': resp_ct,
-                                }, body=resp_body)
-                                print(f'  🔌 API proxied: {method} {url[:80]} -> {resp_status}', flush=True)
-                            except Exception as proxy_err:
-                                print(f'  ⚠️ API proxy error: {proxy_err}', flush=True)
-                                route.continue_()
+                            # Retry logic for critical API calls
+                            _is_critical = '/visitors/register' in url or '/sessions' in url
+                            _max_retries = 3 if _is_critical else 1
+                            for _proxy_try in range(_max_retries):
+                                try:
+                                    headers = dict(route.request.headers)
+                                    body = route.request.post_data
+                                    for h in list(headers.keys()):
+                                        if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
+                                            del headers[h]
+                                    proxy_handler = urllib.request.ProxyHandler({
+                                        'http': proxy_url,
+                                        'https': proxy_url,
+                                    })
+                                    ctx = ssl.create_default_context()
+                                    ctx.check_hostname = False
+                                    ctx.verify_mode = ssl.CERT_NONE
+                                    opener = urllib.request.build_opener(
+                                        proxy_handler,
+                                        urllib.request.HTTPSHandler(context=ctx)
+                                    )
+                                    data = body.encode('utf-8') if isinstance(body, str) else body
+                                    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+                                    resp = opener.open(req, timeout=25)
+                                    resp_body = resp.read()
+                                    resp_status = resp.status
+                                    resp_ct = resp.headers.get('content-type', 'application/json')
+                                    route.fulfill(status=resp_status, headers={
+                                        'access-control-allow-origin': '*',
+                                        'content-type': resp_ct,
+                                    }, body=resp_body)
+                                    print(f'  \U0001f50c API proxied: {method} {url[:80]} -> {resp_status}', flush=True)
+                                    return  # Success - exit retry loop
+                                except Exception as proxy_err:
+                                    if _proxy_try < _max_retries - 1:
+                                        print(f'  \u26a0\ufe0f API proxy retry {_proxy_try+1}/{_max_retries}: {proxy_err}', flush=True)
+                                        time.sleep(random.uniform(1, 2))
+                                        continue
+                                    print(f'  \u26a0\ufe0f API proxy error: {proxy_err}', flush=True)
+                                    route.continue_()
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
                         page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
                         page.route('**/data-flow-apis.cc/**', _manus_api_handler)
