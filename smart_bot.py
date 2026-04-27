@@ -6064,6 +6064,14 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # Skip form-finding and unnecessary steps - go straight to API
                         if is_manus_space:
                             time.sleep(random.uniform(1, 2))  # Brief wait for page JS to load
+                            
+                            # Register visitor FIRST to get visitor_token for session creation
+                            try:
+                                register_visitor(page)
+                                time.sleep(random.uniform(0.5, 1))
+                            except Exception as _rv_err:
+                                print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
+                            
                             print('  \U0001f680 Using API-DIRECT mode (fast path)', flush=True)
                             
                             # Try API-DIRECT with retry
