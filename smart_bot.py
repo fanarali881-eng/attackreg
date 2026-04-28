@@ -1914,81 +1914,70 @@ def api_direct_booking(page, proxy_config=None):
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
             # === TURNSTILE TOKEN: Solve Cloudflare Turnstile captcha ===
+            # Now using context.route() to bypass proxy for challenges.cloudflare.com
+            # So we can load Turnstile via <script src=...> and all sub-resources will be direct
             _turnstile_token = None
             _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
             try:
-                # Step A: Download Turnstile API script directly (no proxy) from Python
-                import urllib.request as _ts_urllib
-                _ts_api_url = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
-                _ts_req = _ts_urllib.Request(_ts_api_url, headers={
-                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36',
-                })
-                _ts_js_code = None
-                try:
-                    with _ts_urllib.urlopen(_ts_req, timeout=15) as _ts_resp:
-                        _ts_js_code = _ts_resp.read().decode('utf-8', errors='replace')
-                    print(f"  \U0001f4e6 Turnstile API script downloaded: {len(_ts_js_code)} chars", flush=True)
-                except Exception as _dl_err:
-                    print(f"  \u26a0\ufe0f Turnstile script download failed: {_dl_err}", flush=True)
-                
-                if _ts_js_code:
-                    # Step B: Inject the Turnstile script as inline JS into the page
-                    page.evaluate("""(jsCode) => {
-                        const script = document.createElement('script');
-                        script.textContent = jsCode;
-                        document.head.appendChild(script);
-                    }""", _ts_js_code)
-                    
-                    # Step C: Wait for window.turnstile to become available
-                    _ts_ready = page.evaluate("""async () => {
-                        let waited = 0;
-                        while (!window.turnstile && waited < 10000) {
-                            await new Promise(r => setTimeout(r, 300));
-                            waited += 300;
+                _turnstile_token = page.evaluate("""
+                    async (sitekey) => {
+                        // Load Turnstile script via <script src=...>
+                        // context.route() will intercept and serve it directly (no proxy)
+                        if (!window.turnstile) {
+                            await new Promise((resolve, reject) => {
+                                const script = document.createElement('script');
+                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                                script.onload = () => {
+                                    let waited = 0;
+                                    const check = () => {
+                                        if (window.turnstile) return resolve();
+                                        waited += 200;
+                                        if (waited > 15000) return reject(new Error('Turnstile not ready after 15s'));
+                                        setTimeout(check, 200);
+                                    };
+                                    check();
+                                };
+                                script.onerror = (e) => reject(new Error('Turnstile script load error'));
+                                document.head.appendChild(script);
+                            });
                         }
-                        return !!window.turnstile;
-                    }""")
-                    print(f"  \U0001f50d Turnstile ready: {_ts_ready}", flush=True)
-                    
-                    if _ts_ready:
-                        # Step D: Render Turnstile widget and get token
-                        _turnstile_token = page.evaluate("""
-                            async (sitekey) => {
-                                let container = document.getElementById('bot-turnstile-container');
-                                if (!container) {
-                                    container = document.createElement('div');
-                                    container.id = 'bot-turnstile-container';
-                                    container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
-                                    document.body.appendChild(container);
-                                }
-                                container.innerHTML = '';
-                                
-                                return new Promise((resolve, reject) => {
-                                    const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
-                                    try {
-                                        window.turnstile.render(container, {
-                                            sitekey: sitekey,
-                                            callback: (token) => {
-                                                clearTimeout(timeout);
-                                                resolve(token);
-                                            },
-                                            'expired-callback': () => {
-                                                clearTimeout(timeout);
-                                                reject(new Error('Turnstile token expired'));
-                                            },
-                                            'error-callback': () => {
-                                                clearTimeout(timeout);
-                                                reject(new Error('Turnstile error'));
-                                            }
-                                        });
-                                    } catch(e) {
+                        
+                        // Create container for Turnstile widget
+                        let container = document.getElementById('bot-turnstile-container');
+                        if (!container) {
+                            container = document.createElement('div');
+                            container.id = 'bot-turnstile-container';
+                            container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
+                            document.body.appendChild(container);
+                        }
+                        container.innerHTML = '';
+                        
+                        // Render Turnstile and wait for token
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
+                            try {
+                                window.turnstile.render(container, {
+                                    sitekey: sitekey,
+                                    callback: (token) => {
                                         clearTimeout(timeout);
-                                        reject(e);
+                                        resolve(token);
+                                    },
+                                    'expired-callback': () => {
+                                        clearTimeout(timeout);
+                                        reject(new Error('Turnstile token expired'));
+                                    },
+                                    'error-callback': (errCode) => {
+                                        clearTimeout(timeout);
+                                        reject(new Error('Turnstile error: ' + errCode));
                                     }
                                 });
+                            } catch(e) {
+                                clearTimeout(timeout);
+                                reject(e);
                             }
-                        """, _ts_sitekey)
-                
+                        });
+                    }
+                """, _ts_sitekey)
                 if _turnstile_token:
                     print(f"  \U0001f510 Turnstile solved! token={len(str(_turnstile_token))} chars", flush=True)
                 else:
@@ -6176,6 +6165,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # route.continue_() still goes through browser proxy, so we must fetch ourselves
                         def _turnstile_bypass(route):
                             url = route.request.url
+                            print(f'  \U0001f310 CF-bypass: {url[:100]}', flush=True)
                             try:
                                 import urllib.request
                                 req = urllib.request.Request(url, headers={
@@ -6194,7 +6184,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             except Exception as e:
                                 print(f'  \u26a0\ufe0f Turnstile direct fetch failed: {e}', flush=True)
                                 route.continue_()  # Fallback to proxy
-                        page.route('**/challenges.cloudflare.com/**', _turnstile_bypass)
+                        # Use CONTEXT.route (not page.route) to intercept iframe requests too
+                        # Turnstile creates an iframe that loads from challenges.cloudflare.com
+                        context.route('**/challenges.cloudflare.com/**', _turnstile_bypass)
                         
                         _api_bypass_active = True
                         print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app + CF-turnstile bypass', flush=True)
