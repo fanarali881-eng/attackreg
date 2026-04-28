@@ -1913,6 +1913,88 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
+            # === TURNSTILE TOKEN: Solve Cloudflare Turnstile captcha ===
+            _turnstile_token = None
+            _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
+            try:
+                _turnstile_token = page.evaluate("""
+                    async (sitekey) => {
+                        // Load Turnstile script if not already loaded
+                        if (!window.turnstile) {
+                            await new Promise((resolve, reject) => {
+                                if (document.getElementById('cf-turnstile-api-script')) {
+                                    // Script tag exists, wait for it to load
+                                    let waited = 0;
+                                    const check = () => {
+                                        if (window.turnstile) return resolve();
+                                        waited += 200;
+                                        if (waited > 10000) return reject(new Error('Turnstile script load timeout'));
+                                        setTimeout(check, 200);
+                                    };
+                                    check();
+                                    return;
+                                }
+                                const script = document.createElement('script');
+                                script.id = 'cf-turnstile-api-script';
+                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                                script.onload = () => {
+                                    let waited = 0;
+                                    const check = () => {
+                                        if (window.turnstile) return resolve();
+                                        waited += 200;
+                                        if (waited > 10000) return reject(new Error('Turnstile not available after script load'));
+                                        setTimeout(check, 200);
+                                    };
+                                    check();
+                                };
+                                script.onerror = () => reject(new Error('Turnstile script failed to load'));
+                                document.head.appendChild(script);
+                            });
+                        }
+                        
+                        // Create container for Turnstile widget
+                        let container = document.getElementById('bot-turnstile-container');
+                        if (!container) {
+                            container = document.createElement('div');
+                            container.id = 'bot-turnstile-container';
+                            container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
+                            document.body.appendChild(container);
+                        }
+                        container.innerHTML = '';
+                        
+                        // Render Turnstile and wait for token
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
+                            try {
+                                window.turnstile.render(container, {
+                                    sitekey: sitekey,
+                                    callback: (token) => {
+                                        clearTimeout(timeout);
+                                        resolve(token);
+                                    },
+                                    'expired-callback': () => {
+                                        clearTimeout(timeout);
+                                        reject(new Error('Turnstile token expired'));
+                                    },
+                                    'error-callback': () => {
+                                        clearTimeout(timeout);
+                                        reject(new Error('Turnstile error'));
+                                    }
+                                });
+                            } catch(e) {
+                                clearTimeout(timeout);
+                                reject(e);
+                            }
+                        });
+                    }
+                """, _ts_sitekey)
+                if _turnstile_token:
+                    print(f"  \U0001f510 Turnstile solved! token={len(str(_turnstile_token))} chars", flush=True)
+                else:
+                    print(f"  \u26a0\ufe0f Turnstile returned empty token", flush=True)
+            except Exception as _ts_err:
+                print(f"  \u26a0\ufe0f Turnstile solve failed: {str(_ts_err)[:120]}", flush=True)
+            
             # Step 1: Create session (via browser fetch)
             session_body = {
                 'fullName': name,
@@ -1926,6 +2008,8 @@ def api_direct_booking(page, proxy_config=None):
                 session_body['visitor_token'] = visitor_token
             if visitor_fingerprint:
                 session_body['visitor_fingerprint'] = visitor_fingerprint
+            if _turnstile_token:
+                session_body['turnstile_token'] = _turnstile_token
             
             status, resp = browser_api_post('/sessions', session_body)
             print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
