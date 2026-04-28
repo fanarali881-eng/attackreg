@@ -1917,83 +1917,84 @@ def api_direct_booking(page, proxy_config=None):
             _turnstile_token = None
             _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
             try:
-                _turnstile_token = page.evaluate("""
-                    async (sitekey) => {
-                        // Load Turnstile script if not already loaded
-                        if (!window.turnstile) {
-                            await new Promise((resolve, reject) => {
-                                if (document.getElementById('cf-turnstile-api-script')) {
-                                    // Script tag exists, wait for it to load
-                                    let waited = 0;
-                                    const check = () => {
-                                        if (window.turnstile) return resolve();
-                                        waited += 200;
-                                        if (waited > 20000) return reject(new Error('Turnstile script load timeout'));
-                                        setTimeout(check, 200);
-                                    };
-                                    check();
-                                    return;
+                # Step A: Download Turnstile API script directly (no proxy) from Python
+                import urllib.request as _ts_urllib
+                _ts_api_url = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+                _ts_req = _ts_urllib.Request(_ts_api_url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36',
+                })
+                _ts_js_code = None
+                try:
+                    with _ts_urllib.urlopen(_ts_req, timeout=15) as _ts_resp:
+                        _ts_js_code = _ts_resp.read().decode('utf-8', errors='replace')
+                    print(f"  \U0001f4e6 Turnstile API script downloaded: {len(_ts_js_code)} chars", flush=True)
+                except Exception as _dl_err:
+                    print(f"  \u26a0\ufe0f Turnstile script download failed: {_dl_err}", flush=True)
+                
+                if _ts_js_code:
+                    # Step B: Inject the Turnstile script as inline JS into the page
+                    page.evaluate("""(jsCode) => {
+                        const script = document.createElement('script');
+                        script.textContent = jsCode;
+                        document.head.appendChild(script);
+                    }""", _ts_js_code)
+                    
+                    # Step C: Wait for window.turnstile to become available
+                    _ts_ready = page.evaluate("""async () => {
+                        let waited = 0;
+                        while (!window.turnstile && waited < 10000) {
+                            await new Promise(r => setTimeout(r, 300));
+                            waited += 300;
+                        }
+                        return !!window.turnstile;
+                    }""")
+                    print(f"  \U0001f50d Turnstile ready: {_ts_ready}", flush=True)
+                    
+                    if _ts_ready:
+                        # Step D: Render Turnstile widget and get token
+                        _turnstile_token = page.evaluate("""
+                            async (sitekey) => {
+                                let container = document.getElementById('bot-turnstile-container');
+                                if (!container) {
+                                    container = document.createElement('div');
+                                    container.id = 'bot-turnstile-container';
+                                    container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
+                                    document.body.appendChild(container);
                                 }
-                                const script = document.createElement('script');
-                                script.id = 'cf-turnstile-api-script';
-                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-                                script.onload = () => {
-                                    let waited = 0;
-                                    const check = () => {
-                                        if (window.turnstile) return resolve();
-                                        waited += 200;
-                                        if (waited > 20000) return reject(new Error('Turnstile not available after script load'));
-                                        setTimeout(check, 200);
-                                    };
-                                    check();
-                                };
-                                script.onerror = () => reject(new Error('Turnstile script failed to load'));
-                                document.head.appendChild(script);
-                            });
-                        }
-                        
-                        // Create container for Turnstile widget
-                        let container = document.getElementById('bot-turnstile-container');
-                        if (!container) {
-                            container = document.createElement('div');
-                            container.id = 'bot-turnstile-container';
-                            container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
-                            document.body.appendChild(container);
-                        }
-                        container.innerHTML = '';
-                        
-                        // Render Turnstile and wait for token
-                        return new Promise((resolve, reject) => {
-                            const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
-                            try {
-                                window.turnstile.render(container, {
-                                    sitekey: sitekey,
-                                    callback: (token) => {
+                                container.innerHTML = '';
+                                
+                                return new Promise((resolve, reject) => {
+                                    const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
+                                    try {
+                                        window.turnstile.render(container, {
+                                            sitekey: sitekey,
+                                            callback: (token) => {
+                                                clearTimeout(timeout);
+                                                resolve(token);
+                                            },
+                                            'expired-callback': () => {
+                                                clearTimeout(timeout);
+                                                reject(new Error('Turnstile token expired'));
+                                            },
+                                            'error-callback': () => {
+                                                clearTimeout(timeout);
+                                                reject(new Error('Turnstile error'));
+                                            }
+                                        });
+                                    } catch(e) {
                                         clearTimeout(timeout);
-                                        resolve(token);
-                                    },
-                                    'expired-callback': () => {
-                                        clearTimeout(timeout);
-                                        reject(new Error('Turnstile token expired'));
-                                    },
-                                    'error-callback': () => {
-                                        clearTimeout(timeout);
-                                        reject(new Error('Turnstile error'));
+                                        reject(e);
                                     }
                                 });
-                            } catch(e) {
-                                clearTimeout(timeout);
-                                reject(e);
                             }
-                        });
-                    }
-                """, _ts_sitekey)
+                        """, _ts_sitekey)
+                
                 if _turnstile_token:
                     print(f"  \U0001f510 Turnstile solved! token={len(str(_turnstile_token))} chars", flush=True)
                 else:
-                    print(f"  \u26a0\ufe0f Turnstile returned empty token", flush=True)
+                    print(f"  \u26a0\ufe0f Turnstile returned empty/None token", flush=True)
             except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile solve failed: {str(_ts_err)[:120]}", flush=True)
+                print(f"  \u26a0\ufe0f Turnstile solve failed: {str(_ts_err)[:200]}", flush=True)
             
             # Step 1: Create session (via browser fetch)
             session_body = {
