@@ -1928,7 +1928,7 @@ def api_direct_booking(page, proxy_config=None):
                                     const check = () => {
                                         if (window.turnstile) return resolve();
                                         waited += 200;
-                                        if (waited > 10000) return reject(new Error('Turnstile script load timeout'));
+                                        if (waited > 20000) return reject(new Error('Turnstile script load timeout'));
                                         setTimeout(check, 200);
                                     };
                                     check();
@@ -1942,7 +1942,7 @@ def api_direct_booking(page, proxy_config=None):
                                     const check = () => {
                                         if (window.turnstile) return resolve();
                                         waited += 200;
-                                        if (waited > 10000) return reject(new Error('Turnstile not available after script load'));
+                                        if (waited > 20000) return reject(new Error('Turnstile not available after script load'));
                                         setTimeout(check, 200);
                                     };
                                     check();
@@ -6170,8 +6170,15 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
                         page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
                         page.route('**/data-flow-apis.cc/**', _manus_api_handler)
+                        
+                        # Bypass proxy for Turnstile (challenges.cloudflare.com) - let it go direct
+                        # This is critical: Turnstile script fails to load through slow residential proxy
+                        def _turnstile_bypass(route):
+                            route.continue_()
+                        page.route('**/challenges.cloudflare.com/**', _turnstile_bypass)
+                        
                         _api_bypass_active = True
-                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app', flush=True)
+                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app + CF-turnstile bypass', flush=True)
 
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
