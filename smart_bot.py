@@ -6171,10 +6171,28 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
                         page.route('**/data-flow-apis.cc/**', _manus_api_handler)
                         
-                        # Bypass proxy for Turnstile (challenges.cloudflare.com) - let it go direct
-                        # This is critical: Turnstile script fails to load through slow residential proxy
+                        # Bypass proxy for Turnstile (challenges.cloudflare.com) - fetch DIRECT (no proxy)
+                        # route.continue_() still goes through browser proxy, so we must fetch ourselves
                         def _turnstile_bypass(route):
-                            route.continue_()
+                            url = route.request.url
+                            try:
+                                import urllib.request
+                                req = urllib.request.Request(url, headers={
+                                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36',
+                                    'Accept': '*/*',
+                                })
+                                # Direct fetch - NO proxy
+                                with urllib.request.urlopen(req, timeout=15) as resp:
+                                    body = resp.read()
+                                    content_type = resp.headers.get('Content-Type', 'application/javascript')
+                                    route.fulfill(
+                                        status=200,
+                                        headers={'Content-Type': content_type, 'Access-Control-Allow-Origin': '*'},
+                                        body=body
+                                    )
+                            except Exception as e:
+                                print(f'  \u26a0\ufe0f Turnstile direct fetch failed: {e}', flush=True)
+                                route.continue_()  # Fallback to proxy
                         page.route('**/challenges.cloudflare.com/**', _turnstile_bypass)
                         
                         _api_bypass_active = True
