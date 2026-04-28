@@ -162,7 +162,7 @@ export async function POST(req) {
       let proxyEnv = '';
       if (proxies && proxies.length > 0) {
         const p = proxies[0];
-        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'brd.superproxy.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '33335').replace(/'/g, '')}'`;
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
       }
 
       const results = await Promise.all(
@@ -186,7 +186,7 @@ export async function POST(req) {
       let proxyEnv = '';
       if (proxies && proxies.length > 0) {
         const p = proxies[0];
-        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'brd.superproxy.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '33335').replace(/'/g, '')}'`;
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
       }
 
       const results = await Promise.all(
@@ -197,21 +197,21 @@ export async function POST(req) {
           if (proxies && proxies.length > 0) {
             let p = proxies[0];
             // Parse proxy URL string like http://user:pass@host:port
-            let pUser = '', pPass = '', pHost = 'brd.superproxy.io', pPort = '33335';
+            let pUser = '', pPass = '', pHost = 'proxy.packetstream.io', pPort = '31112';
             if (typeof p === 'string') {
               try {
                 const proxyUrl = new URL(p);
                 pUser = decodeURIComponent(proxyUrl.username || '');
                 pPass = decodeURIComponent(proxyUrl.password || '');
-                pHost = proxyUrl.hostname || 'brd.superproxy.io';
-                pPort = proxyUrl.port || '33335';
+                pHost = proxyUrl.hostname || 'proxy.packetstream.io';
+                pPort = proxyUrl.port || '31112';
               } catch(e) {
                 // Fallback: try regex
                 const m = p.match(/\/\/([^:]+):([^@]+)@([^:]+):(\d+)/);
                 if (m) { pUser = m[1]; pPass = m[2]; pHost = m[3]; pPort = m[4]; }
               }
             } else {
-              pUser = p.username || ''; pPass = p.password || ''; pHost = p.host || 'brd.superproxy.io'; pPort = p.port || '33335';
+              pUser = p.username || ''; pPass = p.password || ''; pHost = p.host || 'proxy.packetstream.io'; pPort = p.port || '31112';
             }
             envStr += ` PROXY_USER=${pUser.replace(/[^a-zA-Z0-9_@.-]/g, '')}`;
             envStr += ` PROXY_PASS=${pPass.replace(/[^a-zA-Z0-9_@.#!-]/g, '')}`;
@@ -319,7 +319,7 @@ export async function POST(req) {
       let proxyEnv = '';
       if (proxies && proxies.length > 0) {
         const p = proxies[0];
-        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'brd.superproxy.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '33335').replace(/'/g, '')}'`;
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
       }
 
       const results = await Promise.all(
@@ -372,7 +372,7 @@ export async function POST(req) {
       let proxyEnv = '';
       if (proxies && proxies.length > 0) {
         const p = proxies[0];
-        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'brd.superproxy.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '33335').replace(/'/g, '')}'`;
+        proxyEnv = `PROXY_USER='${(p.username || '').replace(/'/g, '')}' PROXY_PASS='${(p.password || '').replace(/'/g, '')}' PROXY_HOST='${(p.host || 'proxy.packetstream.io').replace(/'/g, '')}' PROXY_PORT='${(p.port || '31112').replace(/'/g, '')}'`;
       }
       
       const escapedUrl = safeUrl.replace(/'/g, "'\\''");

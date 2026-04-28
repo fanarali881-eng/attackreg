@@ -5758,8 +5758,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
     proxy_user = os.environ.get('PROXY_USER', '')
     proxy_pass = os.environ.get('PROXY_PASS', '')
-    proxy_host = os.environ.get('PROXY_HOST', 'brd.superproxy.io')
-    proxy_port = os.environ.get('PROXY_PORT', '33335')
+    proxy_host = os.environ.get('PROXY_HOST', 'proxy.packetstream.io')
+    proxy_port = os.environ.get('PROXY_PORT', '31112')
 
     proxy_config = None
     if proxy_user and proxy_pass:
@@ -6021,9 +6021,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     'access-control-max-age': '86400',
                                 })
                                 return
-                            # Retry logic for critical API calls
+                            # Smart retry: 10 attempts for register/sessions (each = new IP from PacketStream)
                             _is_critical = '/visitors/register' in url or '/sessions' in url
-                            _max_retries = 3 if _is_critical else 1
+                            _max_retries = 10 if _is_critical else 3
                             for _proxy_try in range(_max_retries):
                                 try:
                                     headers = dict(route.request.headers)
@@ -6031,6 +6031,11 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     for h in list(headers.keys()):
                                         if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
                                             del headers[h]
+                                    # Force mobile UA if desktop detected (API rejects desktop)
+                                    ua = headers.get('user-agent', '')
+                                    if 'Mobile' not in ua:
+                                        headers['user-agent'] = 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+                                    # New opener each retry = new TCP connection = new IP from rotating proxy
                                     proxy_handler = urllib.request.ProxyHandler({
                                         'http': proxy_url,
                                         'https': proxy_url,
@@ -6044,10 +6049,27 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     )
                                     data = body.encode('utf-8') if isinstance(body, str) else body
                                     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-                                    resp = opener.open(req, timeout=25)
+                                    resp = opener.open(req, timeout=20)
                                     resp_body = resp.read()
                                     resp_status = resp.status
                                     resp_ct = resp.headers.get('content-type', 'application/json')
+                                    # Check if response contains IP_BANNED - treat as failure and retry
+                                    if _is_critical and resp_status == 403:
+                                        try:
+                                            resp_json = json.loads(resp_body)
+                                            if resp_json.get('success') == False and resp_json.get('error',{}).get('code') == 'IP_BANNED':
+                                                if _proxy_try < _max_retries - 1:
+                                                    print(f'  \U0001f504 IP banned, rotating... ({_proxy_try+1}/{_max_retries})', flush=True)
+                                                    time.sleep(random.uniform(0.5, 1.5))
+                                                    continue  # Retry with new IP
+                                        except:
+                                            pass
+                                    # Check REGISTER_PROOF_REQUIRED - also retry
+                                    if _is_critical and resp_status == 428:
+                                        if _proxy_try < _max_retries - 1:
+                                            print(f'  \U0001f504 Register proof required, retrying... ({_proxy_try+1}/{_max_retries})', flush=True)
+                                            time.sleep(random.uniform(0.5, 1.5))
+                                            continue
                                     route.fulfill(status=resp_status, headers={
                                         'access-control-allow-origin': '*',
                                         'content-type': resp_ct,
@@ -6057,9 +6079,9 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 except Exception as proxy_err:
                                     if _proxy_try < _max_retries - 1:
                                         print(f'  \u26a0\ufe0f API proxy retry {_proxy_try+1}/{_max_retries}: {proxy_err}', flush=True)
-                                        time.sleep(random.uniform(1, 2))
+                                        time.sleep(random.uniform(1, 3))
                                         continue
-                                    print(f'  \u26a0\ufe0f API proxy error: {proxy_err}', flush=True)
+                                    print(f'  \u26a0\ufe0f API proxy error after {_max_retries} tries: {proxy_err}', flush=True)
                                     route.continue_()
                         page.route('**/dataflowptech.com/**', _manus_api_handler)
                         page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)

@@ -50,18 +50,18 @@ export default function Home() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [newUsername, setNewUsername] = useState('root');
   const [useProxy, setUseProxy] = useState(true);
-  const [proxyHost, setProxyHost] = useState('brd.superproxy.io');
-  const [proxyPort, setProxyPort] = useState('33335');
+  const [proxyHost, setProxyHost] = useState('proxy.packetstream.io');
+  const [proxyPort, setProxyPort] = useState('31112');
   const [proxyUser, setProxyUser] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'brd-customer-hl_9605b00f-zone-residential_proxy1';
-    return 'brd-customer-hl_9605b00f-zone-residential_proxy1';
+    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'fanar';
+    return 'fanar';
   });
   const [proxyPass, setProxyPass] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('proxyPass');
-      return saved || 'f6floebu2zoc';
+      return saved || 'j7HGTQiRnys66RIM_country-SaudiArabia';
     }
-    return 'f6floebu2zoc';
+    return 'j7HGTQiRnys66RIM_country-SaudiArabia';
   });
   const [monitoring, setMonitoring] = useState(false);
   const [serverStatus, setServerStatus] = useState([]);

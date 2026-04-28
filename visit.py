@@ -286,8 +286,8 @@ STAY_TIME = int(os.environ.get("STAY_TIME", "60"))
 
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
-PROXY_HOST = os.environ.get("PROXY_HOST", "brd.superproxy.io")
-PROXY_PORT = os.environ.get("PROXY_PORT", "33335")
+PROXY_HOST = os.environ.get("PROXY_HOST", "proxy.packetstream.io")
+PROXY_PORT = os.environ.get("PROXY_PORT", "31112")
 
 # CAPTCHA solver API keys (2Captcha or CapSolver)
 CAPTCHA_API_KEY = os.environ.get("CAPTCHA_API_KEY", "")
