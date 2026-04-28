@@ -61,7 +61,7 @@ async function runSSHCommand(server, command, timeout = 30000) {
   });
 }
 
-// Direct proxy check without SSH - fallback method
+// Direct proxy check - uses HTTP GET through proxy (works with Bright Data)
 async function checkProxyDirect(proxyHost, proxyPort, proxyUser, proxyPass) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -73,73 +73,57 @@ async function checkProxyDirect(proxyHost, proxyPort, proxyUser, proxyPass) {
 
     const auth = Buffer.from(`${proxyUser}:${proxyPass}`).toString('base64');
 
+    // Use HTTP GET through proxy (not CONNECT) - compatible with Bright Data
     const options = {
       host: proxyHost,
       port: parseInt(proxyPort),
-      method: 'CONNECT',
-      path: 'ipv4.icanhazip.com:443',
+      path: 'http://ipv4.icanhazip.com/',
+      method: 'GET',
       headers: {
-        'Host': 'ipv4.icanhazip.com:443',
+        'Host': 'ipv4.icanhazip.com',
         'Proxy-Authorization': `Basic ${auth}`
       },
       timeout: 20000
     };
 
-    const req = http.request(options);
-
-    req.on('connect', (res, socket) => {
-      if (res.statusCode === 200) {
-        const tlsOptions = {
-          host: 'ipv4.icanhazip.com',
-          socket: socket,
-          rejectUnauthorized: false
-        };
-
-        const tls = require('tls');
-        const tlsSocket = tls.connect(tlsOptions, () => {
-          tlsSocket.write('GET / HTTP/1.1\r\nHost: ipv4.icanhazip.com\r\nConnection: close\r\n\r\n');
-        });
-
-        let data = '';
-        tlsSocket.on('data', (chunk) => { data += chunk.toString(); });
-        tlsSocket.on('end', () => {
-          clearTimeout(timer);
-          try {
-            const body = data.split('\r\n\r\n').pop().trim();
-            const ip = body.split('\n').pop().trim();
-            if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
-              // Get geo info
-              const geoReq = http.get(`http://ip-api.com/json/${ip}`, { timeout: 10000 }, (geoRes) => {
-                let geoData = '';
-                geoRes.on('data', (c) => { geoData += c.toString(); });
-                geoRes.on('end', () => {
-                  try {
-                    const geo = JSON.parse(geoData);
-                    done({ ok: true, ip, country: geo.country || '?', cc: geo.countryCode || '' });
-                  } catch(e) {
-                    done({ ok: true, ip, country: '?', cc: '' });
-                  }
-                });
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk.toString(); });
+      res.on('end', () => {
+        clearTimeout(timer);
+        if (res.statusCode === 407) {
+          return done({ ok: false, error: 'auth_failed' });
+        }
+        if (res.statusCode === 402) {
+          return done({ ok: false, error: 'no_balance' });
+        }
+        if (res.statusCode !== 200) {
+          return done({ ok: false, error: `proxy_status_${res.statusCode}` });
+        }
+        try {
+          const ip = data.trim().split('\n').pop().trim();
+          if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+            // Get geo info
+            const geoReq = http.get(`http://ip-api.com/json/${ip}`, { timeout: 10000 }, (geoRes) => {
+              let geoData = '';
+              geoRes.on('data', (c) => { geoData += c.toString(); });
+              geoRes.on('end', () => {
+                try {
+                  const geo = JSON.parse(geoData);
+                  done({ ok: true, ip, country: geo.country || '?', cc: geo.countryCode || '' });
+                } catch(e) {
+                  done({ ok: true, ip, country: '?', cc: '' });
+                }
               });
-              geoReq.on('error', () => { done({ ok: true, ip, country: '?', cc: '' }); });
-            } else {
-              done({ ok: false, error: 'empty_ip' });
-            }
-          } catch(e) {
-            done({ ok: false, error: 'parse_error' });
+            });
+            geoReq.on('error', () => { done({ ok: true, ip, country: '?', cc: '' }); });
+          } else {
+            done({ ok: false, error: 'empty_ip' });
           }
-        });
-        tlsSocket.on('error', (e) => { clearTimeout(timer); done({ ok: false, error: e.message }); });
-      } else if (res.statusCode === 407) {
-        clearTimeout(timer);
-        done({ ok: false, error: 'auth_failed' });
-      } else if (res.statusCode === 402) {
-        clearTimeout(timer);
-        done({ ok: false, error: 'no_balance' });
-      } else {
-        clearTimeout(timer);
-        done({ ok: false, error: `proxy_status_${res.statusCode}` });
-      }
+        } catch(e) {
+          done({ ok: false, error: 'parse_error' });
+        }
+      });
     });
 
     req.on('error', (e) => {
@@ -185,7 +169,7 @@ creds = json.loads(base64.b64decode('${credsB64}').decode())
 try:
     proxy_url = 'http://' + creds['user'] + ':' + creds['pass'] + '@' + creds['host'] + ':' + creds['port']
     proxies = {'http': proxy_url, 'https': proxy_url}
-    r = requests.get('https://ipv4.icanhazip.com', proxies=proxies, timeout=20)
+    r = requests.get('http://ipv4.icanhazip.com', proxies=proxies, timeout=20)
     ip = r.text.strip()
     if ip:
         try:
