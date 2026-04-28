@@ -1083,6 +1083,21 @@ def bypass_cloudflare(page, max_wait=90):
         except:
             t = ''
         
+        # Check if page is chrome-error (proxy failed to load page)
+        try:
+            _cf_url = page.url
+            if _cf_url and 'chrome-error' in _cf_url:
+                # Page didn't load - try reloading
+                if i % 3 == 0:
+                    print(f"  \U0001f504 Page chrome-error, reloading... ({elapsed}s)", flush=True)
+                    try:
+                        page.reload(timeout=30000, wait_until='domcontentloaded')
+                    except:
+                        pass
+                continue
+        except:
+            pass
+        
         # Check if challenge is solved
         if t and 'moment' not in t.lower() and 'لحظة' not in t and 'just' not in t.lower():
             print(f"  ✅ CF bypassed ({elapsed}s) - Title: {t[:40]}", flush=True)
@@ -5823,6 +5838,11 @@ def find_booking_page(page, target_url, api_bypass_setup=None, api_bypass_active
 
 def run_smart_bot(target_url, duration_min=5, num_instances=3):
     """Run the smart form bot for specified duration"""
+    # Cap instances to avoid proxy overload (126 browsers kills the proxy)
+    MAX_INSTANCES = 25
+    if num_instances > MAX_INSTANCES:
+        print(f"\u26a0\ufe0f Capping instances from {num_instances} to {MAX_INSTANCES} to avoid proxy overload", flush=True)
+        num_instances = MAX_INSTANCES
     try:
         from patchright.sync_api import sync_playwright
         print("🛡️ Using Patchright (undetected browser)")
