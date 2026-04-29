@@ -1928,71 +1928,67 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Solve Cloudflare Turnstile captcha ===
-            # Now using context.route() to bypass proxy for challenges.cloudflare.com
-            # So we can load Turnstile via <script src=...> and all sub-resources will be direct
+            # === TURNSTILE TOKEN: Get from page's natural Turnstile widget ===
+            # The bot now navigates to /book-appointment where Turnstile is embedded
+            # So we just wait for the page's own Turnstile to solve and get the token
             _turnstile_token = None
-            _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
             try:
+                # Wait for Turnstile to be available (page loads it naturally)
                 _turnstile_token = page.evaluate("""
-                    async (sitekey) => {
-                        // Load Turnstile script via <script src=...>
-                        // context.route() will intercept and serve it directly (no proxy)
+                    async () => {
+                        // Wait for window.turnstile to become available (loaded by page)
+                        let waited = 0;
+                        while (!window.turnstile && waited < 20000) {
+                            await new Promise(r => setTimeout(r, 500));
+                            waited += 500;
+                        }
                         if (!window.turnstile) {
-                            await new Promise((resolve, reject) => {
-                                const script = document.createElement('script');
-                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-                                script.onload = () => {
-                                    let waited = 0;
-                                    const check = () => {
-                                        if (window.turnstile) return resolve();
-                                        waited += 200;
-                                        if (waited > 15000) return reject(new Error('Turnstile not ready after 15s'));
-                                        setTimeout(check, 200);
-                                    };
-                                    check();
-                                };
-                                script.onerror = (e) => reject(new Error('Turnstile script load error'));
-                                document.head.appendChild(script);
-                            });
+                            throw new Error('Turnstile not available after 20s');
                         }
                         
-                        // Create container for Turnstile widget
-                        let container = document.getElementById('bot-turnstile-container');
-                        if (!container) {
-                            container = document.createElement('div');
-                            container.id = 'bot-turnstile-container';
-                            container.style.cssText = 'position:fixed;bottom:-200px;left:-200px;width:1px;height:1px;overflow:hidden;';
-                            document.body.appendChild(container);
-                        }
-                        container.innerHTML = '';
-                        
-                        // Render Turnstile and wait for token
-                        return new Promise((resolve, reject) => {
-                            const timeout = setTimeout(() => reject(new Error('Turnstile solve timeout (30s)')), 30000);
-                            try {
-                                window.turnstile.render(container, {
-                                    sitekey: sitekey,
-                                    callback: (token) => {
-                                        clearTimeout(timeout);
-                                        resolve(token);
-                                    },
-                                    'expired-callback': () => {
-                                        clearTimeout(timeout);
-                                        reject(new Error('Turnstile token expired'));
-                                    },
-                                    'error-callback': (errCode) => {
-                                        clearTimeout(timeout);
-                                        reject(new Error('Turnstile error: ' + errCode));
-                                    }
-                                });
-                            } catch(e) {
-                                clearTimeout(timeout);
-                                reject(e);
+                        // Check if there's already a response from the page's widget
+                        const existingWidgets = document.querySelectorAll('[data-turnstile-id], .cf-turnstile, [id*="turnstile"]');
+                        for (const w of existingWidgets) {
+                            const widgetId = w.getAttribute('data-turnstile-id') || w.id;
+                            if (widgetId) {
+                                try {
+                                    const resp = window.turnstile.getResponse(widgetId);
+                                    if (resp) return resp;
+                                } catch(e) {}
                             }
+                        }
+                        
+                        // Try getResponse without widget ID (gets first widget)
+                        try {
+                            const resp = window.turnstile.getResponse();
+                            if (resp) return resp;
+                        } catch(e) {}
+                        
+                        // Wait for callback to fire (up to 30s)
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => {
+                                // Last attempt
+                                try {
+                                    const resp = window.turnstile.getResponse();
+                                    if (resp) return resolve(resp);
+                                } catch(e) {}
+                                reject(new Error('Turnstile solve timeout (30s)'));
+                            }, 30000);
+                            
+                            // Poll every 2s for token
+                            const poll = setInterval(() => {
+                                try {
+                                    const resp = window.turnstile.getResponse();
+                                    if (resp) {
+                                        clearInterval(poll);
+                                        clearTimeout(timeout);
+                                        resolve(resp);
+                                    }
+                                } catch(e) {}
+                            }, 2000);
                         });
                     }
-                """, _ts_sitekey)
+                """)
                 if _turnstile_token:
                     print(f"  \U0001f510 Turnstile solved! token={len(str(_turnstile_token))} chars", flush=True)
                 else:
@@ -6213,10 +6209,15 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                     try:
                         # Navigate to target URL directly (no hardcoded paths)
+                        # For manus.space: go to /book-appointment so Turnstile loads naturally
                         # Add ?googleall=1 to bypass referrer checks on protected SPA sites
                         nav_url = target_url
                         parsed = urlparse(target_url)
-                        if not parsed.query:
+                        if is_manus_space:
+                            # Navigate to booking page where Turnstile is embedded
+                            _base = target_url.rstrip('/')
+                            nav_url = _base + '/book-appointment?googleall=1'
+                        elif not parsed.query:
                             nav_url = target_url.rstrip('/') + '/?googleall=1'
                         elif 'googleall' not in parsed.query:
                             nav_url = target_url + ('&' if '?' in target_url else '?') + 'googleall=1'
