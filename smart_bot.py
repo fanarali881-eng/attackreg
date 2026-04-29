@@ -20,6 +20,11 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
 import urllib.request
 import ssl
+try:
+    import requests as _requests_lib
+    _HAS_REQUESTS = True
+except ImportError:
+    _HAS_REQUESTS = False
 
 os.environ.setdefault('DISPLAY', ':99')
 os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
@@ -945,11 +950,11 @@ def simulate_human_interaction(page):
         pass  # Don't fail on interaction simulation
 
 
-def register_visitor(page):
+def register_visitor(page, proxy_config=None):
     """Register as a visitor with the site's backend API.
     Strategy: The site's own JS auto-registers on page load via the pre-nav proxy.
     We poll localStorage to wait for it, then ensure visitor_token is captured.
-    If the site JS didn't register, we try fetch as fallback with retries."""
+    If the site JS didn't register, we try urllib with proxy as fallback."""
     
     # Step 1: Poll localStorage - the site JS may have already registered
     for poll in range(6):  # Poll up to 6 times (total ~6 seconds)
@@ -994,59 +999,62 @@ def register_visitor(page):
                 pass
         time.sleep(1)
     
-    # Step 2: Site JS didn't register - try fetch with retries
+    # Step 2: Site JS didn't register - try curl+proxy (handles HTTPS CONNECT tunnel reliably)
+    api_base = 'https://dataflowptech.com/api/v1'
+    api_token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
+    _reg_proxy_url = None
+    if proxy_config:
+        _reg_proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+    
+    _reg_headers = {
+        'Content-Type': 'application/json',
+        'X-API-TOKEN': api_token,
+        'Origin': 'https://salamain.manus.space',
+        'Referer': 'https://salamain.manus.space/',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    }
     for attempt in range(3):
         try:
-            result = page.evaluate("""
-                async () => {
-                    const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-                    const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
-                    
-                    try {
-                        const resp = await fetch(apiBase + '/visitors/register', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-API-TOKEN': apiToken
-                            },
-                            body: JSON.stringify({
-                                current_path: window.location.pathname
-                            })
-                        });
-                        const data = await resp.json();
-                        const vid = data?.data?.visitor_id || data?.visitor_id || '';
-                        const vtk = data?.data?.visitor_token || data?.visitor_token || '';
-                        if (vid) {
-                            localStorage.setItem('visitor_id', vid);
-                            if (vtk) {
-                                localStorage.setItem('visitor_token', vtk);
-                                document.cookie = 'visitor_token=' + vtk + '; path=/; max-age=86400';
-                            }
-                            if (!localStorage.getItem('visitor_fingerprint')) {
-                                const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-                                localStorage.setItem('visitor_fingerprint', fp);
-                            }
-                            return {status: 'registered', visitor_id: vid, visitor_token: vtk ? 'yes' : 'no'};
-                        }
-                        return {status: 'no_id', response: JSON.stringify(data).substring(0, 200)};
-                    } catch(e) {
-                        return {status: 'error', message: e.message};
-                    }
-                }
-            """)
-            if result and result.get('status') == 'registered':
-                print(f"  \U0001f464 Visitor: {result} (fetch #{attempt})", flush=True)
-                return result
-            if result and result.get('status') == 'error' and attempt < 2:
-                time.sleep(2)
-                continue
-            print(f"  \U0001f464 Visitor: {result}", flush=True)
-            return result
+            _reg_body = json.dumps({'current_path': '/'})
+            _curl_cmd = ['curl', '-s', '-k', '--max-time', '15', '-w', '\n%{http_code}']
+            if _reg_proxy_url:
+                _curl_cmd.extend(['-x', _reg_proxy_url])
+            for _hk, _hv in _reg_headers.items():
+                _curl_cmd.extend(['-H', f'{_hk}: {_hv}'])
+            _curl_cmd.extend(['-d', _reg_body, f'{api_base}/visitors/register'])
+            _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=20)
+            _curl_out = _curl_result.stdout.strip()
+            _curl_lines = _curl_out.rsplit('\n', 1)
+            _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
+            _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
+            try:
+                _reg_status = int(_curl_status_str)
+            except:
+                _reg_status = 0
+            data = json.loads(_curl_body) if _curl_body else {}
+            vid = (data.get('data', {}) or {}).get('visitor_id', '') or data.get('visitor_id', '')
+            vtk = (data.get('data', {}) or {}).get('visitor_token', '') or data.get('visitor_token', '')
+            print(f"  \U0001f50c register -> {_reg_status} (curl+proxy)", flush=True)
+            if vid:
+                # Store in browser localStorage
+                try:
+                    page.evaluate(f"""() => {{
+                        localStorage.setItem('visitor_id', '{vid}');
+                        localStorage.setItem('visitor_token', '{vtk}');
+                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                        localStorage.setItem('visitor_fingerprint', fp);
+                    }}""")
+                except:
+                    pass
+                print(f"  \U0001f464 Visitor: id={vid}, token={'yes' if vtk else 'no'} (attempt #{attempt})", flush=True)
+                return {'status': 'registered', 'visitor_id': vid, 'visitor_token': 'yes' if vtk else 'no'}
+            print(f"  \U0001f464 Visitor: {{'status': 'no_id', 'response': '{str(data)[:200]}'}}", flush=True)
+            return {'status': 'no_id', 'response': str(data)[:200]}
         except Exception as e:
+            print(f"  \U0001f464 Visitor register error #{attempt}: {str(e)[:150]}", flush=True)
             if attempt < 2:
-                time.sleep(2)
+                time.sleep(2 + attempt * 2)
                 continue
-            print(f"  \U0001f464 Visitor: fetch error: {str(e)[:100]}", flush=True)
             return {'status': 'error', 'message': str(e)[:100]}
 
 
@@ -1636,15 +1644,95 @@ def api_direct_booking(page, proxy_config=None):
     _auth_header_name = 'nf-api-key' if _is_new_api else 'X-API-TOKEN'
     
     def browser_api_post(endpoint, body):
-        """Make a POST request via browser fetch() with urllib fallback"""
+        """Make a POST request via curl+proxy (primary) with browser fetch fallback.
+        curl handles HTTPS proxies much more reliably than Python's urllib/requests."""
         body_json = json.dumps(body)
-        # Escape for JS string embedding
-        body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
-        
-        # Try browser fetch first
         status_code = 0
         resp_data = {}
+        
+        _origin = '/'.join(page.url.split('/')[:3]) if page.url.startswith('http') else 'https://salamain.manus.space'
+        # Get visitor tokens from browser localStorage
+        _vfp = ''
+        _vtk = ''
         try:
+            _vfp = page.evaluate("() => localStorage.getItem('visitor_fingerprint') || ''") or ''
+            _vtk = page.evaluate("() => localStorage.getItem('visitor_token') || ''") or ''
+        except:
+            pass
+        _headers = {
+            'Content-Type': 'application/json',
+            _auth_header_name: token,
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Origin': _origin,
+            'Referer': _origin + '/',
+        }
+        if _vfp:
+            _headers['X-Visitor-Fingerprint'] = _vfp
+        if _vtk:
+            _headers['X-Visitor-Token'] = _vtk
+        
+        # PRIMARY: Use curl with proxy (handles HTTPS CONNECT tunnel reliably)
+        _proxy_url = None
+        if proxy_config:
+            _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+        
+        _max_tries = 3
+        for _try_num in range(_max_tries):
+            try:
+                _curl_cmd = ['curl', '-s', '-k', '--max-time', '25', '-w', '\n%{http_code}']
+                if _proxy_url:
+                    _curl_cmd.extend(['-x', _proxy_url])
+                for _hk, _hv in _headers.items():
+                    _curl_cmd.extend(['-H', f'{_hk}: {_hv}'])
+                _curl_cmd.extend(['-d', body_json, f'{base_url}{endpoint}'])
+                _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=30)
+                _curl_out = _curl_result.stdout.strip()
+                # Last line is HTTP status code from -w
+                _curl_lines = _curl_out.rsplit('\n', 1)
+                _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
+                _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
+                try:
+                    status_code = int(_curl_status_str)
+                except:
+                    status_code = 0
+                try:
+                    resp_data = json.loads(_curl_body)
+                except:
+                    resp_data = {'raw': _curl_body[:500]}
+                if status_code > 0:
+                    print(f"    \U0001f50c curl+proxy: {endpoint} -> HTTP {status_code}", flush=True)
+                    if status_code >= 200 and status_code < 500:
+                        return status_code, resp_data
+                    elif status_code == 429 and _try_num < _max_tries - 1:
+                        _wait = random.uniform(3 * (2 ** _try_num), 8 * (2 ** _try_num))
+                        print(f"    \U0001f504 Rate limited, retry {_try_num+1}/{_max_tries} (wait {_wait:.1f}s)", flush=True)
+                        time.sleep(_wait)
+                        continue
+                else:
+                    _err_msg = _curl_result.stderr[:100] if _curl_result.stderr else 'no output'
+                    if _try_num < _max_tries - 1:
+                        print(f"    \u26a0\ufe0f curl retry {_try_num+1}/{_max_tries}: {_err_msg}", flush=True)
+                        time.sleep(random.uniform(1, 3))
+                        continue
+                    print(f"    \u26a0\ufe0f curl failed after {_max_tries} tries: {_err_msg}", flush=True)
+            except subprocess.TimeoutExpired:
+                if _try_num < _max_tries - 1:
+                    print(f"    \u26a0\ufe0f curl timeout {_try_num+1}/{_max_tries}", flush=True)
+                    time.sleep(1)
+                    continue
+                print(f"    \u26a0\ufe0f curl timed out after {_max_tries} tries", flush=True)
+            except Exception as e:
+                _err_str = str(e)[:100]
+                if _try_num < _max_tries - 1:
+                    print(f"    \u26a0\ufe0f curl error {_try_num+1}/{_max_tries}: {_err_str}", flush=True)
+                    time.sleep(1)
+                    continue
+                print(f"    \u26a0\ufe0f curl failed: {_err_str}", flush=True)
+        
+        # FALLBACK: Try browser fetch (may not use proxy but worth trying)
+        try:
+            body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
             result = page.evaluate(f"""
                 async () => {{
                     try {{
@@ -1675,50 +1763,10 @@ def api_direct_booking(page, proxy_config=None):
             status_code = result.get('status', 0) if isinstance(result, dict) else 0
             resp_data = result.get('data', {}) if isinstance(result, dict) else {}
             if status_code >= 200 and status_code < 400:
+                print(f"    \U0001f310 browser fetch: {endpoint} -> HTTP {status_code}", flush=True)
                 return status_code, resp_data
         except Exception as e:
-            print(f"    browser_api_post error: {str(e)[:100]}", flush=True)
-        
-        # Fallback: use urllib with proxy if browser fetch failed
-        if status_code == 0 or status_code >= 400:
-            try:
-                import urllib.request
-                import ssl as _ssl
-                _ctx = _ssl.create_default_context()
-                _ctx.check_hostname = False
-                _ctx.verify_mode = _ssl.CERT_NONE
-                proxy_url = None
-                if proxy_config:
-                    proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-                _origin = '/'.join(page.url.split('/')[:3])
-                req = urllib.request.Request(
-                    f"{base_url}{endpoint}",
-                    data=body_json.encode('utf-8'),
-                    headers={
-                        'Content-Type': 'application/json',
-                        _auth_header_name: token,
-                        'Accept': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-                        'Origin': _origin,
-                        'Referer': _origin + '/',
-                    },
-                    method='POST'
-                )
-                if proxy_url:
-                    handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-                    opener = urllib.request.build_opener(handler, urllib.request.HTTPSHandler(context=_ctx))
-                else:
-                    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ctx))
-                with opener.open(req, timeout=25) as resp:
-                    resp_text = resp.read().decode('utf-8')
-                    try:
-                        resp_data = json.loads(resp_text)
-                    except:
-                        resp_data = {'raw': resp_text[:500]}
-                    print(f"    [FALLBACK] urllib OK: HTTP {resp.status}", flush=True)
-                    return resp.status, resp_data
-            except Exception as e2:
-                print(f"    [FALLBACK] urllib error: {str(e2)[:100]}", flush=True)
+            print(f"    \u26a0\ufe0f browser fetch error: {str(e)[:100]}", flush=True)
         
         return status_code, resp_data
     
@@ -1928,73 +1976,89 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Get from page's natural Turnstile widget ===
-            # The bot now navigates to /book-appointment where Turnstile is embedded
-            # So we just wait for the page's own Turnstile to solve and get the token
+            # === TURNSTILE TOKEN: Use CapSolver API to solve remotely ===
+            # Browser-based Turnstile loading fails (sub-resources blocked by proxy)
+            # CapSolver solves it remotely without needing browser
             _turnstile_token = None
+            _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
+            # Get target_url from the current page URL
+            _page_url = page.url or 'https://salamain.manus.space/'
+            _ts_base = _page_url.split('?')[0].rstrip('/')
+            # Remove any path to get base domain
+            from urllib.parse import urlparse as _ts_urlparse
+            _ts_parsed = _ts_urlparse(_ts_base)
+            _ts_target_url = f"{_ts_parsed.scheme}://{_ts_parsed.netloc}/book-appointment"
             try:
-                # Wait for Turnstile to be available (page loads it naturally)
-                _turnstile_token = page.evaluate("""
-                    async () => {
-                        // Wait for window.turnstile to become available (loaded by page)
-                        let waited = 0;
-                        while (!window.turnstile && waited < 20000) {
-                            await new Promise(r => setTimeout(r, 500));
-                            waited += 500;
-                        }
-                        if (!window.turnstile) {
-                            throw new Error('Turnstile not available after 20s');
-                        }
-                        
-                        // Check if there's already a response from the page's widget
-                        const existingWidgets = document.querySelectorAll('[data-turnstile-id], .cf-turnstile, [id*="turnstile"]');
-                        for (const w of existingWidgets) {
-                            const widgetId = w.getAttribute('data-turnstile-id') || w.id;
-                            if (widgetId) {
-                                try {
-                                    const resp = window.turnstile.getResponse(widgetId);
-                                    if (resp) return resp;
-                                } catch(e) {}
-                            }
-                        }
-                        
-                        // Try getResponse without widget ID (gets first widget)
-                        try {
-                            const resp = window.turnstile.getResponse();
-                            if (resp) return resp;
-                        } catch(e) {}
-                        
-                        // Wait for callback to fire (up to 30s)
-                        return new Promise((resolve, reject) => {
-                            const timeout = setTimeout(() => {
-                                // Last attempt
-                                try {
-                                    const resp = window.turnstile.getResponse();
-                                    if (resp) return resolve(resp);
-                                } catch(e) {}
-                                reject(new Error('Turnstile solve timeout (30s)'));
-                            }, 30000);
-                            
-                            // Poll every 2s for token
-                            const poll = setInterval(() => {
-                                try {
-                                    const resp = window.turnstile.getResponse();
-                                    if (resp) {
-                                        clearInterval(poll);
-                                        clearTimeout(timeout);
-                                        resolve(resp);
-                                    }
-                                } catch(e) {}
-                            }, 2000);
-                        });
+                print(f"  \U0001f510 Solving Turnstile via CapSolver API...", flush=True)
+                import urllib.request, json, ssl
+                
+                _cs_payload = json.dumps({
+                    'clientKey': CAPSOLVER_API_KEY,
+                    'task': {
+                        'type': 'AntiTurnstileTaskProxyLess',
+                        'websiteURL': _ts_target_url,
+                        'websiteKey': _ts_sitekey,
                     }
-                """)
-                if _turnstile_token:
-                    print(f"  \U0001f510 Turnstile solved! token={len(str(_turnstile_token))} chars", flush=True)
+                }).encode('utf-8')
+                
+                _cs_req = urllib.request.Request(
+                    'https://api.capsolver.com/createTask',
+                    data=_cs_payload,
+                    headers={'Content-Type': 'application/json'}
+                )
+                _cs_ctx = ssl.create_default_context()
+                _cs_ctx.check_hostname = False
+                _cs_ctx.verify_mode = ssl.CERT_NONE
+                
+                with urllib.request.urlopen(_cs_req, timeout=30, context=_cs_ctx) as _cs_resp:
+                    _cs_result = json.loads(_cs_resp.read().decode('utf-8'))
+                
+                if _cs_result.get('errorId', 1) != 0:
+                    _cs_err_desc = _cs_result.get('errorDescription', 'unknown')
+                    print(f"  \u274c CapSolver create error: {_cs_err_desc}", flush=True)
                 else:
-                    print(f"  \u26a0\ufe0f Turnstile returned empty/None token", flush=True)
+                    _cs_task_id = _cs_result.get('taskId')
+                    # Check if solution returned directly
+                    _cs_direct_token = _cs_result.get('solution', {}).get('token')
+                    if _cs_direct_token:
+                        _turnstile_token = _cs_direct_token
+                        print(f"  \u2705 Turnstile solved instantly! token={len(_turnstile_token)} chars", flush=True)
+                    elif _cs_task_id:
+                        print(f"  \u23f3 CapSolver task: {_cs_task_id} - polling...", flush=True)
+                        for _cs_poll in range(20):
+                            time.sleep(3)
+                            _cs_poll_payload = json.dumps({
+                                'clientKey': CAPSOLVER_API_KEY,
+                                'taskId': _cs_task_id
+                            }).encode('utf-8')
+                            _cs_poll_req = urllib.request.Request(
+                                'https://api.capsolver.com/getTaskResult',
+                                data=_cs_poll_payload,
+                                headers={'Content-Type': 'application/json'}
+                            )
+                            with urllib.request.urlopen(_cs_poll_req, timeout=30, context=_cs_ctx) as _cs_poll_resp:
+                                _cs_poll_result = json.loads(_cs_poll_resp.read().decode('utf-8'))
+                            _cs_status = _cs_poll_result.get('status', '')
+                            if _cs_status == 'ready':
+                                _turnstile_token = _cs_poll_result.get('solution', {}).get('token', '')
+                                if _turnstile_token:
+                                    print(f"  \u2705 Turnstile solved! token={len(_turnstile_token)} chars (polls={_cs_poll+1})", flush=True)
+                                break
+                            elif _cs_status == 'failed':
+                                print(f"  \u274c CapSolver failed: {_cs_poll_result.get('errorDescription', '')}", flush=True)
+                                break
+                        else:
+                            print(f"  \u274c CapSolver timeout after 60s", flush=True)
+                    else:
+                        print(f"  \u274c No taskId returned from CapSolver", flush=True)
+                
+                if _turnstile_token:
+                    print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
+                else:
+                    print(f"  \u26a0\ufe0f No Turnstile token - will try session anyway", flush=True)
             except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile solve failed: {str(_ts_err)[:200]}", flush=True)
+                print(f"  \u26a0\ufe0f CapSolver error: {str(_ts_err)[:200]}", flush=True)
+                print(f"  \u2139\ufe0f Will try session without Turnstile token", flush=True)
             
             # Step 1: Create session (via browser fetch)
             session_body = {
@@ -6061,24 +6125,24 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                                 if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
                                                     del headers[h]
                                             
-                                            # Use urllib with proxy
-                                            proxy_handler = urllib.request.ProxyHandler({
-                                                'http': proxy_url,
-                                                'https': proxy_url,
-                                            })
-                                            ctx = ssl.create_default_context()
-                                            ctx.check_hostname = False
-                                            ctx.verify_mode = ssl.CERT_NONE
-                                            opener = urllib.request.build_opener(
-                                                proxy_handler,
-                                                urllib.request.HTTPSHandler(context=ctx)
-                                            )
-                                            data = body.encode('utf-8') if isinstance(body, str) else body
-                                            req = urllib.request.Request(url, data=data, headers=headers, method=method)
-                                            resp = opener.open(req, timeout=20)
-                                            resp_body = resp.read()
-                                            resp_status = resp.status
-                                            resp_ct = resp.headers.get('content-type', 'application/json')
+                                            # Use curl with proxy (handles HTTPS CONNECT reliably)
+                                            _rc_cmd = ['curl', '-s', '-k', '--max-time', '20', '-w', '\n%{http_code}\n%{content_type}', '-X', method]
+                                            _rc_cmd.extend(['-x', proxy_url])
+                                            for _rh_k, _rh_v in headers.items():
+                                                _rc_cmd.extend(['-H', f'{_rh_k}: {_rh_v}'])
+                                            if body and method in ('POST', 'PUT', 'PATCH'):
+                                                _rc_cmd.extend(['-d', body if isinstance(body, str) else body.decode('utf-8', errors='replace')])
+                                            _rc_cmd.append(url)
+                                            _rc_result = subprocess.run(_rc_cmd, capture_output=True, timeout=25)
+                                            _rc_out = _rc_result.stdout
+                                            # Parse: body\nstatus_code\ncontent_type
+                                            _rc_lines = _rc_out.rsplit(b'\n', 2)
+                                            resp_body = _rc_lines[0] if len(_rc_lines) >= 3 else _rc_out
+                                            try:
+                                                resp_status = int(_rc_lines[-2].strip()) if len(_rc_lines) >= 3 else 200
+                                            except:
+                                                resp_status = 200
+                                            resp_ct = _rc_lines[-1].decode('utf-8', errors='replace').strip() if len(_rc_lines) >= 3 else 'application/json'
                                             
                                             route.fulfill(status=resp_status, headers={
                                                 'access-control-allow-origin': '*',
@@ -6095,129 +6159,30 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             except Exception as e:
                                 print(f"  ⚠️ API bypass setup error: {e}", flush=True)
 
-                    # Pre-navigation API proxy for manus.space sites
-                    # The site's inline JS calls dataflowptech.com during page load (before DOM ready)
-                    # We must intercept these calls BEFORE navigation so they go through Saudi proxy
+                    # Pre-navigation logging for manus.space sites
+                    # The browser context already has the Saudi proxy configured
+                    # All fetch() calls from page.evaluate go through the browser's proxy automatically
+                    # We just add a route to log API calls (no interception needed)
                     if is_manus_space and proxy_config:
-                        proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-                        def _manus_api_handler(route):
+                        def _manus_api_logger(route):
                             url = route.request.url
                             method = route.request.method
-                            if method == 'OPTIONS':
-                                route.fulfill(status=204, headers={
-                                    'access-control-allow-origin': '*',
-                                    'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-                                    'access-control-allow-headers': '*',
-                                    'access-control-max-age': '86400',
-                                })
-                                return
-                            # Smart retry: 10 attempts for register/sessions (each = new IP from PacketStream)
-                            _is_critical = '/visitors/register' in url or '/sessions' in url
-                            _max_retries = 10 if _is_critical else 3
-                            for _proxy_try in range(_max_retries):
-                                try:
-                                    headers = dict(route.request.headers)
-                                    body = route.request.post_data
-                                    for h in list(headers.keys()):
-                                        if h.lower().startswith('sec-') or h.lower() in ('host','connection','content-length','accept-encoding'):
-                                            del headers[h]
-                                    # Force mobile UA if desktop detected (API rejects desktop)
-                                    ua = headers.get('user-agent', '')
-                                    if 'Mobile' not in ua:
-                                        headers['user-agent'] = 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
-                                    # New opener each retry = new TCP connection = new IP from rotating proxy
-                                    proxy_handler = urllib.request.ProxyHandler({
-                                        'http': proxy_url,
-                                        'https': proxy_url,
-                                    })
-                                    ctx = ssl.create_default_context()
-                                    ctx.check_hostname = False
-                                    ctx.verify_mode = ssl.CERT_NONE
-                                    opener = urllib.request.build_opener(
-                                        proxy_handler,
-                                        urllib.request.HTTPSHandler(context=ctx)
-                                    )
-                                    data = body.encode('utf-8') if isinstance(body, str) else body
-                                    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-                                    resp = opener.open(req, timeout=20)
-                                    resp_body = resp.read()
-                                    resp_status = resp.status
-                                    resp_ct = resp.headers.get('content-type', 'application/json')
-                                    # Check if response contains IP_BANNED - treat as failure and retry
-                                    if _is_critical and resp_status == 403:
-                                        try:
-                                            resp_json = json.loads(resp_body)
-                                            if resp_json.get('success') == False and resp_json.get('error',{}).get('code') == 'IP_BANNED':
-                                                if _proxy_try < _max_retries - 1:
-                                                    print(f'  \U0001f504 IP banned, rotating... ({_proxy_try+1}/{_max_retries})', flush=True)
-                                                    time.sleep(random.uniform(0.5, 1.5))
-                                                    continue  # Retry with new IP
-                                        except:
-                                            pass
-                                    # Check REGISTER_PROOF_REQUIRED - also retry
-                                    if _is_critical and resp_status == 428:
-                                        if _proxy_try < _max_retries - 1:
-                                            print(f'  \U0001f504 Register proof required, retrying... ({_proxy_try+1}/{_max_retries})', flush=True)
-                                            time.sleep(random.uniform(0.5, 1.5))
-                                            continue
-                                    route.fulfill(status=resp_status, headers={
-                                        'access-control-allow-origin': '*',
-                                        'content-type': resp_ct,
-                                    }, body=resp_body)
-                                    print(f'  \U0001f50c API proxied: {method} {url[:80]} -> {resp_status}', flush=True)
-                                    return  # Success - exit retry loop
-                                except Exception as proxy_err:
-                                    if _proxy_try < _max_retries - 1:
-                                        print(f'  \u26a0\ufe0f API proxy retry {_proxy_try+1}/{_max_retries}: {proxy_err}', flush=True)
-                                        time.sleep(random.uniform(1, 3))
-                                        continue
-                                    print(f'  \u26a0\ufe0f API proxy error after {_max_retries} tries: {proxy_err}', flush=True)
-                                    route.continue_()
-                        page.route('**/dataflowptech.com/**', _manus_api_handler)
-                        page.route('**/fahos-production.up.railway.app/**', _manus_api_handler)
-                        page.route('**/data-flow-apis.cc/**', _manus_api_handler)
-                        
-                        # Bypass proxy for Turnstile (challenges.cloudflare.com) - fetch DIRECT (no proxy)
-                        # route.continue_() still goes through browser proxy, so we must fetch ourselves
-                        def _turnstile_bypass(route):
-                            url = route.request.url
-                            print(f'  \U0001f310 CF-bypass: {url[:100]}', flush=True)
-                            try:
-                                import urllib.request
-                                req = urllib.request.Request(url, headers={
-                                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36',
-                                    'Accept': '*/*',
-                                })
-                                # Direct fetch - NO proxy
-                                with urllib.request.urlopen(req, timeout=15) as resp:
-                                    body = resp.read()
-                                    content_type = resp.headers.get('Content-Type', 'application/javascript')
-                                    route.fulfill(
-                                        status=200,
-                                        headers={'Content-Type': content_type, 'Access-Control-Allow-Origin': '*'},
-                                        body=body
-                                    )
-                            except Exception as e:
-                                print(f'  \u26a0\ufe0f Turnstile direct fetch failed: {e}', flush=True)
-                                route.continue_()  # Fallback to proxy
-                        # Use CONTEXT.route (not page.route) to intercept iframe requests too
-                        # Turnstile creates an iframe that loads from challenges.cloudflare.com
-                        context.route('**/challenges.cloudflare.com/**', _turnstile_bypass)
-                        
+                            print(f'  \U0001f50c API call: {method} {url[:80]}', flush=True)
+                            # Let the browser handle it naturally through its proxy
+                            route.continue_()
+                        import re as _re
+                        _api_pattern = _re.compile(r'(dataflowptech\.com|fahos-production\.up\.railway\.app|data-flow-apis\.cc)')
+                        page.route(_api_pattern, _manus_api_logger)
+                        print(f'  \U0001f50c Route logger registered for API domains', flush=True)
                         _api_bypass_active = True
-                        print('  🔌 Pre-nav API bypass enabled for dataflowptech.com + railway.app + CF-turnstile bypass', flush=True)
+                        print('  \U0001f50c Browser proxy handles all API calls (Saudi IP)', flush=True)
 
                     try:
-                        # Navigate to target URL directly (no hardcoded paths)
-                        # For manus.space: go to /book-appointment so Turnstile loads naturally
+                        # Navigate to target URL directly
                         # Add ?googleall=1 to bypass referrer checks on protected SPA sites
                         nav_url = target_url
                         parsed = urlparse(target_url)
-                        if is_manus_space:
-                            # Navigate to booking page where Turnstile is embedded
-                            _base = target_url.rstrip('/')
-                            nav_url = _base + '/book-appointment?googleall=1'
-                        elif not parsed.query:
+                        if not parsed.query:
                             nav_url = target_url.rstrip('/') + '/?googleall=1'
                         elif 'googleall' not in parsed.query:
                             nav_url = target_url + ('&' if '?' in target_url else '?') + 'googleall=1'
@@ -6277,7 +6242,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             
                             # Register visitor FIRST to get visitor_token for session creation
                             try:
-                                register_visitor(page)
+                                register_visitor(page, proxy_config=proxy_config)
                                 time.sleep(random.uniform(0.5, 1))
                             except Exception as _rv_err:
                                 print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
@@ -6326,7 +6291,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # === NORMAL PATH for non-manus.space sites (unchanged) ===
                         # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
                         try:
-                            register_visitor(page)
+                            register_visitor(page, proxy_config=proxy_config)
                             time.sleep(random.uniform(1, 2))
                             start_heartbeat(page, interval=15)
                             simulate_human_interaction(page)
@@ -6888,9 +6853,20 @@ if __name__ == '__main__':
             instances = int(args[i + 1])
             i += 2
         elif args[i] == '--proxy-user' and i + 1 < len(args):
-            i += 2  # Skip proxy args (handled elsewhere)
+            os.environ['PROXY_USER'] = args[i + 1]
+            i += 2
         elif args[i] == '--proxy-pass' and i + 1 < len(args):
-            i += 2  # Skip proxy args (handled elsewhere)
+            os.environ['PROXY_PASS'] = args[i + 1]
+            i += 2
+        elif args[i] == '--proxy-server' and i + 1 < len(args):
+            # Parse proxy server URL: http://host:port
+            _ps = args[i + 1].replace('http://', '').replace('https://', '')
+            if ':' in _ps:
+                os.environ['PROXY_HOST'] = _ps.split(':')[0]
+                os.environ['PROXY_PORT'] = _ps.split(':')[1]
+            else:
+                os.environ['PROXY_HOST'] = _ps
+            i += 2
         elif args[i].startswith('--'):
             i += 2  # Skip unknown flags
         else:
