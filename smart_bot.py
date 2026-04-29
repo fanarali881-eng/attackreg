@@ -958,7 +958,7 @@ def register_visitor(page, proxy_config=None):
     
     # Step 1: Poll localStorage - the site JS auto-registers and our route interceptor
     # captures the response and stores visitor_id in localStorage
-    for poll in range(15):  # Poll up to 15 times (total ~15 seconds)
+    for poll in range(30):  # Poll up to 30 times (total ~30 seconds) - give site JS time to register
         try:
             result = page.evaluate("""
                 () => {
@@ -2108,7 +2108,7 @@ def api_direct_booking(page, proxy_config=None):
             if visitor_fingerprint:
                 session_body['visitor_fingerprint'] = visitor_fingerprint
             if _turnstile_token:
-                session_body['turnstile_token'] = _turnstile_token
+                session_body['cf-turnstile-response'] = _turnstile_token
             
             status, resp = browser_api_post('/sessions', session_body)
             print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
