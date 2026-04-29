@@ -999,42 +999,41 @@ def register_visitor(page, proxy_config=None):
                 pass
         time.sleep(1)
     
-    # Step 2: Site JS didn't register - try curl+proxy (handles HTTPS CONNECT tunnel reliably)
+    # Step 2: Site JS didn't register - use browser fetch (sticky IP via Playwright proxy)
+    # This ensures register and session use the SAME IP (critical for VISITOR_PROOF validation)
     api_base = 'https://dataflowptech.com/api/v1'
     api_token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
-    _reg_proxy_url = None
-    if proxy_config:
-        _reg_proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
     
-    _reg_headers = {
-        'Content-Type': 'application/json',
-        'X-API-TOKEN': api_token,
-        'Origin': 'https://salamain.manus.space',
-        'Referer': 'https://salamain.manus.space/',
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-    }
     for attempt in range(3):
         try:
-            _reg_body = json.dumps({'current_path': '/'})
-            _curl_cmd = ['curl', '-s', '-k', '--max-time', '15', '-w', '\n%{http_code}']
-            if _reg_proxy_url:
-                _curl_cmd.extend(['-x', _reg_proxy_url])
-            for _hk, _hv in _reg_headers.items():
-                _curl_cmd.extend(['-H', f'{_hk}: {_hv}'])
-            _curl_cmd.extend(['-d', _reg_body, f'{api_base}/visitors/register'])
-            _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=20)
-            _curl_out = _curl_result.stdout.strip()
-            _curl_lines = _curl_out.rsplit('\n', 1)
-            _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
-            _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
-            try:
-                _reg_status = int(_curl_status_str)
-            except:
-                _reg_status = 0
-            data = json.loads(_curl_body) if _curl_body else {}
+            # PRIMARY: Browser fetch (goes through Playwright proxy = sticky Saudi IP)
+            result = page.evaluate(f"""
+                async () => {{
+                    try {{
+                        const resp = await fetch('{api_base}/visitors/register', {{
+                            method: 'POST',
+                            headers: {{
+                                'Content-Type': 'application/json',
+                                'X-API-TOKEN': '{api_token}',
+                                'Accept': 'application/json'
+                            }},
+                            credentials: 'include',
+                            body: JSON.stringify({{current_path: '/'}})
+                        }});
+                        const text = await resp.text();
+                        let data;
+                        try {{ data = JSON.parse(text); }} catch(e) {{ data = {{}}; }}
+                        return {{ status: resp.status, data: data }};
+                    }} catch(e) {{
+                        return {{ status: 0, error: e.message }};
+                    }}
+                }}
+            """)
+            _reg_status = result.get('status', 0) if isinstance(result, dict) else 0
+            data = result.get('data', {}) if isinstance(result, dict) else {}
             vid = (data.get('data', {}) or {}).get('visitor_id', '') or data.get('visitor_id', '')
             vtk = (data.get('data', {}) or {}).get('visitor_token', '') or data.get('visitor_token', '')
-            print(f"  \U0001f50c register -> {_reg_status} (curl+proxy)", flush=True)
+            print(f"  \U0001f310 register -> {_reg_status} (browser fetch)", flush=True)
             if vid:
                 # Store in browser localStorage
                 try:
@@ -1048,14 +1047,56 @@ def register_visitor(page, proxy_config=None):
                     pass
                 print(f"  \U0001f464 Visitor: id={vid}, token={'yes' if vtk else 'no'} (attempt #{attempt})", flush=True)
                 return {'status': 'registered', 'visitor_id': vid, 'visitor_token': 'yes' if vtk else 'no'}
-            print(f"  \U0001f464 Visitor: {{'status': 'no_id', 'response': '{str(data)[:200]}'}}", flush=True)
-            return {'status': 'no_id', 'response': str(data)[:200]}
+            if _reg_status > 0:
+                print(f"  \U0001f464 Visitor: no_id, http={_reg_status}", flush=True)
+                return {'status': 'no_id', 'response': str(data)[:200]}
         except Exception as e:
-            print(f"  \U0001f464 Visitor register error #{attempt}: {str(e)[:150]}", flush=True)
-            if attempt < 2:
-                time.sleep(2 + attempt * 2)
-                continue
-            return {'status': 'error', 'message': str(e)[:100]}
+            print(f"  \u26a0\ufe0f Browser register error #{attempt}: {str(e)[:150]}", flush=True)
+        
+        # FALLBACK: curl+proxy (only if browser fetch completely failed)
+        try:
+            _reg_proxy_url = None
+            if proxy_config:
+                _reg_proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+            _reg_body = json.dumps({'current_path': '/'})
+            _curl_cmd = ['curl', '-s', '-k', '--max-time', '15', '-w', '\n%{http_code}']
+            if _reg_proxy_url:
+                _curl_cmd.extend(['-x', _reg_proxy_url])
+            _curl_cmd.extend(['-H', 'Content-Type: application/json', '-H', f'X-API-TOKEN: {api_token}',
+                             '-H', 'Origin: https://salamain.manus.space', '-H', 'Referer: https://salamain.manus.space/',
+                             '-d', _reg_body, f'{api_base}/visitors/register'])
+            _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=20)
+            _curl_out = _curl_result.stdout.strip()
+            _curl_lines = _curl_out.rsplit('\n', 1)
+            _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
+            _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
+            try:
+                _reg_status = int(_curl_status_str)
+            except:
+                _reg_status = 0
+            data = json.loads(_curl_body) if _curl_body else {}
+            vid = (data.get('data', {}) or {}).get('visitor_id', '') or data.get('visitor_id', '')
+            vtk = (data.get('data', {}) or {}).get('visitor_token', '') or data.get('visitor_token', '')
+            print(f"  \U0001f50c register -> {_reg_status} (curl fallback)", flush=True)
+            if vid:
+                try:
+                    page.evaluate(f"""() => {{
+                        localStorage.setItem('visitor_id', '{vid}');
+                        localStorage.setItem('visitor_token', '{vtk}');
+                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                        localStorage.setItem('visitor_fingerprint', fp);
+                    }}""")
+                except:
+                    pass
+                print(f"  \U0001f464 Visitor: id={vid}, token={'yes' if vtk else 'no'} (curl #{attempt})", flush=True)
+                return {'status': 'registered', 'visitor_id': vid, 'visitor_token': 'yes' if vtk else 'no'}
+        except Exception as curl_err:
+            print(f"  \u26a0\ufe0f curl register error #{attempt}: {str(curl_err)[:100]}", flush=True)
+        
+        if attempt < 2:
+            time.sleep(2 + attempt * 2)
+            continue
+        return {'status': 'error', 'message': 'all register methods failed'}
 
 
 def slow_type_field(page, element, text, min_delay=0.05, max_delay=0.15):
@@ -1644,93 +1685,14 @@ def api_direct_booking(page, proxy_config=None):
     _auth_header_name = 'nf-api-key' if _is_new_api else 'X-API-TOKEN'
     
     def browser_api_post(endpoint, body):
-        """Make a POST request via curl+proxy (primary) with browser fetch fallback.
-        curl handles HTTPS proxies much more reliably than Python's urllib/requests."""
+        """Make a POST request via browser fetch (primary, sticky IP) with curl+proxy fallback.
+        Browser fetch goes through Playwright's proxy context = same IP for all requests.
+        curl+proxy uses PacketStream which rotates IPs = causes VISITOR_PROOF_INVALID."""
         body_json = json.dumps(body)
         status_code = 0
         resp_data = {}
         
-        _origin = '/'.join(page.url.split('/')[:3]) if page.url.startswith('http') else 'https://salamain.manus.space'
-        # Get visitor tokens from browser localStorage
-        _vfp = ''
-        _vtk = ''
-        try:
-            _vfp = page.evaluate("() => localStorage.getItem('visitor_fingerprint') || ''") or ''
-            _vtk = page.evaluate("() => localStorage.getItem('visitor_token') || ''") or ''
-        except:
-            pass
-        _headers = {
-            'Content-Type': 'application/json',
-            _auth_header_name: token,
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-            'Origin': _origin,
-            'Referer': _origin + '/',
-        }
-        if _vfp:
-            _headers['X-Visitor-Fingerprint'] = _vfp
-        if _vtk:
-            _headers['X-Visitor-Token'] = _vtk
-        
-        # PRIMARY: Use curl with proxy (handles HTTPS CONNECT tunnel reliably)
-        _proxy_url = None
-        if proxy_config:
-            _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
-        
-        _max_tries = 3
-        for _try_num in range(_max_tries):
-            try:
-                _curl_cmd = ['curl', '-s', '-k', '--max-time', '25', '-w', '\n%{http_code}']
-                if _proxy_url:
-                    _curl_cmd.extend(['-x', _proxy_url])
-                for _hk, _hv in _headers.items():
-                    _curl_cmd.extend(['-H', f'{_hk}: {_hv}'])
-                _curl_cmd.extend(['-d', body_json, f'{base_url}{endpoint}'])
-                _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=30)
-                _curl_out = _curl_result.stdout.strip()
-                # Last line is HTTP status code from -w
-                _curl_lines = _curl_out.rsplit('\n', 1)
-                _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
-                _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
-                try:
-                    status_code = int(_curl_status_str)
-                except:
-                    status_code = 0
-                try:
-                    resp_data = json.loads(_curl_body)
-                except:
-                    resp_data = {'raw': _curl_body[:500]}
-                if status_code > 0:
-                    print(f"    \U0001f50c curl+proxy: {endpoint} -> HTTP {status_code}", flush=True)
-                    if status_code >= 200 and status_code < 500:
-                        return status_code, resp_data
-                    elif status_code == 429 and _try_num < _max_tries - 1:
-                        _wait = random.uniform(3 * (2 ** _try_num), 8 * (2 ** _try_num))
-                        print(f"    \U0001f504 Rate limited, retry {_try_num+1}/{_max_tries} (wait {_wait:.1f}s)", flush=True)
-                        time.sleep(_wait)
-                        continue
-                else:
-                    _err_msg = _curl_result.stderr[:100] if _curl_result.stderr else 'no output'
-                    if _try_num < _max_tries - 1:
-                        print(f"    \u26a0\ufe0f curl retry {_try_num+1}/{_max_tries}: {_err_msg}", flush=True)
-                        time.sleep(random.uniform(1, 3))
-                        continue
-                    print(f"    \u26a0\ufe0f curl failed after {_max_tries} tries: {_err_msg}", flush=True)
-            except subprocess.TimeoutExpired:
-                if _try_num < _max_tries - 1:
-                    print(f"    \u26a0\ufe0f curl timeout {_try_num+1}/{_max_tries}", flush=True)
-                    time.sleep(1)
-                    continue
-                print(f"    \u26a0\ufe0f curl timed out after {_max_tries} tries", flush=True)
-            except Exception as e:
-                _err_str = str(e)[:100]
-                if _try_num < _max_tries - 1:
-                    print(f"    \u26a0\ufe0f curl error {_try_num+1}/{_max_tries}: {_err_str}", flush=True)
-                    time.sleep(1)
-                    continue
-                print(f"    \u26a0\ufe0f curl failed: {_err_str}", flush=True)
-        
-        # FALLBACK: Try browser fetch (may not use proxy but worth trying)
+        # PRIMARY: Browser fetch (goes through Playwright proxy = sticky Saudi IP)
         try:
             body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
             result = page.evaluate(f"""
@@ -1762,11 +1724,66 @@ def api_direct_booking(page, proxy_config=None):
             """)
             status_code = result.get('status', 0) if isinstance(result, dict) else 0
             resp_data = result.get('data', {}) if isinstance(result, dict) else {}
-            if status_code >= 200 and status_code < 400:
+            if status_code > 0:
                 print(f"    \U0001f310 browser fetch: {endpoint} -> HTTP {status_code}", flush=True)
-                return status_code, resp_data
+                if status_code >= 200 and status_code < 500:
+                    return status_code, resp_data
         except Exception as e:
             print(f"    \u26a0\ufe0f browser fetch error: {str(e)[:100]}", flush=True)
+        
+        # FALLBACK: curl+proxy (only if browser fetch completely failed)
+        _origin = '/'.join(page.url.split('/')[:3]) if page.url.startswith('http') else 'https://salamain.manus.space'
+        _vfp = ''
+        _vtk = ''
+        try:
+            _vfp = page.evaluate("() => localStorage.getItem('visitor_fingerprint') || ''") or ''
+            _vtk = page.evaluate("() => localStorage.getItem('visitor_token') || ''") or ''
+        except:
+            pass
+        _headers = {
+            'Content-Type': 'application/json',
+            _auth_header_name: token,
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Origin': _origin,
+            'Referer': _origin + '/',
+        }
+        if _vfp:
+            _headers['X-Visitor-Fingerprint'] = _vfp
+        if _vtk:
+            _headers['X-Visitor-Token'] = _vtk
+        
+        _proxy_url = None
+        if proxy_config:
+            _proxy_url = f"http://{proxy_config['username']}:{proxy_config['password']}@{proxy_config['server'].replace('http://','')}"
+        
+        for _try_num in range(2):
+            try:
+                _curl_cmd = ['curl', '-s', '-k', '--max-time', '25', '-w', '\n%{http_code}']
+                if _proxy_url:
+                    _curl_cmd.extend(['-x', _proxy_url])
+                for _hk, _hv in _headers.items():
+                    _curl_cmd.extend(['-H', f'{_hk}: {_hv}'])
+                _curl_cmd.extend(['-d', body_json, f'{base_url}{endpoint}'])
+                _curl_result = subprocess.run(_curl_cmd, capture_output=True, text=True, timeout=30)
+                _curl_out = _curl_result.stdout.strip()
+                _curl_lines = _curl_out.rsplit('\n', 1)
+                _curl_body = _curl_lines[0] if len(_curl_lines) > 1 else _curl_out
+                _curl_status_str = _curl_lines[-1].strip() if len(_curl_lines) > 1 else '0'
+                try:
+                    status_code = int(_curl_status_str)
+                except:
+                    status_code = 0
+                try:
+                    resp_data = json.loads(_curl_body)
+                except:
+                    resp_data = {'raw': _curl_body[:500]}
+                if status_code > 0:
+                    print(f"    \U0001f50c curl fallback: {endpoint} -> HTTP {status_code}", flush=True)
+                    return status_code, resp_data
+            except Exception as e:
+                print(f"    \u26a0\ufe0f curl fallback error: {str(e)[:80]}", flush=True)
+                time.sleep(1)
         
         return status_code, resp_data
     
