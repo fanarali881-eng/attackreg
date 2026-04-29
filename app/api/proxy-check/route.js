@@ -3,7 +3,7 @@ import { Client } from 'ssh2';
 import https from 'https';
 import http from 'http';
 
-const TEST_SERVER = { host: '46.101.52.177', username: 'root' };
+const TEST_SERVER = { host: '142.93.41.217', username: 'root' };
 
 function validateApiKey(req) {
   const authHeader = req.headers.get('x-api-key') || '';
@@ -163,47 +163,33 @@ export async function POST(req) {
       port: String(port)
     })).toString('base64');
 
-    const cmd = `python3 -c "
-import requests, sys, json, base64
-creds = json.loads(base64.b64decode('${credsB64}').decode())
-try:
-    proxy_url = 'http://' + creds['user'] + ':' + creds['pass'] + '@' + creds['host'] + ':' + creds['port']
-    proxies = {'http': proxy_url, 'https': proxy_url}
-    r = requests.get('http://ipv4.icanhazip.com', proxies=proxies, timeout=20)
-    ip = r.text.strip()
-    if ip:
-        try:
-            geo = requests.get('http://ip-api.com/json/' + ip, timeout=10).json()
-            print(json.dumps({'ok': True, 'ip': ip, 'country': geo.get('country','?'), 'cc': geo.get('countryCode','')}))
-        except:
-            print(json.dumps({'ok': True, 'ip': ip, 'country': '?', 'cc': ''}))
-    else:
-        print(json.dumps({'ok': False, 'error': 'empty_ip'}))
-except requests.exceptions.ProxyError as e:
-    err = str(e)
-    if '407' in err: print(json.dumps({'ok': False, 'error': 'auth_failed'}))
-    elif '402' in err: print(json.dumps({'ok': False, 'error': 'no_balance'}))
-    else: print(json.dumps({'ok': False, 'error': 'proxy_error'}))
-except Exception as e:
-    print(json.dumps({'ok': False, 'error': str(e)[:200]}))
-"`;
+    const cmd = `curl -s -k --max-time 20 -x http://${username}:${encodeURIComponent(testPassword)}@${host}:${port} http://ipv4.icanhazip.com 2>/dev/null`;
 
     const result = await runSSHCommand(TEST_SERVER, cmd, 15000);
 
     let jsonData = null;
 
-    if (result.status === 'success') {
-      // SSH worked - parse result
-      const lines = result.output.split('\n');
-      for (const line of lines) {
+    if (result.status === 'success' && result.output) {
+      // curl returns raw IP - parse it
+      const ip = result.output.trim().split('\n').pop().trim();
+      if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+        // Get geo info via direct HTTP
         try {
-          const parsed = JSON.parse(line.trim());
-          if (typeof parsed.ok !== 'undefined') { jsonData = parsed; break; }
-        } catch(e) {}
+          const geoData = await new Promise((resolve) => {
+            http.get(`http://ip-api.com/json/${ip}`, { timeout: 10000 }, (res) => {
+              let d = '';
+              res.on('data', (c) => { d += c.toString(); });
+              res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({}); } });
+            }).on('error', () => resolve({}));
+          });
+          jsonData = { ok: true, ip, country: geoData.country || '?', cc: geoData.countryCode || '' };
+        } catch(e) {
+          jsonData = { ok: true, ip, country: '?', cc: '' };
+        }
       }
     }
 
-    // If SSH failed or didn't return valid data, try direct check
+    // If SSH+curl failed or didn't return valid data, try direct check
     if (!jsonData) {
       jsonData = await checkProxyDirect(host, port, username, testPassword);
     }
