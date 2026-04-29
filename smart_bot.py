@@ -1992,107 +1992,118 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Use CapSolver API to solve remotely ===
-            # Browser-based Turnstile loading fails (sub-resources blocked by proxy)
-            # CapSolver solves it remotely without needing browser
+            # === TURNSTILE TOKEN: Solve in-browser (not CapSolver) ===
+            # CapSolver tokens are rejected because Cloudflare validates browser environment.
+            # Instead, we inject the Turnstile widget into the current page and let the
+            # real browser solve it. This produces a valid token bound to this browser session.
             _turnstile_token = None
             _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
-            # Get target_url from the current page URL
-            _page_url = page.url or 'https://salamain.manus.space/'
-            _ts_base = _page_url.split('?')[0].rstrip('/')
-            # Remove any path to get base domain
-            from urllib.parse import urlparse as _ts_urlparse
-            _ts_parsed = _ts_urlparse(_ts_base)
-            _ts_target_url = f"{_ts_parsed.scheme}://{_ts_parsed.netloc}/book-appointment"
             try:
-                print(f"  \U0001f510 Solving Turnstile via CapSolver API...", flush=True)
-                import urllib.request, json, ssl
+                print(f"  \U0001f510 Solving Turnstile in-browser...", flush=True)
                 
-                # Use AntiTurnstileTask WITH proxy so Turnstile is solved from same Saudi IP
-                # as the session request (Cloudflare validates IP match)
-                _cs_task = {
-                    'type': 'AntiTurnstileTaskProxyLess',
-                    'websiteURL': _ts_target_url,
-                    'websiteKey': _ts_sitekey,
-                }
-                # If proxy is available, use it for Turnstile solving (same IP as browser)
-                if proxy_config:
-                    _proxy_host = proxy_config['server'].replace('http://', '').split(':')[0]
-                    _proxy_port = proxy_config['server'].replace('http://', '').split(':')[-1]
-                    _cs_task = {
-                        'type': 'AntiTurnstileTask',
-                        'websiteURL': _ts_target_url,
-                        'websiteKey': _ts_sitekey,
-                        'proxyType': 'http',
-                        'proxyAddress': _proxy_host,
-                        'proxyPort': int(_proxy_port),
-                        'proxyLogin': proxy_config['username'],
-                        'proxyPassword': proxy_config['password'],
+                # Step A: Check if Turnstile is already on the page and solved
+                _existing_token = page.evaluate("""
+                    () => {
+                        const inp = document.querySelector('input[name="cf-turnstile-response"]');
+                        if (inp && inp.value && inp.value.length > 10) return inp.value;
+                        return '';
                     }
-                    print(f"  \U0001f310 Using proxy for Turnstile: {_proxy_host}:{_proxy_port}", flush=True)
-                _cs_payload = json.dumps({
-                    'clientKey': CAPSOLVER_API_KEY,
-                    'task': _cs_task
-                }).encode('utf-8')
-                
-                _cs_req = urllib.request.Request(
-                    'https://api.capsolver.com/createTask',
-                    data=_cs_payload,
-                    headers={'Content-Type': 'application/json'}
-                )
-                _cs_ctx = ssl.create_default_context()
-                _cs_ctx.check_hostname = False
-                _cs_ctx.verify_mode = ssl.CERT_NONE
-                
-                with urllib.request.urlopen(_cs_req, timeout=30, context=_cs_ctx) as _cs_resp:
-                    _cs_result = json.loads(_cs_resp.read().decode('utf-8'))
-                
-                if _cs_result.get('errorId', 1) != 0:
-                    _cs_err_desc = _cs_result.get('errorDescription', 'unknown')
-                    print(f"  \u274c CapSolver create error: {_cs_err_desc}", flush=True)
+                """)
+                if _existing_token and len(_existing_token) > 10:
+                    _turnstile_token = _existing_token
+                    print(f"  \u2705 Turnstile already solved on page! token={len(_turnstile_token)} chars", flush=True)
                 else:
-                    _cs_task_id = _cs_result.get('taskId')
-                    # Check if solution returned directly
-                    _cs_direct_token = _cs_result.get('solution', {}).get('token')
-                    if _cs_direct_token:
-                        _turnstile_token = _cs_direct_token
-                        print(f"  \u2705 Turnstile solved instantly! token={len(_turnstile_token)} chars", flush=True)
-                    elif _cs_task_id:
-                        print(f"  \u23f3 CapSolver task: {_cs_task_id} - polling...", flush=True)
-                        for _cs_poll in range(20):
-                            time.sleep(3)
-                            _cs_poll_payload = json.dumps({
-                                'clientKey': CAPSOLVER_API_KEY,
-                                'taskId': _cs_task_id
-                            }).encode('utf-8')
-                            _cs_poll_req = urllib.request.Request(
-                                'https://api.capsolver.com/getTaskResult',
-                                data=_cs_poll_payload,
-                                headers={'Content-Type': 'application/json'}
-                            )
-                            with urllib.request.urlopen(_cs_poll_req, timeout=30, context=_cs_ctx) as _cs_poll_resp:
-                                _cs_poll_result = json.loads(_cs_poll_resp.read().decode('utf-8'))
-                            _cs_status = _cs_poll_result.get('status', '')
-                            if _cs_status == 'ready':
-                                _turnstile_token = _cs_poll_result.get('solution', {}).get('token', '')
-                                if _turnstile_token:
-                                    print(f"  \u2705 Turnstile solved! token={len(_turnstile_token)} chars (polls={_cs_poll+1})", flush=True)
-                                break
-                            elif _cs_status == 'failed':
-                                print(f"  \u274c CapSolver failed: {_cs_poll_result.get('errorDescription', '')}", flush=True)
-                                break
-                        else:
-                            print(f"  \u274c CapSolver timeout after 60s", flush=True)
-                    else:
-                        print(f"  \u274c No taskId returned from CapSolver", flush=True)
+                    # Step B: Inject Turnstile widget and wait for it to solve
+                    page.evaluate(f"""
+                        () => {{
+                            // Remove any existing Turnstile widgets first
+                            document.querySelectorAll('.cf-turnstile, #manus-turnstile-container').forEach(e => e.remove());
+                            
+                            // Create container for Turnstile
+                            const container = document.createElement('div');
+                            container.id = 'manus-turnstile-container';
+                            container.className = 'cf-turnstile';
+                            container.setAttribute('data-sitekey', '{_ts_sitekey}');
+                            container.setAttribute('data-callback', 'onTurnstileSuccess');
+                            container.style.cssText = 'position:fixed;bottom:0;right:0;z-index:99999;opacity:0.01;';
+                            document.body.appendChild(container);
+                            
+                            // Create hidden input for the response
+                            if (!document.querySelector('input[name="cf-turnstile-response"]')) {{
+                                const inp = document.createElement('input');
+                                inp.type = 'hidden';
+                                inp.name = 'cf-turnstile-response';
+                                document.body.appendChild(inp);
+                            }}
+                            
+                            // Set up callback
+                            window.onTurnstileSuccess = (token) => {{
+                                const inp = document.querySelector('input[name="cf-turnstile-response"]');
+                                if (inp) inp.value = token;
+                                window._manusTurnstileToken = token;
+                            }};
+                            
+                            // If turnstile API is already loaded, render explicitly
+                            if (window.turnstile && window.turnstile.render) {{
+                                try {{
+                                    window.turnstile.render('#manus-turnstile-container', {{
+                                        sitekey: '{_ts_sitekey}',
+                                        callback: window.onTurnstileSuccess
+                                    }});
+                                }} catch(e) {{}}
+                            }} else {{
+                                // Load Turnstile API script
+                                const script = document.createElement('script');
+                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad';
+                                script.async = true;
+                                window.onTurnstileLoad = () => {{
+                                    if (window.turnstile && window.turnstile.render) {{
+                                        window.turnstile.render('#manus-turnstile-container', {{
+                                            sitekey: '{_ts_sitekey}',
+                                            callback: window.onTurnstileSuccess
+                                        }});
+                                    }}
+                                }};
+                                document.head.appendChild(script);
+                            }}
+                        }}
+                    """)
+                    
+                    # Step C: Poll for the solved token (max 25 seconds)
+                    for _ts_poll in range(25):
+                        time.sleep(1)
+                        _ts_result = page.evaluate("""
+                            () => {
+                                // Check window variable first (set by callback)
+                                if (window._manusTurnstileToken) return window._manusTurnstileToken;
+                                // Check hidden input
+                                const inp = document.querySelector('input[name="cf-turnstile-response"]');
+                                if (inp && inp.value && inp.value.length > 10) return inp.value;
+                                // Check if turnstile API is available
+                                const ready = !!(window.turnstile && window.turnstile.render);
+                                return ready ? '__READY_NO_TOKEN__' : '';
+                            }
+                        """)
+                        if _ts_result and _ts_result != '__READY_NO_TOKEN__' and len(_ts_result) > 10:
+                            _turnstile_token = _ts_result
+                            print(f"  \u2705 Turnstile solved in-browser! token={len(_turnstile_token)} chars (poll={_ts_poll+1})", flush=True)
+                            break
+                        if _ts_poll == 10:
+                            print(f"  \u23f3 Turnstile still solving... (API ready: {'yes' if _ts_result == '__READY_NO_TOKEN__' else 'no'})", flush=True)
+                    
+                    if not _turnstile_token:
+                        print(f"  \u26a0\ufe0f Turnstile not solved after 25s - trying session anyway", flush=True)
                 
                 if _turnstile_token:
                     print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
-                else:
-                    print(f"  \u26a0\ufe0f No Turnstile token - will try session anyway", flush=True)
             except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f CapSolver error: {str(_ts_err)[:200]}", flush=True)
+                print(f"  \u26a0\ufe0f Turnstile in-browser error: {str(_ts_err)[:200]}", flush=True)
                 print(f"  \u2139\ufe0f Will try session without Turnstile token", flush=True)
+            
+            # Add random delay before session request to reduce IP_BANNED
+            _session_delay = random.uniform(2, 8)
+            print(f"  \u23f3 Waiting {_session_delay:.1f}s before session request...", flush=True)
+            time.sleep(_session_delay)
             
             # Step 1: Create session (via browser fetch)
             session_body = {
