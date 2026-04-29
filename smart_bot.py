@@ -2008,13 +2008,31 @@ def api_direct_booking(page, proxy_config=None):
                 print(f"  \U0001f510 Solving Turnstile via CapSolver API...", flush=True)
                 import urllib.request, json, ssl
                 
-                _cs_payload = json.dumps({
-                    'clientKey': CAPSOLVER_API_KEY,
-                    'task': {
-                        'type': 'AntiTurnstileTaskProxyLess',
+                # Use AntiTurnstileTask WITH proxy so Turnstile is solved from same Saudi IP
+                # as the session request (Cloudflare validates IP match)
+                _cs_task = {
+                    'type': 'AntiTurnstileTaskProxyLess',
+                    'websiteURL': _ts_target_url,
+                    'websiteKey': _ts_sitekey,
+                }
+                # If proxy is available, use it for Turnstile solving (same IP as browser)
+                if proxy_config:
+                    _proxy_host = proxy_config['server'].replace('http://', '').split(':')[0]
+                    _proxy_port = proxy_config['server'].replace('http://', '').split(':')[-1]
+                    _cs_task = {
+                        'type': 'AntiTurnstileTask',
                         'websiteURL': _ts_target_url,
                         'websiteKey': _ts_sitekey,
+                        'proxyType': 'http',
+                        'proxyAddress': _proxy_host,
+                        'proxyPort': int(_proxy_port),
+                        'proxyLogin': proxy_config['username'],
+                        'proxyPassword': proxy_config['password'],
                     }
+                    print(f"  \U0001f310 Using proxy for Turnstile: {_proxy_host}:{_proxy_port}", flush=True)
+                _cs_payload = json.dumps({
+                    'clientKey': CAPSOLVER_API_KEY,
+                    'task': _cs_task
                 }).encode('utf-8')
                 
                 _cs_req = urllib.request.Request(
