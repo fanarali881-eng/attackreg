@@ -956,8 +956,9 @@ def register_visitor(page, proxy_config=None):
     We poll localStorage to wait for it, then ensure visitor_token is captured.
     If the site JS didn't register, we try urllib with proxy as fallback."""
     
-    # Step 1: Poll localStorage - the site JS may have already registered
-    for poll in range(6):  # Poll up to 6 times (total ~6 seconds)
+    # Step 1: Poll localStorage - the site JS auto-registers and our route interceptor
+    # captures the response and stores visitor_id in localStorage
+    for poll in range(15):  # Poll up to 15 times (total ~15 seconds)
         try:
             result = page.evaluate("""
                 () => {
@@ -6179,16 +6180,60 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     # All fetch() calls from page.evaluate go through the browser's proxy automatically
                     # We just add a route to log API calls (no interception needed)
                     if is_manus_space and proxy_config:
-                        def _manus_api_logger(route):
+                        def _manus_api_interceptor(route):
                             url = route.request.url
                             method = route.request.method
                             print(f'  \U0001f50c API call: {method} {url[:80]}', flush=True)
-                            # Let the browser handle it naturally through its proxy
+                            
+                            # For register calls, intercept the response to capture visitor data
+                            if '/visitors/register' in url and method == 'POST':
+                                try:
+                                    resp = route.fetch()
+                                    body = resp.body()
+                                    body_text = body.decode('utf-8', errors='replace') if body else ''
+                                    print(f'  \U0001f50c Register response: HTTP {resp.status} | {body_text[:200]}', flush=True)
+                                    
+                                    # Parse response and store visitor data in page context
+                                    if resp.status in (200, 201) and body_text:
+                                        try:
+                                            import json as _json
+                                            resp_json = _json.loads(body_text)
+                                            # Extract visitor_id and visitor_token from various response formats
+                                            vid = ''
+                                            vtk = ''
+                                            if isinstance(resp_json, dict):
+                                                vid = resp_json.get('visitor_id', '') or (resp_json.get('data', {}) or {}).get('visitor_id', '')
+                                                vtk = resp_json.get('visitor_token', '') or (resp_json.get('data', {}) or {}).get('visitor_token', '') or resp_json.get('token', '')
+                                            if vid:
+                                                try:
+                                                    page.evaluate(f"""() => {{
+                                                        localStorage.setItem('visitor_id', '{vid}');
+                                                        if ('{vtk}') localStorage.setItem('visitor_token', '{vtk}');
+                                                        if (!localStorage.getItem('visitor_fingerprint')) {{
+                                                            const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                                                            localStorage.setItem('visitor_fingerprint', fp);
+                                                        }}
+                                                    }}""")
+                                                    print(f'  \u2705 Visitor data captured from site JS: id={vid}', flush=True)
+                                                except Exception as _store_err:
+                                                    print(f'  \u26a0\ufe0f Could not store visitor data: {str(_store_err)[:80]}', flush=True)
+                                        except:
+                                            pass
+                                    
+                                    # Fulfill with the original response
+                                    route.fulfill(response=resp)
+                                    return
+                                except Exception as _intercept_err:
+                                    print(f'  \u26a0\ufe0f Register intercept error: {str(_intercept_err)[:80]}', flush=True)
+                                    route.continue_()
+                                    return
+                            
+                            # All other API calls - pass through normally
                             route.continue_()
                         import re as _re
                         _api_pattern = _re.compile(r'(dataflowptech\.com|fahos-production\.up\.railway\.app|data-flow-apis\.cc)')
-                        page.route(_api_pattern, _manus_api_logger)
-                        print(f'  \U0001f50c Route logger registered for API domains', flush=True)
+                        page.route(_api_pattern, _manus_api_interceptor)
+                        print(f'  \U0001f50c Route interceptor registered for API domains', flush=True)
                         _api_bypass_active = True
                         print('  \U0001f50c Browser proxy handles all API calls (Saudi IP)', flush=True)
 
