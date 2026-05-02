@@ -50,18 +50,18 @@ export default function Home() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [newUsername, setNewUsername] = useState('root');
   const [useProxy, setUseProxy] = useState(true);
-  const [proxyHost, setProxyHost] = useState('proxy.packetstream.io');
-  const [proxyPort, setProxyPort] = useState('31112');
+  const [proxyHost, setProxyHost] = useState('res.proxy-seller.com');
+  const [proxyPort, setProxyPort] = useState('10000');
   const [proxyUser, setProxyUser] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || 'fanar';
-    return 'fanar';
+    if (typeof window !== 'undefined') return localStorage.getItem('proxyUser') || '4051d54880128470';
+    return '4051d54880128470';
   });
   const [proxyPass, setProxyPass] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('proxyPass');
-      return saved || 'j7HGTQiRnys66RIM_country-SaudiArabia';
+      return saved || '29mtNl43aDLMknqu';
     }
-    return 'j7HGTQiRnys66RIM_country-SaudiArabia';
+    return '29mtNl43aDLMknqu';
   });
   const [monitoring, setMonitoring] = useState(false);
   const [serverStatus, setServerStatus] = useState([]);

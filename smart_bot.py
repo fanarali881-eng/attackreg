@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v78 - Rate-limit-aware with staggered starts + auto-detect
+Smart Universal Form Bot v79 - Proxy-Seller support + per-thread IP rotation + auto-detect
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -6030,13 +6030,19 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     proxy_port = os.environ.get('PROXY_PORT', '31112')
 
     proxy_config = None
+    # v79: Detect Proxy-Seller residential proxies (res.proxy-seller.com)
+    # Each port = different rotating Saudi IP. Threads use different ports.
+    is_proxy_seller = 'proxy-seller' in proxy_host.lower()
     if proxy_user and proxy_pass:
         proxy_config = {
             'server': f'http://{proxy_host}:{proxy_port}',
             'username': proxy_user,
             'password': proxy_pass
         }
-        print(f"🌐 Using proxy: {proxy_host}:{proxy_port} ({proxy_user[:20]}...)")
+        if is_proxy_seller:
+            print(f"🌐 Using Proxy-Seller residential: {proxy_host}:{proxy_port} (per-thread port rotation)")
+        else:
+            print(f"🌐 Using proxy: {proxy_host}:{proxy_port} ({proxy_user[:20]}...)")
     else:
         print("🌐 No proxy configured - using direct connection")
 
@@ -6072,7 +6078,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v78 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED)")
+    print(f"Smart Bot v79 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6154,17 +6160,26 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     browser = p.chromium.launch(headless=False, args=browser_args)
                     print(f'  [T{thread_id}] \U0001f4f1 Mobile mode enabled', flush=True)
 
-                    # === IP ROTATION: Add random session ID to proxy password ===
-                    # PacketStream assigns the same IP for the same session.
-                    # By adding a unique session suffix, we force a new IP each iteration.
+                    # === IP ROTATION: Per-thread proxy port or session-based ===
                     _ctx_opts = dict(context_opts)
                     if proxy_config:
-                        import uuid as _uuid
-                        _session_id = _uuid.uuid4().hex[:8]
                         _rotated_proxy = dict(proxy_config)
-                        _rotated_proxy['password'] = proxy_config['password'] + f'_session-{_session_id}'
+                        if is_proxy_seller:
+                            # v79: Proxy-Seller - each port is a different rotating IP
+                            # thread_id 0 -> base_port, thread_id 1 -> base_port+1, etc.
+                            import uuid as _uuid
+                            _iter_id = _uuid.uuid4().hex[:4]
+                            _base_port = int(proxy_port)
+                            _thread_port = _base_port + thread_id
+                            _rotated_proxy['server'] = f'http://{proxy_host}:{_thread_port}'
+                            print(f'  [T{thread_id}] \U0001f310 Proxy-Seller port: {_thread_port} (unique Saudi IP)', flush=True)
+                        else:
+                            # PacketStream: session-based IP rotation
+                            import uuid as _uuid
+                            _session_id = _uuid.uuid4().hex[:8]
+                            _rotated_proxy['password'] = proxy_config['password'] + f'_session-{_session_id}'
+                            print(f'  [T{thread_id}] \U0001f310 New proxy session: {_session_id}', flush=True)
                         _ctx_opts['proxy'] = _rotated_proxy
-                        print(f'  [T{thread_id}] \U0001f310 New proxy session: {_session_id}', flush=True)
 
                     context = browser.new_context(**_ctx_opts)
                     context.add_init_script(MOBILE_INIT_SCRIPT)
