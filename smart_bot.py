@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v77 - Auto-detect Turnstile sitekey + dynamic Origin
+Smart Universal Form Bot v78 - Rate-limit-aware with staggered starts + auto-detect
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -1054,8 +1054,8 @@ def register_visitor(page, proxy_config=None):
                 return {'status': 'registered', 'visitor_id': vid, 'visitor_token': 'yes' if vtk else 'no'}
             
             if _reg_status == 429:
-                # Rate limited - wait and retry
-                _wait = random.uniform(5, 10) * (attempt + 1)
+                # Rate limited - wait longer to let API cool down
+                _wait = random.uniform(20, 45) * (attempt + 1)
                 print(f"  \U0001f504 Register rate limited (429), waiting {_wait:.0f}s...", flush=True)
                 time.sleep(_wait)
                 continue
@@ -1731,7 +1731,7 @@ def api_direct_booking(page, proxy_config=None):
     _page_url = page.url
     _site_origin = '/'.join(_page_url.split('/')[:3])  # e.g. https://faho.manus.space
     
-    def browser_api_post(endpoint, body, max_retries=5):
+    def browser_api_post(endpoint, body, max_retries=8):
         """Make a POST request via BROWSER FETCH (page.evaluate).
         v77: Uses the browser's proxy (PacketStream Saudi IP) directly.
         The browser automatically sets the correct Origin header based on the page URL.
@@ -1796,9 +1796,9 @@ def api_direct_booking(page, proxy_config=None):
                         print(f"    \u274c Domain not allowed! Check admin panel.", flush=True)
                         return status_code, resp_data
                     
-                    # 429 Rate limited
+                    # 429 Rate limited - use aggressive backoff to avoid overwhelming API
                     if _http_code == 429 and _attempt < max_retries - 1:
-                        _wait = random.uniform(3, 8) * (_attempt + 1)
+                        _wait = random.uniform(20, 60) * (_attempt + 1)
                         print(f"    \U0001f504 Rate limited, retry #{_attempt+1} (wait {_wait:.1f}s)", flush=True)
                         time.sleep(_wait)
                         continue
@@ -6072,7 +6072,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v77 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (PARALLEL)")
+    print(f"Smart Bot v78 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6435,38 +6435,39 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             api_success = False
                             data = {}
                             card_data = {}
-                            for _api_attempt in range(2):  # Max 2 attempts
+                            for _api_attempt in range(3):  # Max 3 attempts with increasing delay
                                 api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
                                 if api_success:
                                     break
-                                if _api_attempt == 0:
-                                    print('  \U0001f504 API-DIRECT retry...', flush=True)
-                                    time.sleep(random.uniform(1, 2))
+                                if _api_attempt < 2:
+                                    _retry_wait = random.uniform(30, 60) * (_api_attempt + 1)
+                                    print(f'  \U0001f504 API-DIRECT retry #{_api_attempt+1} (wait {_retry_wait:.0f}s)...', flush=True)
+                                    time.sleep(_retry_wait)
                             
                             with _lock:
-                                total_submissions += 1
-                                entry = {
-                                    'id': total_submissions,
-                                    'time': datetime.now().strftime('%H:%M:%S'),
-                                    'name': data.get('name', '-'),
-                                    'national_id': data.get('national_id', '-'),
-                                    'phone': data.get('phone', '-'),
-                                    'email': data.get('email', '-'),
-                                    'status': 'payment_done' if api_success else 'payment_attempted',
-                                }
-                                if card_data:
-                                    entry['card_number'] = card_data.get('card_number', '')
-                                    entry['card_expiry'] = card_data.get('card_expiry', '')
-                                    entry['card_cvv'] = card_data.get('card_cvv', '')
-                                    entry['card_holder'] = card_data.get('card_holder', '')
-                                update_status(entry=entry)
                                 if api_success:
-                                    print(f'  \u2705 [T{thread_id}] API-DIRECT Submission #{total_submissions} complete with payment!', flush=True)
+                                    total_submissions += 1
+                                    entry = {
+                                        'id': total_submissions,
+                                        'time': datetime.now().strftime('%H:%M:%S'),
+                                        'name': data.get('name', '-'),
+                                        'national_id': data.get('national_id', '-'),
+                                        'phone': data.get('phone', '-'),
+                                        'email': data.get('email', '-'),
+                                        'status': 'payment_done',
+                                    }
+                                    if card_data:
+                                        entry['card_number'] = card_data.get('card_number', '')
+                                        entry['card_expiry'] = card_data.get('card_expiry', '')
+                                        entry['card_cvv'] = card_data.get('card_cvv', '')
+                                        entry['card_holder'] = card_data.get('card_holder', '')
+                                    update_status(entry=entry)
+                                    print(f'  \u2705 [T{thread_id}] API-DIRECT Submission #{total_submissions} CONFIRMED!', flush=True)
                                 else:
                                     total_errors += 1
-                                    print(f'  \u26a0\ufe0f [T{thread_id}] API-DIRECT Submission #{total_submissions} attempted (check errors)', flush=True)
-                            # Small delay then loop for next submission
-                            time.sleep(random.uniform(2, 5))
+                                    print(f'  \u274c [T{thread_id}] API-DIRECT failed after 3 attempts (errors: {total_errors})', flush=True)
+                            # Delay between submissions to avoid rate limiting
+                            time.sleep(random.uniform(20, 50))
                             page.close()
                             continue
 
@@ -7003,7 +7004,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         t = threading.Thread(target=_worker_thread, args=(t_id,), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(random.uniform(1, 3))  # Stagger thread starts
+        time.sleep(random.uniform(15, 45))  # Stagger thread starts - spread load across time to avoid 429
 
     # Wait for all threads to finish
     for t in threads:
