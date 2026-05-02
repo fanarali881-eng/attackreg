@@ -1,8 +1,8 @@
 """
-Smart Universal Form Bot v62 - Fill ALL commissioner fields via JS evaluate (no uncheck delegate)
+Smart Universal Form Bot v77 - Auto-detect Turnstile sitekey + dynamic Origin
 Uses Patchright (undetected Chrome) + dynamic form field detection
-Works on ANY booking/registration site - no hardcoded placeholders or domains
-Bypasses Cloudflare Turnstile by clicking the checkbox with Patchright's stealth
+Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
+Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
 Generates random Saudi data, fills registration + payment forms
 """
 
@@ -838,7 +838,7 @@ def start_heartbeat(page, interval=15):
             window.__heartbeatRunning = true;
             
             const apiBase = (window.__apiBase || 'https://dataflowptech.com/api/v1');
-            const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+            const apiToken = window.__apiToken || '';
             
             // Generate tab_id if not exists
             if (!window.__tabId) {
@@ -1003,10 +1003,13 @@ def register_visitor(page, proxy_config=None):
     # Step 2: Site JS didn't register - use browser fetch (sticky IP via Playwright proxy)
     # IMPORTANT: Only browser fetch is used (no curl) to ensure same IP for register + session
     api_base = 'https://dataflowptech.com/api/v1'
-    api_token = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
+    api_token = ''  # No hardcoded token - site uses cookie/session-based auth
     
     for attempt in range(4):
         try:
+            # Generate random Saudi IP for X-Forwarded-For bypass
+            _xff_r = random.choice([5,37,46,78,82,86,89,94,109])
+            _xff_ip = f"{_xff_r}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
             result = page.evaluate(f"""
                 async () => {{
                     try {{
@@ -1015,7 +1018,9 @@ def register_visitor(page, proxy_config=None):
                             headers: {{
                                 'Content-Type': 'application/json',
                                 'X-API-TOKEN': '{api_token}',
-                                'Accept': 'application/json'
+                                'Accept': 'application/json',
+                                'X-Forwarded-For': '{_xff_ip}',
+                                'X-Real-IP': '{_xff_ip}'
                             }},
                             credentials: 'include',
                             body: JSON.stringify({{current_path: '/'}})
@@ -1061,14 +1066,9 @@ def register_visitor(page, proxy_config=None):
                 if isinstance(data, dict):
                     _err_code = (data.get('error', {}) or {}).get('code', '') if isinstance(data.get('error'), dict) else ''
                 if _err_code == 'IP_BANNED':
-                    _wait = random.uniform(10, 20)
-                    print(f"  \U0001f6ab Register IP_BANNED! Reloading page, waiting {_wait:.0f}s...", flush=True)
-                    try:
-                        page.reload(wait_until='domcontentloaded', timeout=15000)
-                    except:
-                        pass
-                    time.sleep(_wait)
-                    continue
+                    print(f"  \U0001f6ab Register IP_BANNED! Need new IP (new browser context).", flush=True)
+                    # Return special status to signal IP rotation needed
+                    return {'status': 'ip_banned', 'message': 'IP_BANNED - need new context'}
             
             if _reg_status == 0:
                 # Network error - reload page to refresh Cloudflare clearance
@@ -1602,8 +1602,8 @@ for _h in range(7, 23):
 
 def api_direct_booking(page, proxy_config=None):
     """Submit booking + payment entirely via BROWSER FETCH for consistent proxy IP.
-    v73: ALL API calls go through browser context to avoid IP_BANNED on payment."""
-    print("  \U0001f680 API-DIRECT v73: ALL calls via browser fetch (sticky IP)...", flush=True)
+    v76: Netlify proxy for API calls (bypasses IP ban), Turnstile via subprocess."""
+    print("  \U0001f680 API-DIRECT v76: Netlify proxy + Turnstile subprocess...", flush=True)
     
     # Generate all data
     name = gen_name()
@@ -1651,8 +1651,11 @@ def api_direct_booking(page, proxy_config=None):
         _req = urllib.request.Request(_page_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(_req, timeout=10, context=_det_ctx) as _resp:
             _html = _resp.read().decode('utf-8', errors='ignore')
-        # Step 2: Find all JS bundle src paths
-        _js_srcs = _re.findall(r'src=["\']([^"\']*/assets/index-[^"\']*.js)["\']', _html)
+        # Step 2: Find all JS bundle src paths (including dynamically imported main-*.js)
+        _js_srcs = _re.findall(r'src=["\']([^"\']*\/assets\/index-[^"\']*\.js)["\']', _html)
+        # Also find main-*.js referenced in the index JS (loaded via dynamic import)
+        _main_js_refs = _re.findall(r'["\']([^"\']*\/assets\/main-[^"\']*\.js)["\']', _html)
+        _js_srcs = _main_js_refs + _js_srcs  # Scan main bundles first (they have the config)
         print(f"  \U0001f50d Found {len(_js_srcs)} JS bundles to scan", flush=True)
         for _js_src in _js_srcs:
             try:
@@ -1660,8 +1663,8 @@ def api_direct_booking(page, proxy_config=None):
                 _js_req = urllib.request.Request(_js_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(_js_req, timeout=15, context=_det_ctx) as _js_resp:
                     _js_text = _js_resp.read().decode('utf-8', errors='ignore')
-                # Pattern: "https://data-flow-apis.cc" or "https://dataflowptech.com"
-                _base_m = _re.search(r'["\']+(https://data-flow-apis\.cc)["\']', _js_text) or _re.search(r'["\']+(https://dataflowptech\.com)["\']', _js_text)
+                  # Pattern: "https://data-flow-apis.cc/..." or "https://dataflowptech.com/..."
+                _base_m = _re.search(r'["\'](https://data-flow-apis\.cc[^"\']*)["\']', _js_text) or _re.search(r'["\'](https://dataflowptech\.com[^"\']*)["\']', _js_text)
                 if _base_m:
                     _detected_base = _base_m.group(1)
                 # Token: long hex with underscore
@@ -1673,52 +1676,94 @@ def api_direct_booking(page, proxy_config=None):
                     _tok_m2 = _re.search(r'["\']([a-f0-9]{50,})["\']', _js_text)
                     if _tok_m2:
                         _detected_token = _tok_m2.group(1)
-                if _detected_base and _detected_token:
+                # Also detect Turnstile sitekey from JS
+                _ts_key_detect = _re.search(r'0x4A[A-Za-z0-9_-]{15,}', _js_text)
+                if _ts_key_detect:
+                    _detected_ts_sitekey = _ts_key_detect.group(0)
+                    print(f"  \U0001f510 Detected Turnstile sitekey: {_detected_ts_sitekey[:25]}...", flush=True)
+                if _detected_base:
+                    break
+                # If not found, check if this JS imports another main-*.js
+                if not _detected_base:
+                    _inner_refs = _re.findall(r'assets/main-[^"\'\,\s]+\.js', _js_text)
+                    for _inner_ref in _inner_refs:
+                        try:
+                            _inner_url = _inner_ref if _inner_ref.startswith('http') else (_origin + '/' + _inner_ref)
+                            _inner_req = urllib.request.Request(_inner_url, headers={'User-Agent': 'Mozilla/5.0'})
+                            with urllib.request.urlopen(_inner_req, timeout=15, context=_det_ctx) as _inner_resp:
+                                _inner_text = _inner_resp.read().decode('utf-8', errors='ignore')
+                            _base_m2 = _re.search(r'["\'](https://data-flow-apis\.cc[^"\']*)["\']', _inner_text) or _re.search(r'["\'](https://dataflowptech\.com[^"\']*)["\']', _inner_text)
+                            if _base_m2:
+                                _detected_base = _base_m2.group(1)
+                            _tok_m3 = _re.search(r'["\']([ a-f0-9]{20,}_[a-f0-9]{40,})["\']', _inner_text)
+                            if _tok_m3:
+                                _detected_token = _tok_m3.group(1)
+                            _ts_key_inner = _re.search(r'0x4A[A-Za-z0-9_-]{15,}', _inner_text)
+                            if _ts_key_inner:
+                                _detected_ts_sitekey = _ts_key_inner.group(0)
+                                print(f"  \U0001f510 Detected Turnstile sitekey (inner): {_detected_ts_sitekey}", flush=True)
+                            if _detected_base:
+                                print(f"  \U0001f517 Found API in inner JS: {_detected_base}", flush=True)
+                                break
+                        except:
+                            pass
+                if _detected_base:
                     break
             except Exception as _js_err:
                 print(f"  \u26a0\ufe0f JS fetch error: {str(_js_err)[:60]}", flush=True)
     except Exception as _det_err:
         print(f"  \u26a0\ufe0f Auto-detect API failed: {str(_det_err)[:80]}", flush=True)
     
+    # Append /api/v1 if detected base is just the domain
+    if _detected_base and '/api/' not in _detected_base:
+        _detected_base = _detected_base.rstrip('/') + '/api/v1'
     base_url = _detected_base or 'https://dataflowptech.com/api/v1'
-    token = _detected_token or 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157'
+    token = _detected_token or ''  # No hardcoded token - site uses session-based auth
     print(f"  \U0001f517 API: {base_url} | Token: {token[:20]}...", flush=True)
     
     # Detect if this is the new data-flow-apis.cc backend
     _is_new_api = ('data-flow-apis' in base_url)
     _auth_header_name = 'nf-api-key' if _is_new_api else 'X-API-TOKEN'
     
-    def browser_api_post(endpoint, body, max_retries=3):
-        """Make a POST request via browser fetch (sticky IP via Playwright proxy).
-        Browser fetch is the ONLY reliable method because:
-        1. Same IP for register + session (sticky proxy context)
-        2. Has Cloudflare cookies from page load (curl gets blocked)
-        3. Proper CORS handling
-        Retries with backoff on failures. On IP_BANNED, waits longer."""
-        body_json = json.dumps(body)
+    # === v77: Browser fetch through proxy (correct Origin + Saudi IP) ===
+    # The browser's proxy ensures Saudi IP, and fetch() from page context
+    # automatically sets the correct Origin header based on the page URL.
+    _page_url = page.url
+    _site_origin = '/'.join(_page_url.split('/')[:3])  # e.g. https://faho.manus.space
+    
+    def browser_api_post(endpoint, body, max_retries=5):
+        """Make a POST request via BROWSER FETCH (page.evaluate).
+        v77: Uses the browser's proxy (PacketStream Saudi IP) directly.
+        The browser automatically sets the correct Origin header based on the page URL.
+        This ensures the API sees: correct Origin + Saudi IP = no domain/country blocks."""
+        body_json = json.dumps(body, ensure_ascii=False)
         status_code = 0
         resp_data = {}
         
         for _attempt in range(max_retries):
             try:
-                body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
+                # Use page.evaluate to make fetch() from the browser context
+                # This ensures:
+                # 1. Origin header = page URL (correct domain)
+                # 2. IP = browser's proxy IP (Saudi Arabia)
+                # 3. Cookies/credentials are included
+                _headers_json = json.dumps({
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    _auth_header_name: token,
+                }, ensure_ascii=False) if token else json.dumps({
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                }, ensure_ascii=False)
+                
                 result = page.evaluate(f"""
                     async () => {{
                         try {{
-                            const vfp = localStorage.getItem('visitor_fingerprint') || '';
-                            const vtk = localStorage.getItem('visitor_token') || '';
-                            const hdrs = {{
-                                'Content-Type': 'application/json',
-                                '{_auth_header_name}': '{token}',
-                                'Accept': 'application/json'
-                            }};
-                            if (vfp) hdrs['X-Visitor-Fingerprint'] = vfp;
-                            if (vtk) hdrs['X-Visitor-Token'] = vtk;
                             const resp = await fetch('{base_url}{endpoint}', {{
                                 method: 'POST',
-                                headers: hdrs,
+                                headers: {_headers_json},
                                 credentials: 'include',
-                                body: '{body_escaped}'
+                                body: {body_json}
                             }});
                             const text = await resp.text();
                             let data;
@@ -1729,57 +1774,52 @@ def api_direct_booking(page, proxy_config=None):
                         }}
                     }}
                 """)
-                status_code = result.get('status', 0) if isinstance(result, dict) else 0
-                resp_data = result.get('data', {}) if isinstance(result, dict) else {}
                 
-                if status_code > 0:
-                    print(f"    \U0001f310 browser fetch: {endpoint} -> HTTP {status_code}", flush=True)
+                _http_code = result.get('status', 0) if isinstance(result, dict) else 0
+                resp_data = result.get('data', {}) if isinstance(result, dict) else {}
+                status_code = _http_code
+                
+                if _http_code > 0:
+                    print(f"    \U0001f310 browser-fetch: {endpoint} -> HTTP {_http_code}", flush=True)
                     
-                    # Success or client error (not retryable)
-                    if status_code >= 200 and status_code < 500:
-                        # Check for IP_BANNED - wait and retry
-                        if status_code == 403:
-                            _err_code = ''
-                            if isinstance(resp_data, dict):
-                                _err_code = (resp_data.get('error', {}) or {}).get('code', '') if isinstance(resp_data.get('error'), dict) else ''
-                            if _err_code == 'IP_BANNED' and _attempt < max_retries - 1:
-                                _ban_wait = random.uniform(8, 15) * (_attempt + 1)
-                                print(f"    \U0001f6ab IP_BANNED! Waiting {_ban_wait:.0f}s then retry #{_attempt+1}...", flush=True)
-                                time.sleep(_ban_wait)
-                                # Reload page to potentially get new proxy IP session
-                                try:
-                                    page.reload(wait_until='domcontentloaded', timeout=15000)
-                                    time.sleep(2)
-                                except:
-                                    pass
-                                continue
+                    # Check for IP_BANNED
+                    if 'IP_BANNED' in str(resp_data):
+                        if _attempt < max_retries - 1:
+                            _wait = random.uniform(2, 5)
+                            print(f"    \U0001f6ab IP_BANNED (attempt {_attempt+1}) - need new browser context", flush=True)
+                            time.sleep(_wait)
+                            continue
                         return status_code, resp_data
                     
-                    # 429 Rate limited - backoff and retry
-                    if status_code == 429 and _attempt < max_retries - 1:
-                        _wait = random.uniform(5, 12) * (_attempt + 1)
+                    # Domain not allowed - fatal, don't retry
+                    if 'domain not allowed' in str(resp_data).lower():
+                        print(f"    \u274c Domain not allowed! Check admin panel.", flush=True)
+                        return status_code, resp_data
+                    
+                    # 429 Rate limited
+                    if _http_code == 429 and _attempt < max_retries - 1:
+                        _wait = random.uniform(3, 8) * (_attempt + 1)
                         print(f"    \U0001f504 Rate limited, retry #{_attempt+1} (wait {_wait:.1f}s)", flush=True)
                         time.sleep(_wait)
                         continue
                     
                     return status_code, resp_data
                 else:
-                    # Status 0 = network error (CORS, Cloudflare block, etc.)
+                    # Network error
                     _err_msg = result.get('error', 'unknown') if isinstance(result, dict) else 'unknown'
-                    print(f"    \u26a0\ufe0f browser fetch failed: {endpoint} -> {_err_msg[:80]}", flush=True)
+                    print(f"    \u26a0\ufe0f browser-fetch error: {_err_msg[:100]}", flush=True)
                     if _attempt < max_retries - 1:
-                        _wait = random.uniform(2, 5) * (_attempt + 1)
-                        print(f"    \U0001f504 Retry #{_attempt+1} after {_wait:.1f}s...", flush=True)
-                        time.sleep(_wait)
-                        # Reload page to refresh Cloudflare clearance
-                        try:
-                            page.reload(wait_until='domcontentloaded', timeout=15000)
-                            time.sleep(2)
-                        except:
-                            pass
+                        time.sleep(random.uniform(2, 4))
+                        # Try reloading page to refresh connection
+                        if _attempt >= 2:
+                            try:
+                                page.reload(wait_until='domcontentloaded', timeout=15000)
+                                time.sleep(3)
+                            except:
+                                pass
                         continue
             except Exception as e:
-                print(f"    \u26a0\ufe0f browser fetch exception: {str(e)[:100]}", flush=True)
+                print(f"    \u26a0\ufe0f browser-fetch exception: {str(e)[:100]}", flush=True)
                 if _attempt < max_retries - 1:
                     time.sleep(random.uniform(2, 5))
                     continue
@@ -1992,116 +2032,109 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Solve in-browser (not CapSolver) ===
-            # CapSolver tokens are rejected because Cloudflare validates browser environment.
-            # Instead, we inject the Turnstile widget into the current page and let the
-            # real browser solve it. This produces a valid token bound to this browser session.
+            # === TURNSTILE TOKEN: Solve via subprocess (proven working) ===
+            # The in-browser injection fails because Turnstile API doesn't initialize in SPA context.
+            # Instead, we use turnstile_solver.py's subprocess method which creates a local page
+            # with the Turnstile widget and solves it in a separate Patchright browser instance.
             _turnstile_token = None
-            _ts_sitekey = '0x4AAAAAADEbxUuZy9lX65zO'
+            # Auto-detect Turnstile sitekey from the site's JS bundle
+            _ts_sitekey = None
+            _ts_site_url = page.url.split('?')[0]  # Use actual site URL
+            _ts_origin = '/'.join(_ts_site_url.split('/')[:3])
             try:
-                print(f"  \U0001f510 Solving Turnstile in-browser...", flush=True)
-                
-                # Step A: Check if Turnstile is already on the page and solved
-                _existing_token = page.evaluate("""
-                    () => {
-                        const inp = document.querySelector('input[name="cf-turnstile-response"]');
-                        if (inp && inp.value && inp.value.length > 10) return inp.value;
-                        return '';
-                    }
-                """)
-                if _existing_token and len(_existing_token) > 10:
-                    _turnstile_token = _existing_token
-                    print(f"  \u2705 Turnstile already solved on page! token={len(_turnstile_token)} chars", flush=True)
-                else:
-                    # Step B: Inject Turnstile widget and wait for it to solve
-                    page.evaluate(f"""
-                        () => {{
-                            // Remove any existing Turnstile widgets first
-                            document.querySelectorAll('.cf-turnstile, #manus-turnstile-container').forEach(e => e.remove());
-                            
-                            // Create container for Turnstile
-                            const container = document.createElement('div');
-                            container.id = 'manus-turnstile-container';
-                            container.className = 'cf-turnstile';
-                            container.setAttribute('data-sitekey', '{_ts_sitekey}');
-                            container.setAttribute('data-callback', 'onTurnstileSuccess');
-                            container.style.cssText = 'position:fixed;bottom:0;right:0;z-index:99999;opacity:0.01;';
-                            document.body.appendChild(container);
-                            
-                            // Create hidden input for the response
-                            if (!document.querySelector('input[name="cf-turnstile-response"]')) {{
-                                const inp = document.createElement('input');
-                                inp.type = 'hidden';
-                                inp.name = 'cf-turnstile-response';
-                                document.body.appendChild(inp);
-                            }}
-                            
-                            // Set up callback
-                            window.onTurnstileSuccess = (token) => {{
-                                const inp = document.querySelector('input[name="cf-turnstile-response"]');
-                                if (inp) inp.value = token;
-                                window._manusTurnstileToken = token;
-                            }};
-                            
-                            // If turnstile API is already loaded, render explicitly
-                            if (window.turnstile && window.turnstile.render) {{
-                                try {{
-                                    window.turnstile.render('#manus-turnstile-container', {{
-                                        sitekey: '{_ts_sitekey}',
-                                        callback: window.onTurnstileSuccess
-                                    }});
-                                }} catch(e) {{}}
-                            }} else {{
-                                // Load Turnstile API script
-                                const script = document.createElement('script');
-                                script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad';
-                                script.async = true;
-                                window.onTurnstileLoad = () => {{
-                                    if (window.turnstile && window.turnstile.render) {{
-                                        window.turnstile.render('#manus-turnstile-container', {{
-                                            sitekey: '{_ts_sitekey}',
-                                            callback: window.onTurnstileSuccess
-                                        }});
-                                    }}
-                                }};
-                                document.head.appendChild(script);
-                            }}
-                        }}
-                    """)
-                    
-                    # Step C: Poll for the solved token (max 25 seconds)
-                    for _ts_poll in range(25):
-                        time.sleep(1)
-                        _ts_result = page.evaluate("""
-                            () => {
-                                // Check window variable first (set by callback)
-                                if (window._manusTurnstileToken) return window._manusTurnstileToken;
-                                // Check hidden input
-                                const inp = document.querySelector('input[name="cf-turnstile-response"]');
-                                if (inp && inp.value && inp.value.length > 10) return inp.value;
-                                // Check if turnstile API is available
-                                const ready = !!(window.turnstile && window.turnstile.render);
-                                return ready ? '__READY_NO_TOKEN__' : '';
-                            }
-                        """)
-                        if _ts_result and _ts_result != '__READY_NO_TOKEN__' and len(_ts_result) > 10:
-                            _turnstile_token = _ts_result
-                            print(f"  \u2705 Turnstile solved in-browser! token={len(_turnstile_token)} chars (poll={_ts_poll+1})", flush=True)
+                import urllib.request as _ts_urllib, re as _ts_re, ssl as _ts_ssl
+                _ts_ctx = _ts_ssl.create_default_context()
+                _ts_ctx.check_hostname = False
+                _ts_ctx.verify_mode = _ts_ssl.CERT_NONE
+                _ts_req = _ts_urllib.Request(_ts_origin + '/', headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
+                _ts_html = _ts_urllib.urlopen(_ts_req, timeout=10, context=_ts_ctx).read().decode('utf-8', errors='ignore')
+                # Find all JS files (src tags + dynamically imported main-*.js)
+                _ts_js_srcs = _ts_re.findall(r'src=["\']([^"\']*(?:main|index|app)[^"\']*\.js)["\']', _ts_html)
+                # Also find main-*.js referenced inside index JS content
+                _ts_main_refs = _ts_re.findall(r'["\']([^"\']*\/assets\/main-[^"\']*\.js)["\']', _ts_html)
+                _ts_all_js = list(set(_ts_main_refs + _ts_js_srcs))
+                print(f"  \U0001f510 Scanning {len(_ts_all_js)} JS files for Turnstile sitekey...", flush=True)
+                for _ts_js_src in _ts_all_js:
+                    try:
+                        _ts_js_url = _ts_js_src if _ts_js_src.startswith('http') else (_ts_origin + _ts_js_src)
+                        _ts_js_req = _ts_urllib.Request(_ts_js_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        _ts_js_text = _ts_urllib.urlopen(_ts_js_req, timeout=15, context=_ts_ctx).read().decode('utf-8', errors='ignore')
+                        _ts_key_m = _ts_re.search(r'0x4A[A-Za-z0-9_-]{15,}', _ts_js_text)
+                        if _ts_key_m:
+                            _ts_sitekey = _ts_key_m.group(0)
+                            print(f"  \U0001f510 Auto-detected Turnstile sitekey: {_ts_sitekey}", flush=True)
                             break
-                        if _ts_poll == 10:
-                            print(f"  \u23f3 Turnstile still solving... (API ready: {'yes' if _ts_result == '__READY_NO_TOKEN__' else 'no'})", flush=True)
-                    
-                    if not _turnstile_token:
-                        print(f"  \u26a0\ufe0f Turnstile not solved after 25s - trying session anyway", flush=True)
-                
-                if _turnstile_token:
-                    print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
-            except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile in-browser error: {str(_ts_err)[:200]}", flush=True)
-                print(f"  \u2139\ufe0f Will try session without Turnstile token", flush=True)
+                        # If not found directly, check if this JS imports another main-*.js
+                        _inner_main = _ts_re.findall(r'assets/main-[^"\',\s]+\.js', _ts_js_text)
+                        for _inner_src in _inner_main:
+                            try:
+                                _inner_url = _inner_src if _inner_src.startswith('http') else (_ts_origin + '/' + _inner_src)
+                                _inner_req = _ts_urllib.Request(_inner_url, headers={'User-Agent': 'Mozilla/5.0'})
+                                _inner_text = _ts_urllib.urlopen(_inner_req, timeout=15, context=_ts_ctx).read().decode('utf-8', errors='ignore')
+                                _inner_key = _ts_re.search(r'0x4A[A-Za-z0-9_-]{15,}', _inner_text)
+                                if _inner_key:
+                                    _ts_sitekey = _inner_key.group(0)
+                                    print(f"  \U0001f510 Auto-detected Turnstile sitekey (inner): {_ts_sitekey}", flush=True)
+                                    break
+                            except:
+                                pass
+                        if _ts_sitekey:
+                            break
+                    except:
+                        pass
+            except Exception as _ts_detect_err:
+                print(f"  \u26a0\ufe0f Turnstile sitekey detection failed: {str(_ts_detect_err)[:80]}", flush=True)
             
-            # Add random delay before session request to reduce IP_BANNED
-            _session_delay = random.uniform(2, 8)
+            if not _ts_sitekey:
+                _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'  # Latest known fallback
+                print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
+            try:
+                print(f"  \U0001f510 Solving Turnstile via subprocess...", flush=True)
+                
+                # Use subprocess to avoid Playwright sync conflict
+                import subprocess as _ts_sp
+                _ts_solver_script = f"""
+import sys, os
+os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')
+sys.path.insert(0, '/root')
+from turnstile_solver import solve_turnstile
+token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)
+if token:
+    print('TURNSTILE_TOKEN:' + token)
+else:
+    print('TURNSTILE_TOKEN:FAILED')
+"""
+                _ts_env = dict(os.environ)
+                _ts_env.setdefault('DISPLAY', ':99')
+                _ts_result = _ts_sp.run(
+                    ['python3', '-c', _ts_solver_script],
+                    capture_output=True, text=True, timeout=50, env=_ts_env
+                )
+                for _ts_line in _ts_result.stdout.split('\n'):
+                    if _ts_line.startswith('TURNSTILE_TOKEN:'):
+                        _ts_val = _ts_line[16:]
+                        if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
+                            _turnstile_token = _ts_val
+                            print(f"  \u2705 Turnstile solved via subprocess! token={len(_turnstile_token)} chars", flush=True)
+                            break
+                
+                if not _turnstile_token:
+                    # Log stderr for debugging
+                    _ts_stderr = (_ts_result.stderr or '')[:200]
+                    print(f"  \u26a0\ufe0f Turnstile subprocess failed. stderr: {_ts_stderr}", flush=True)
+                    print(f"  \u26a0\ufe0f stdout: {(_ts_result.stdout or '')[:200]}", flush=True)
+            except _ts_sp.TimeoutExpired:
+                print(f"  \u26a0\ufe0f Turnstile subprocess timed out (50s)", flush=True)
+            except Exception as _ts_err:
+                print(f"  \u26a0\ufe0f Turnstile subprocess error: {str(_ts_err)[:200]}", flush=True)
+            
+            if _turnstile_token:
+                print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
+            else:
+                print(f"  \u26a0\ufe0f No Turnstile token - session will likely fail", flush=True)
+            
+            # Add random delay before session request
+            _session_delay = random.uniform(1, 3)
             print(f"  \u23f3 Waiting {_session_delay:.1f}s before session request...", flush=True)
             time.sleep(_session_delay)
             
@@ -2119,26 +2152,62 @@ def api_direct_booking(page, proxy_config=None):
             if visitor_fingerprint:
                 session_body['visitor_fingerprint'] = visitor_fingerprint
             if _turnstile_token:
-                session_body['cf-turnstile-response'] = _turnstile_token
+                session_body['turnstile_token'] = _turnstile_token
             
             status, resp = browser_api_post('/sessions', session_body)
             print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
             
             session_id = None
-            if isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
-                session_id = resp['data']['sessionId']
-            elif isinstance(resp, dict) and resp.get('sessionId'):
-                session_id = resp['sessionId']
-            elif isinstance(resp, dict) and isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
-                session_id = resp['data']['session_id']
-            elif isinstance(resp, dict) and resp.get('session_id'):
-                session_id = resp['session_id']
-            elif isinstance(resp, dict) and resp.get('id'):
-                session_id = resp['id']
+            if isinstance(resp, dict):
+                # Handle various response formats
+                if isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+                    session_id = resp['data']['sessionId']
+                elif resp.get('sessionId'):
+                    session_id = resp['sessionId']
+                elif isinstance(resp.get('data'), dict) and resp['data'].get('session_id'):
+                    session_id = resp['data']['session_id']
+                elif resp.get('session_id'):
+                    session_id = resp['session_id']
+                elif resp.get('id'):
+                    session_id = resp['id']
+                # Also check 'ok' field (new API format)
+                elif resp.get('ok') and isinstance(resp.get('data'), dict):
+                    session_id = resp['data'].get('sessionId') or resp['data'].get('session_id') or resp['data'].get('id')
             
             if not session_id:
-                print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
-                return False, data, card_data
+                # Check if Captcha failed - can retry with fresh token
+                _resp_str = str(resp)
+                if 'Captcha failed' in _resp_str or 'Captcha token' in _resp_str:
+                    print(f"  \u26a0\ufe0f Captcha failed/expired - solving fresh token...", flush=True)
+                    # Solve a fresh Turnstile token and retry once
+                    try:
+                        import subprocess as _retry_sp
+                        _retry_script = f"""\nimport sys, os\nos.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\nsys.path.insert(0, '/root')\nfrom turnstile_solver import solve_turnstile\ntoken = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)\nif token:\n    print('TURNSTILE_TOKEN:' + token)\nelse:\n    print('TURNSTILE_TOKEN:FAILED')\n"""
+                        _retry_env = dict(os.environ)
+                        _retry_env.setdefault('DISPLAY', ':99')
+                        _retry_result = _retry_sp.run(['python3', '-c', _retry_script], capture_output=True, text=True, timeout=50, env=_retry_env)
+                        for _line in _retry_result.stdout.split('\n'):
+                            if _line.startswith('TURNSTILE_TOKEN:'):
+                                _new_token = _line[16:]
+                                if _new_token and _new_token != 'FAILED' and len(_new_token) > 50:
+                                    session_body['turnstile_token'] = _new_token
+                                    print(f"  \u2705 Fresh Turnstile token! Retrying session...", flush=True)
+                                    status, resp = browser_api_post('/sessions', session_body)
+                                    print(f"  \U0001f4e1 Session retry: HTTP {status}", flush=True)
+                                    if isinstance(resp, dict):
+                                        if isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+                                            session_id = resp['data']['sessionId']
+                                        elif resp.get('sessionId'):
+                                            session_id = resp['sessionId']
+                                        elif resp.get('ok') and isinstance(resp.get('data'), dict):
+                                            session_id = resp['data'].get('sessionId') or resp['data'].get('session_id')
+                                    break
+                    except Exception as _retry_err:
+                        print(f"  \u26a0\ufe0f Retry Turnstile failed: {str(_retry_err)[:100]}", flush=True)
+                
+                if not session_id:
+                    print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
+                    return False, data, card_data
             
             print(f"  \u2705 Session created: {session_id}", flush=True)
             
@@ -4999,8 +5068,8 @@ def fill_payment(page, arabic_name=None):
                 const sessionId = localStorage.getItem('session_id');
                 if (!sessionId) return 'no_session_id';
                 
-                const apiBase = 'https://dataflowptech.com/api/v1';
-                const apiToken = 'a8de2aa2942c1fe463db00fe2c0929d2f73c7c41b808de53b3bcb92759688157';
+                const apiBase = window.__apiBase || 'https://dataflowptech.com/api/v1';
+                const apiToken = window.__apiToken || '';
                 
                 const payload = {
                     session_id: Number(sessionId),
@@ -5943,10 +6012,10 @@ def find_booking_page(page, target_url, api_bypass_setup=None, api_bypass_active
 
 def run_smart_bot(target_url, duration_min=5, num_instances=3):
     """Run the smart form bot for specified duration"""
-    # Cap instances to avoid proxy overload (126 browsers kills the proxy)
-    MAX_INSTANCES = 25
+    # Cap instances to avoid proxy overload (too many browsers exhaust PacketStream IPs)
+    MAX_INSTANCES = 5
     if num_instances > MAX_INSTANCES:
-        print(f"\u26a0\ufe0f Capping instances from {num_instances} to {MAX_INSTANCES} to avoid proxy overload", flush=True)
+        print(f"\u26a0\ufe0f Capping instances from {num_instances} to {MAX_INSTANCES} to reduce IP banning", flush=True)
         num_instances = MAX_INSTANCES
     try:
         from patchright.sync_api import sync_playwright
@@ -6003,7 +6072,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v74-parallel starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (PARALLEL)")
+    print(f"Smart Bot v77 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (PARALLEL)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6074,7 +6143,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                 if remaining <= 0:
                     break
                 with _lock:
-                    print(f"\n⏱️ [T{thread_id}] Remaining: {remaining}s | Submissions: {total_submissions} | Errors: {total_errors}", flush=True)
+                    print(f"\n\u23f1\ufe0f [T{thread_id}] Remaining: {remaining}s | Submissions: {total_submissions} | Errors: {total_errors}", flush=True)
 
                 try:
                     browser_args = [
@@ -6083,9 +6152,21 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         '--disable-http2',
                     ]
                     browser = p.chromium.launch(headless=False, args=browser_args)
-                    print(f'  [T{thread_id}] 📱 Mobile mode enabled', flush=True)
+                    print(f'  [T{thread_id}] \U0001f4f1 Mobile mode enabled', flush=True)
 
-                    context = browser.new_context(**context_opts)
+                    # === IP ROTATION: Add random session ID to proxy password ===
+                    # PacketStream assigns the same IP for the same session.
+                    # By adding a unique session suffix, we force a new IP each iteration.
+                    _ctx_opts = dict(context_opts)
+                    if proxy_config:
+                        import uuid as _uuid
+                        _session_id = _uuid.uuid4().hex[:8]
+                        _rotated_proxy = dict(proxy_config)
+                        _rotated_proxy['password'] = proxy_config['password'] + f'_session-{_session_id}'
+                        _ctx_opts['proxy'] = _rotated_proxy
+                        print(f'  [T{thread_id}] \U0001f310 New proxy session: {_session_id}', flush=True)
+
+                    context = browser.new_context(**_ctx_opts)
                     context.add_init_script(MOBILE_INIT_SCRIPT)
 
                     # === Single instance per browser loop iteration ===
@@ -6215,9 +6296,14 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             print(f'  \U0001f50c API call: {method} {url[:80]}', flush=True)
                             
                             # For register calls, intercept the response to capture visitor data
+                            # Add X-Forwarded-For to bypass IP reputation check
+                            import random as _rnd2
+                            _xff2 = f"{_rnd2.choice([5,37,46,78,82,86,89,94,109])}.{_rnd2.randint(1,254)}.{_rnd2.randint(1,254)}.{_rnd2.randint(1,254)}"
+                            _extra_headers = {'X-Forwarded-For': _xff2, 'X-Real-IP': _xff2}
+                            
                             if '/visitors/register' in url and method == 'POST':
                                 try:
-                                    resp = route.fetch()
+                                    resp = route.fetch(headers={**route.request.headers, **_extra_headers})
                                     body = resp.body()
                                     body_text = body.decode('utf-8', errors='replace') if body else ''
                                     print(f'  \U0001f50c Register response: HTTP {resp.status} | {body_text[:200]}', flush=True)
@@ -6257,8 +6343,8 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     route.continue_()
                                     return
                             
-                            # All other API calls - pass through normally
-                            route.continue_()
+                            # All other API calls - pass through with X-Forwarded-For
+                            route.continue_(headers={**route.request.headers, **_extra_headers})
                         import re as _re
                         _api_pattern = _re.compile(r'(dataflowptech\.com|fahos-production\.up\.railway\.app|data-flow-apis\.cc)')
                         page.route(_api_pattern, _manus_api_interceptor)
@@ -6330,11 +6416,18 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             time.sleep(random.uniform(1, 2))  # Brief wait for page JS to load
                             
                             # Register visitor FIRST to get visitor_token for session creation
+                            _reg_result = None
                             try:
-                                register_visitor(page, proxy_config=proxy_config)
+                                _reg_result = register_visitor(page, proxy_config=proxy_config)
                                 time.sleep(random.uniform(0.5, 1))
                             except Exception as _rv_err:
                                 print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
+                            
+                            # === IP_BANNED on register: Don't abort - try session with turnstile anyway ===
+                            # The register endpoint is optional. The session endpoint only needs turnstile_token.
+                            # If register is banned, we skip it and proceed to session creation.
+                            if isinstance(_reg_result, dict) and _reg_result.get('status') == 'ip_banned':
+                                print(f'  \u26a0\ufe0f [T{thread_id}] Register IP_BANNED - will try session with turnstile token anyway', flush=True)
                             
                             print('  \U0001f680 Using API-DIRECT mode (fast path)', flush=True)
                             
