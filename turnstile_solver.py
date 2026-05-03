@@ -66,10 +66,18 @@ def ensure_display():
         os.environ['DISPLAY'] = ':99'
 
 
-def solve_turnstile(site_url, sitekey, timeout=30):
+def solve_turnstile(site_url, sitekey, timeout=30, proxy_server=None, proxy_user=None, proxy_pass=None):
     """
     Solve Cloudflare Turnstile CAPTCHA and return the token.
     Uses Patchright to render a local page with the Turnstile widget.
+    
+    Args:
+        site_url: The URL to solve Turnstile for
+        sitekey: The Turnstile sitekey
+        timeout: Max seconds to wait for solution
+        proxy_server: Proxy server URL (e.g. 'http://host:port')
+        proxy_user: Proxy username
+        proxy_pass: Proxy password
     
     WARNING: Cannot be called from within another Patchright sync context.
     Use solve_turnstile_subprocess() instead if already inside Patchright.
@@ -102,6 +110,16 @@ def solve_turnstile(site_url, sitekey, timeout=30):
     token = None
     start = time.time()
     
+    # Build proxy config for browser context
+    _proxy_cfg = None
+    if proxy_server and proxy_user and proxy_pass:
+        _proxy_cfg = {
+            'server': proxy_server,
+            'username': proxy_user,
+            'password': proxy_pass
+        }
+        print(f"  🌐 Turnstile solver using proxy: {proxy_server}", flush=True)
+    
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -109,7 +127,11 @@ def solve_turnstile(site_url, sitekey, timeout=30):
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
             
-            context = browser.new_context(viewport={'width': 800, 'height': 600})
+            ctx_opts = {'viewport': {'width': 800, 'height': 600}}
+            if _proxy_cfg:
+                ctx_opts['proxy'] = _proxy_cfg
+            
+            context = browser.new_context(**ctx_opts)
             page = context.new_page()
             
             page.route(url_with_slash, lambda route: route.fulfill(body=html_template, status=200))
@@ -274,20 +296,6 @@ def bypass_phishing_in_browser(page, site_url, sitekey=None):
     """
     Bypass Cloudflare phishing warning inside an existing Patchright browser page.
     For browser mode (smart_bot.py).
-    
-    This function:
-    1. Extracts atok and sitekey from the current page
-    2. Solves Turnstile in a subprocess (to avoid Playwright sync conflict)
-    3. Injects the token into the page
-    4. Force-enables and clicks the bypass button
-    
-    Args:
-        page: Patchright page object (already on the phishing page)
-        site_url: The URL of the site
-        sitekey: Optional sitekey (will extract from page if not provided)
-    
-    Returns:
-        bool: True if bypass succeeded
     """
     try:
         # Extract atok from the page
