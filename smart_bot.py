@@ -1818,6 +1818,21 @@ def api_direct_booking(page, proxy_config=None):
                 # Sending visitor_token as X-Session-Token causes 403 'Captcha failed'
                 if isinstance(body, dict) and body.get('visitor_token') and '/sessions' not in endpoint:
                     _headers['X-Session-Token'] = body['visitor_token']
+                # Add X-Client-Access-Token if previously captured from response
+                try:
+                    _cat = page.evaluate('() => window.__clientAccessToken || ""')
+                    if _cat:
+                        _headers['X-Client-Access-Token'] = _cat
+                except:
+                    pass
+                # Add X-Route-Access-Token for non-visitor endpoints
+                if '/visitors/' not in endpoint:
+                    try:
+                        _rat = page.evaluate('() => window.__routeAccessToken || ""')
+                        if _rat:
+                            _headers['X-Route-Access-Token'] = _rat
+                    except:
+                        pass
                 _headers_json = json.dumps(_headers, ensure_ascii=False)
                 
                 result = page.evaluate(f"""
@@ -1832,7 +1847,12 @@ def api_direct_booking(page, proxy_config=None):
                             const text = await resp.text();
                             let data;
                             try {{ data = JSON.parse(text); }} catch(e) {{ data = {{raw: text.substring(0, 500)}}; }}
-                            return {{ status: resp.status, data: data }};
+                            // Capture important response headers
+                            const cat = resp.headers.get('x-client-access-token') || '';
+                            const rat = resp.headers.get('x-route-access-token') || '';
+                            if (cat) window.__clientAccessToken = cat;
+                            if (rat) window.__routeAccessToken = rat;
+                            return {{ status: resp.status, data: data, _cat: cat, _rat: rat }};
                         }} catch(e) {{
                             return {{ status: 0, error: e.message }};
                         }}
