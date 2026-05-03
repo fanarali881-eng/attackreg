@@ -2157,30 +2157,17 @@ def api_direct_booking(page, proxy_config=None):
                 _turnstile_token = page.evaluate(f"""
                     async () => {{
                         try {{
-                            // Step 1: Load Turnstile script if not already loaded
+                            // Step 1: Load Turnstile script with onload callback (like the real site)
                             if (!window.turnstile) {{
                                 await new Promise((resolve, reject) => {{
-                                    const existing = document.getElementById('cf-turnstile-api-script');
-                                    if (existing && existing.dataset.loaded === 'true') {{
-                                        resolve();
-                                        return;
-                                    }}
-                                    if (existing) {{
-                                        existing.addEventListener('load', () => resolve(), {{once: true}});
-                                        existing.addEventListener('error', () => reject('load failed'), {{once: true}});
-                                        return;
-                                    }}
+                                    window._cfTurnstileOnLoad = () => {{ resolve(); }};
                                     const script = document.createElement('script');
-                                    script.id = 'cf-turnstile-api-script';
-                                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=_cfTurnstileOnLoad';
                                     script.async = true;
-                                    script.defer = true;
-                                    script.addEventListener('load', () => {{ script.dataset.loaded = 'true'; resolve(); }}, {{once: true}});
-                                    script.addEventListener('error', () => reject('load failed'), {{once: true}});
+                                    script.onerror = () => reject(new Error('script load failed'));
                                     document.head.appendChild(script);
+                                    setTimeout(() => reject(new Error('script load timeout')), 15000);
                                 }});
-                                // Wait a bit for turnstile to initialize
-                                await new Promise(r => setTimeout(r, 1000));
                             }}
                             
                             if (!window.turnstile || typeof window.turnstile.render !== 'function') {{
