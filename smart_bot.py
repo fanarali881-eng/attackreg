@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v83 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2177,8 +2177,12 @@ def api_direct_booking(page, proxy_config=None):
                                     script.addEventListener('error', () => reject('load failed'), {{once: true}});
                                     document.head.appendChild(script);
                                 }});
-                                // Wait a bit for turnstile to initialize
-                                await new Promise(r => setTimeout(r, 1000));
+                                // Poll for turnstile to initialize (up to 5s)
+                                let _tw = 0;
+                                while (!window.turnstile && _tw < 5000) {{
+                                    await new Promise(r => setTimeout(r, 200));
+                                    _tw += 200;
+                                }}
                             }}
                             
                             if (!window.turnstile || typeof window.turnstile.render !== 'function') {{
@@ -6218,7 +6222,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v82 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v83 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
