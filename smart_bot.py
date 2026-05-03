@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82p - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -1083,7 +1083,7 @@ def register_visitor(page, proxy_config=None, target_url=None):
                         "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
                         "sys.path.insert(0, '/root')\n"
                         "from turnstile_solver import solve_turnstile\n"
-                        f"token = solve_turnstile('{target_url or (proxy_config.get('site_url', '') if proxy_config else '') or 'https://vehclesafe.manus.space/'}', '0x4AAAAAADF2Xch-Yrbuk9NL', timeout=35)\n"
+                        f"token = solve_turnstile('{target_url or (proxy_config.get('site_url', '') if proxy_config else '') or 'https://vehclesafe.manus.space/'}', '0x4AAAAAADF2Xch-Yrbuk9NL', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
                         "if token:\n"
                         "    print('TURNSTILE_TOKEN:' + token)\n"
                         "else:\n"
@@ -2249,7 +2249,7 @@ def api_direct_booking(page, proxy_config=None):
                         "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
                         "sys.path.insert(0, '/root')\n"
                         "from turnstile_solver import solve_turnstile\n"
-                        f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)\n"
+                        f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
                         "if token:\n"
                         "    print('TURNSTILE_TOKEN:' + token)\n"
                         "else:\n"
@@ -2322,7 +2322,10 @@ def api_direct_booking(page, proxy_config=None):
                     # Solve a fresh Turnstile token and retry once
                     try:
                         import subprocess as _retry_sp
-                        _retry_script = f"""\nimport sys, os\nos.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\nsys.path.insert(0, '/root')\nfrom turnstile_solver import solve_turnstile\ntoken = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)\nif token:\n    print('TURNSTILE_TOKEN:' + token)\nelse:\n    print('TURNSTILE_TOKEN:FAILED')\n"""
+                        _px_s = proxy_config.get('server', '') if proxy_config else ''
+                        _px_u = proxy_config.get('username', '') if proxy_config else ''
+                        _px_p = proxy_config.get('password', '') if proxy_config else ''
+                        _retry_script = f"""\nimport sys, os\nos.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\nsys.path.insert(0, '/root')\nfrom turnstile_solver import solve_turnstile\ntoken = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{_px_s}', proxy_user='{_px_u}', proxy_pass='{_px_p}')\nif token:\n    print('TURNSTILE_TOKEN:' + token)\nelse:\n    print('TURNSTILE_TOKEN:FAILED')\n"""
                         _retry_env = dict(os.environ)
                         _retry_env.setdefault('DISPLAY', ':99')
                         _retry_result = _retry_sp.run(['python3', '-c', _retry_script], capture_output=True, text=True, timeout=50, env=_retry_env)
