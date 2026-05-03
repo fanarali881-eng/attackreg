@@ -1813,8 +1813,10 @@ def api_direct_booking(page, proxy_config=None):
                 # Add X-Visitor-Fingerprint if available in body
                 if isinstance(body, dict) and body.get('visitor_fingerprint'):
                     _headers['X-Visitor-Fingerprint'] = body['visitor_fingerprint']
-                # Add visitor token as X-Session-Token
-                if isinstance(body, dict) and body.get('visitor_token'):
+                # v82p2: Do NOT send X-Session-Token for /sessions endpoint
+                # The site only sends X-Session-Token AFTER a session is created (public_token)
+                # Sending visitor_token as X-Session-Token causes 403 'Captcha failed'
+                if isinstance(body, dict) and body.get('visitor_token') and '/sessions' not in endpoint:
                     _headers['X-Session-Token'] = body['visitor_token']
                 _headers_json = json.dumps(_headers, ensure_ascii=False)
                 
