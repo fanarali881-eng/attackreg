@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v85 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2148,79 +2148,97 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
-            # Solve Turnstile IN-BROWSER using page.route() + auto-render
-            # Navigate to a solver page served via route interception (same browser, same proxy IP)
-            # This ensures the Turnstile token is bound to the same IP and browser context
+            # Solve Turnstile IN-BROWSER using page.evaluate()
+            # This ensures the token is bound to the same browser context as the visitor
             try:
-                print(f"  \U0001f510 Solving Turnstile IN-BROWSER (same context, same proxy IP)...", flush=True)
+                print(f"  \U0001f510 Solving Turnstile IN-BROWSER (same context)...", flush=True)
+                _turnstile_token = page.evaluate(f"""
+                    async () => {{
+                        try {{
+                            // Step 1: Load Turnstile script if not already loaded
+                            if (!window.turnstile) {{
+                                await new Promise((resolve, reject) => {{
+                                    const existing = document.getElementById('cf-turnstile-api-script');
+                                    if (existing && existing.dataset.loaded === 'true') {{
+                                        resolve();
+                                        return;
+                                    }}
+                                    if (existing) {{
+                                        existing.addEventListener('load', () => resolve(), {{once: true}});
+                                        existing.addEventListener('error', () => reject('load failed'), {{once: true}});
+                                        return;
+                                    }}
+                                    const script = document.createElement('script');
+                                    script.id = 'cf-turnstile-api-script';
+                                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                                    script.async = true;
+                                    script.defer = true;
+                                    script.addEventListener('load', () => {{ script.dataset.loaded = 'true'; resolve(); }}, {{once: true}});
+                                    script.addEventListener('error', () => reject('load failed'), {{once: true}});
+                                    document.head.appendChild(script);
+                                }});
+                                // Wait a bit for turnstile to initialize
+                                await new Promise(r => setTimeout(r, 1000));
+                            }}
+                            
+                            if (!window.turnstile || typeof window.turnstile.render !== 'function') {{
+                                return 'ERROR:turnstile not available';
+                            }}
+                            
+                            // Step 2: Create hidden container
+                            let container = document.getElementById('cf-turnstile-bot-container');
+                            if (!container) {{
+                                container = document.createElement('div');
+                                container.id = 'cf-turnstile-bot-container';
+                                container.style.position = 'fixed';
+                                container.style.left = '-9999px';
+                                container.style.top = '0';
+                                container.style.width = '1px';
+                                container.style.height = '1px';
+                                container.style.opacity = '0';
+                                container.style.pointerEvents = 'none';
+                                container.setAttribute('aria-hidden', 'true');
+                                document.body.appendChild(container);
+                            }} else {{
+                                // Reset container for fresh render
+                                container.innerHTML = '';
+                            }}
+                            
+                            // Step 3: Render Turnstile widget (invisible mode)
+                            const widgetId = window.turnstile.render(container, {{
+                                sitekey: '{_ts_sitekey}',
+                                size: 'invisible',
+                                appearance: 'execute'
+                            }});
+                            
+                            // Step 4: Execute and get token via callback
+                            const token = await new Promise((resolve) => {{
+                                const timeout = setTimeout(() => resolve(''), 30000);
+                                try {{
+                                    window.turnstile.execute(widgetId, {{
+                                        callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
+                                        'error-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                        'expired-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                        'timeout-callback': () => {{ clearTimeout(timeout); resolve(''); }}
+                                    }});
+                                }} catch(e) {{
+                                    clearTimeout(timeout);
+                                    resolve('');
+                                }}
+                            }});
+                            
+                            return token || 'ERROR:no token';
+                        }} catch(e) {{
+                            return 'ERROR:' + e.message;
+                        }}
+                    }}
+                """)
                 
-                # Save current URL to navigate back later
-                _ts_current_url = page.url
-                _ts_solver_url = _ts_origin + '/__turnstile_solver__'
-                
-                # Create the solver HTML page with auto-render Turnstile
-                _ts_solver_html = f'''<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Solver</title>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async></script>
-</head><body>
-<div class="cf-turnstile" style="width:70px" data-sitekey="{_ts_sitekey}"></div>
-</body></html>'''
-                
-                # Set up route to serve our solver page
-                _ts_route_set = False
-                def _ts_route_handler(route):
-                    route.fulfill(body=_ts_solver_html, content_type='text/html', status=200)
-                
-                try:
-                    page.route(_ts_solver_url, _ts_route_handler)
-                    _ts_route_set = True
-                except:
-                    pass
-                
-                if _ts_route_set:
-                    # Navigate to our solver page (same browser context + proxy)
-                    page.goto(_ts_solver_url, timeout=15000, wait_until='domcontentloaded')
-                    time.sleep(2)  # Let Turnstile initialize
-                    
-                    # Poll for the Turnstile response token (up to 30s)
-                    _ts_poll_start = time.time()
-                    while (time.time() - _ts_poll_start) < 30:
-                        try:
-                            _turnstile_token = page.input_value('[name=cf-turnstile-response]', timeout=2000)
-                            if _turnstile_token and len(_turnstile_token) > 50:
-                                print(f"  \u2705 Turnstile solved IN-BROWSER (auto-render)! token={len(_turnstile_token)} chars", flush=True)
-                                break
-                        except:
-                            pass
-                        # Try clicking the widget to trigger solving
-                        try:
-                            page.locator('.cf-turnstile').click(timeout=1000)
-                        except:
-                            pass
-                        time.sleep(1)
-                    else:
-                        _turnstile_token = None
-                        print(f"  \u26a0\ufe0f Turnstile auto-render timed out after 30s", flush=True)
-                    
-                    # Navigate back to the original page
-                    try:
-                        page.goto(_ts_current_url, timeout=15000, wait_until='domcontentloaded')
-                        time.sleep(1)
-                    except:
-                        pass
-                    
-                    # Clean up the route
-                    try:
-                        page.unroute(_ts_solver_url)
-                    except:
-                        pass
+                if _turnstile_token and not _turnstile_token.startswith('ERROR:') and len(_turnstile_token) > 50:
+                    print(f"  \u2705 Turnstile solved IN-BROWSER! token={len(_turnstile_token)} chars", flush=True)
                 else:
-                    print(f"  \u26a0\ufe0f Could not set up solver route", flush=True)
-                    _turnstile_token = None
-                
-                if not _turnstile_token or len(str(_turnstile_token)) < 50:
-                    _err_msg = str(_turnstile_token)[:100] if _turnstile_token else 'empty'
-                    print(f"  \u26a0\ufe0f In-browser Turnstile failed: {_err_msg}", flush=True)
+                    _err_msg = _turnstile_token if _turnstile_token else 'empty'
+                    print(f"  \u26a0\ufe0f In-browser Turnstile failed: {_err_msg[:100]}", flush=True)
                     _turnstile_token = None
                     
                     # Fallback: try subprocess method
@@ -6200,7 +6218,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v85 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v82 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
