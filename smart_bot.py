@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v81 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -1792,6 +1792,8 @@ def api_direct_booking(page, proxy_config=None):
         The browser automatically sets the correct Origin header based on the page URL.
         This ensures the API sees: correct Origin + Saudi IP = no domain/country blocks."""
         body_json = json.dumps(body, ensure_ascii=False)
+        # Escape body_json for safe embedding in JS template string
+        _body_escaped = body_json.replace('\\', '\\\\').replace("'", "\\'")
         status_code = 0
         resp_data = {}
         
@@ -1802,14 +1804,19 @@ def api_direct_booking(page, proxy_config=None):
                 # 1. Origin header = page URL (correct domain)
                 # 2. IP = browser's proxy IP (Saudi Arabia)
                 # 3. Cookies/credentials are included
-                _headers_json = json.dumps({
+                _headers = {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
-                    _auth_header_name: token,
-                }, ensure_ascii=False) if token else json.dumps({
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                }, ensure_ascii=False)
+                }
+                if token:
+                    _headers[_auth_header_name] = token
+                # Add X-Visitor-Fingerprint if available in body
+                if isinstance(body, dict) and body.get('visitor_fingerprint'):
+                    _headers['X-Visitor-Fingerprint'] = body['visitor_fingerprint']
+                # Add visitor token as X-Session-Token
+                if isinstance(body, dict) and body.get('visitor_token'):
+                    _headers['X-Session-Token'] = body['visitor_token']
+                _headers_json = json.dumps(_headers, ensure_ascii=False)
                 
                 result = page.evaluate(f"""
                     async () => {{
@@ -1818,7 +1825,7 @@ def api_direct_booking(page, proxy_config=None):
                                 method: 'POST',
                                 headers: {_headers_json},
                                 credentials: 'include',
-                                body: {body_json}
+                                body: '{_body_escaped}'
                             }});
                             const text = await resp.text();
                             let data;
@@ -6211,7 +6218,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v81 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v82 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
