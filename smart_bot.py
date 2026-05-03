@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v80 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v81 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -950,7 +950,7 @@ def simulate_human_interaction(page):
         pass  # Don't fail on interaction simulation
 
 
-def register_visitor(page, proxy_config=None):
+def register_visitor(page, proxy_config=None, target_url=None):
     """Register as a visitor with the site's backend API.
     Strategy: The site's own JS auto-registers on page load via the pre-nav proxy.
     We poll localStorage to wait for it, then ensure visitor_token is captured.
@@ -1003,13 +1003,32 @@ def register_visitor(page, proxy_config=None):
     # Step 2: Site JS didn't register - use browser fetch (sticky IP via Playwright proxy)
     # IMPORTANT: Only browser fetch is used (no curl) to ensure same IP for register + session
     api_base = 'https://dataflowptech.com/api/v1'
-    api_token = ''  # No hardcoded token - site uses cookie/session-based auth
+    _turnstile_token_reg = ''  # Will be filled if 428 TURNSTILE_REQUIRED
     
-    for attempt in range(4):
+    for attempt in range(6):  # 6 retries like the real site
         try:
-            # Generate random Saudi IP for X-Forwarded-For bypass
-            _xff_r = random.choice([5,37,46,78,82,86,89,94,109])
-            _xff_ip = f"{_xff_r}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
+            # Get fingerprint from localStorage
+            _fp = ''
+            try:
+                _fp = page.evaluate("""() => localStorage.getItem('visitor_fingerprint') || ''""")
+                if not _fp:
+                    _fp = page.evaluate("""() => {
+                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+                        localStorage.setItem('visitor_fingerprint', fp);
+                        return fp;
+                    }""")
+            except:
+                _fp = f'fp_{random.randint(100000,999999)}'
+            
+            # Build register body matching the real site's format
+            _reg_body = {
+                'current_path': '/',
+                'visitor_fingerprint': _fp,
+            }
+            if _turnstile_token_reg:
+                _reg_body['turnstile_token'] = _turnstile_token_reg
+            
+            _reg_body_json = json.dumps(_reg_body)
             result = page.evaluate(f"""
                 async () => {{
                     try {{
@@ -1017,13 +1036,11 @@ def register_visitor(page, proxy_config=None):
                             method: 'POST',
                             headers: {{
                                 'Content-Type': 'application/json',
-                                'X-API-TOKEN': '{api_token}',
                                 'Accept': 'application/json',
-                                'X-Forwarded-For': '{_xff_ip}',
-                                'X-Real-IP': '{_xff_ip}'
+                                'X-Visitor-Fingerprint': '{_fp}'
                             }},
                             credentials: 'include',
-                            body: JSON.stringify({{current_path: '/'}})
+                            body: '{_reg_body_json.replace(chr(39), chr(92)+chr(39))}'
                         }});
                         const text = await resp.text();
                         let data;
@@ -1036,8 +1053,8 @@ def register_visitor(page, proxy_config=None):
             """)
             _reg_status = result.get('status', 0) if isinstance(result, dict) else 0
             data = result.get('data', {}) if isinstance(result, dict) else {}
-            vid = (data.get('data', {}) or {}).get('visitor_id', '') or data.get('visitor_id', '')
-            vtk = (data.get('data', {}) or {}).get('visitor_token', '') or data.get('visitor_token', '')
+            vid = (data.get('data', {}) or {}).get('visitor_id', '') or data.get('visitor_id', '') or (data.get('data', {}) or {}).get('visitorId', '') or data.get('visitorId', '')
+            vtk = (data.get('data', {}) or {}).get('visitor_token', '') or data.get('visitor_token', '') or (data.get('data', {}) or {}).get('visitorToken', '') or data.get('visitorToken', '')
             print(f"  \U0001f310 register -> {_reg_status} (browser fetch, attempt #{attempt})", flush=True)
             
             if vid:
@@ -1045,53 +1062,91 @@ def register_visitor(page, proxy_config=None):
                     page.evaluate(f"""() => {{
                         localStorage.setItem('visitor_id', '{vid}');
                         localStorage.setItem('visitor_token', '{vtk}');
-                        const fp = 'fp_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-                        localStorage.setItem('visitor_fingerprint', fp);
                     }}""")
                 except:
                     pass
                 print(f"  \U0001f464 Visitor: id={vid}, token={'yes' if vtk else 'no'}", flush=True)
-                return {'status': 'registered', 'visitor_id': vid, 'visitor_token': 'yes' if vtk else 'no'}
+                return {'status': 'registered', 'visitor_id': vid, 'visitor_token': vtk}
+            
+            if _reg_status == 428:
+                # TURNSTILE_REQUIRED - solve Turnstile and retry
+                _code = ''
+                if isinstance(data, dict):
+                    _code = data.get('code', '') or (data.get('data', {}) or {}).get('code', '')
+                print(f"  \U0001f510 Register needs Turnstile (428 {_code}), solving...", flush=True)
+                
+                # Solve Turnstile via subprocess (most reliable)
+                try:
+                    import subprocess as _ts_sp2
+                    _ts_script2 = (
+                        "import sys, os\n"
+                        "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
+                        "sys.path.insert(0, '/root')\n"
+                        "from turnstile_solver import solve_turnstile\n"
+                        f"token = solve_turnstile('{target_url or (proxy_config.get('site_url', '') if proxy_config else '') or 'https://vehclesafe.manus.space/'}', '0x4AAAAAADF2Xch-Yrbuk9NL', timeout=35)\n"
+                        "if token:\n"
+                        "    print('TURNSTILE_TOKEN:' + token)\n"
+                        "else:\n"
+                        "    print('TURNSTILE_TOKEN:FAILED')\n"
+                    )
+                    _ts_env2 = dict(os.environ)
+                    _ts_env2.setdefault('DISPLAY', ':99')
+                    _ts_result2 = _ts_sp2.run(['python3', '-c', _ts_script2], capture_output=True, text=True, timeout=50, env=_ts_env2)
+                    for _line2 in _ts_result2.stdout.split('\n'):
+                        if _line2.startswith('TURNSTILE_TOKEN:'):
+                            _val2 = _line2[16:]
+                            if _val2 and _val2 != 'FAILED' and len(_val2) > 50:
+                                _turnstile_token_reg = _val2
+                                print(f"  \u2705 Turnstile solved for register! token={len(_turnstile_token_reg)} chars", flush=True)
+                except Exception as _ts_err2:
+                    print(f"  \u26a0\ufe0f Turnstile error: {str(_ts_err2)[:150]}", flush=True)
+                
+                if _turnstile_token_reg:
+                    continue  # Retry register with the token
+                else:
+                    print(f"  \u26a0\ufe0f Turnstile failed - cannot register", flush=True)
+                    return {'status': 'turnstile_failed', 'message': 'Cannot solve Turnstile for register'}
             
             if _reg_status == 429:
-                # Rate limited - wait longer to let API cool down
                 _wait = random.uniform(20, 45) * (attempt + 1)
                 print(f"  \U0001f504 Register rate limited (429), waiting {_wait:.0f}s...", flush=True)
                 time.sleep(_wait)
                 continue
             
             if _reg_status == 403:
-                # Check if IP_BANNED
                 _err_code = ''
                 if isinstance(data, dict):
-                    _err_code = (data.get('error', {}) or {}).get('code', '') if isinstance(data.get('error'), dict) else ''
-                if _err_code == 'IP_BANNED':
-                    print(f"  \U0001f6ab Register IP_BANNED! Need new IP (new browser context).", flush=True)
-                    # Return special status to signal IP rotation needed
-                    return {'status': 'ip_banned', 'message': 'IP_BANNED - need new context'}
+                    _err_code = data.get('code', '') or (data.get('error', {}) or {}).get('code', '') if isinstance(data.get('error'), dict) else data.get('code', '')
+                if 'IP_BANNED' in str(_err_code) or 'BANNED' in str(data):
+                    print(f"  \U0001f6ab Register IP_BANNED!", flush=True)
+                    return {'status': 'ip_banned', 'message': 'IP_BANNED'}
+                if 'domain' in str(data).lower() or 'country' in str(data).lower():
+                    print(f"  \U0001f6ab Register blocked: {str(data)[:200]}", flush=True)
+                    return {'status': 'blocked', 'message': str(data)[:200]}
             
             if _reg_status == 0:
-                # Network error - reload page to refresh Cloudflare clearance
                 _err_msg = result.get('error', 'unknown') if isinstance(result, dict) else 'unknown'
                 print(f"  \u26a0\ufe0f Register network error: {_err_msg[:80]}", flush=True)
-                if attempt < 3:
+                if attempt < 5:
                     _wait = random.uniform(3, 6) * (attempt + 1)
-                    print(f"  \U0001f504 Reloading page and retrying in {_wait:.0f}s...", flush=True)
                     try:
                         page.reload(wait_until='domcontentloaded', timeout=15000)
-                        time.sleep(3)  # Wait for Cloudflare clearance
+                        time.sleep(3)
                     except:
                         pass
                     time.sleep(_wait)
                     continue
             
             if _reg_status > 0:
-                print(f"  \U0001f464 Visitor: no_id, http={_reg_status}", flush=True)
+                print(f"  \U0001f464 Visitor: no_id, http={_reg_status} | {str(data)[:150]}", flush=True)
+                if attempt < 5:
+                    time.sleep(random.uniform(3, 8))
+                    continue
                 return {'status': 'no_id', 'response': str(data)[:200]}
                 
         except Exception as e:
             print(f"  \u26a0\ufe0f Register error #{attempt}: {str(e)[:150]}", flush=True)
-            if attempt < 3:
+            if attempt < 5:
                 time.sleep(3 + attempt * 2)
                 try:
                     page.reload(wait_until='domcontentloaded', timeout=15000)
@@ -1100,7 +1155,7 @@ def register_visitor(page, proxy_config=None):
                     pass
                 continue
     
-    return {'status': 'error', 'message': 'register failed after 4 attempts'}
+    return {'status': 'error', 'message': 'register failed after 6 attempts'}
 
 
 def slow_type_field(page, element, text, min_delay=0.05, max_delay=0.15):
@@ -6156,7 +6211,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v80 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v81 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6511,7 +6566,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             # Register visitor FIRST to get visitor_token for session creation
                             _reg_result = None
                             try:
-                                _reg_result = register_visitor(page, proxy_config=proxy_config)
+                                _reg_result = register_visitor(page, proxy_config=proxy_config, target_url=target_url)
                                 time.sleep(random.uniform(0.5, 1))
                             except Exception as _rv_err:
                                 print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
@@ -6567,7 +6622,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # === NORMAL PATH for non-manus.space sites (unchanged) ===
                         # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
                         try:
-                            register_visitor(page, proxy_config=proxy_config)
+                            register_visitor(page, proxy_config=proxy_config, target_url=target_url)
                             time.sleep(random.uniform(1, 2))
                             start_heartbeat(page, interval=15)
                             simulate_human_interaction(page)
