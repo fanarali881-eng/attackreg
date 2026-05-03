@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v79 - Proxy-Seller support + per-thread IP rotation + auto-detect
+Smart Universal Form Bot v80 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2032,15 +2032,15 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Solve via subprocess (proven working) ===
-            # The in-browser injection fails because Turnstile API doesn't initialize in SPA context.
-            # Instead, we use turnstile_solver.py's subprocess method which creates a local page
-            # with the Turnstile widget and solves it in a separate Patchright browser instance.
+            # === TURNSTILE TOKEN: Solve IN-BROWSER (same context as visitor) ===
+            # The API validates that the Turnstile token comes from the same browser context
+            # as the visitor registration. So we MUST solve it in the same page.
             _turnstile_token = None
-            # Auto-detect Turnstile sitekey from the site's JS bundle
             _ts_sitekey = None
-            _ts_site_url = page.url.split('?')[0]  # Use actual site URL
+            _ts_site_url = page.url.split('?')[0]
             _ts_origin = '/'.join(_ts_site_url.split('/')[:3])
+            
+            # Auto-detect Turnstile sitekey from the site's JS bundle
             try:
                 import urllib.request as _ts_urllib, re as _ts_re, ssl as _ts_ssl
                 _ts_ctx = _ts_ssl.create_default_context()
@@ -2048,9 +2048,7 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_ctx.verify_mode = _ts_ssl.CERT_NONE
                 _ts_req = _ts_urllib.Request(_ts_origin + '/', headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
                 _ts_html = _ts_urllib.urlopen(_ts_req, timeout=10, context=_ts_ctx).read().decode('utf-8', errors='ignore')
-                # Find all JS files (src tags + dynamically imported main-*.js)
                 _ts_js_srcs = _ts_re.findall(r'src=["\']([^"\']*(?:main|index|app)[^"\']*\.js)["\']', _ts_html)
-                # Also find main-*.js referenced inside index JS content
                 _ts_main_refs = _ts_re.findall(r'["\']([^"\']*\/assets\/main-[^"\']*\.js)["\']', _ts_html)
                 _ts_all_js = list(set(_ts_main_refs + _ts_js_srcs))
                 print(f"  \U0001f510 Scanning {len(_ts_all_js)} JS files for Turnstile sitekey...", flush=True)
@@ -2064,8 +2062,7 @@ def api_direct_booking(page, proxy_config=None):
                             _ts_sitekey = _ts_key_m.group(0)
                             print(f"  \U0001f510 Auto-detected Turnstile sitekey: {_ts_sitekey}", flush=True)
                             break
-                        # If not found directly, check if this JS imports another main-*.js
-                        _inner_main = _ts_re.findall(r'assets/main-[^"\',\s]+\.js', _ts_js_text)
+                        _inner_main = _ts_re.findall(r'assets/main-[^"\'\,\s]+\.js', _ts_js_text)
                         for _inner_src in _inner_main:
                             try:
                                 _inner_url = _inner_src if _inner_src.startswith('http') else (_ts_origin + '/' + _inner_src)
@@ -2086,47 +2083,128 @@ def api_direct_booking(page, proxy_config=None):
                 print(f"  \u26a0\ufe0f Turnstile sitekey detection failed: {str(_ts_detect_err)[:80]}", flush=True)
             
             if not _ts_sitekey:
-                _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'  # Latest known fallback
+                _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
+            
+            # Solve Turnstile IN-BROWSER using page.evaluate()
+            # This ensures the token is bound to the same browser context as the visitor
             try:
-                print(f"  \U0001f510 Solving Turnstile via subprocess...", flush=True)
+                print(f"  \U0001f510 Solving Turnstile IN-BROWSER (same context)...", flush=True)
+                _turnstile_token = page.evaluate(f"""
+                    async () => {{
+                        try {{
+                            // Step 1: Load Turnstile script if not already loaded
+                            if (!window.turnstile) {{
+                                await new Promise((resolve, reject) => {{
+                                    const existing = document.getElementById('cf-turnstile-api-script');
+                                    if (existing && existing.dataset.loaded === 'true') {{
+                                        resolve();
+                                        return;
+                                    }}
+                                    if (existing) {{
+                                        existing.addEventListener('load', () => resolve(), {{once: true}});
+                                        existing.addEventListener('error', () => reject('load failed'), {{once: true}});
+                                        return;
+                                    }}
+                                    const script = document.createElement('script');
+                                    script.id = 'cf-turnstile-api-script';
+                                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                                    script.async = true;
+                                    script.defer = true;
+                                    script.addEventListener('load', () => {{ script.dataset.loaded = 'true'; resolve(); }}, {{once: true}});
+                                    script.addEventListener('error', () => reject('load failed'), {{once: true}});
+                                    document.head.appendChild(script);
+                                }});
+                                // Wait a bit for turnstile to initialize
+                                await new Promise(r => setTimeout(r, 1000));
+                            }}
+                            
+                            if (!window.turnstile || typeof window.turnstile.render !== 'function') {{
+                                return 'ERROR:turnstile not available';
+                            }}
+                            
+                            // Step 2: Create hidden container
+                            let container = document.getElementById('cf-turnstile-bot-container');
+                            if (!container) {{
+                                container = document.createElement('div');
+                                container.id = 'cf-turnstile-bot-container';
+                                container.style.position = 'fixed';
+                                container.style.left = '-9999px';
+                                container.style.top = '0';
+                                container.style.width = '1px';
+                                container.style.height = '1px';
+                                container.style.opacity = '0';
+                                container.style.pointerEvents = 'none';
+                                container.setAttribute('aria-hidden', 'true');
+                                document.body.appendChild(container);
+                            }} else {{
+                                // Reset container for fresh render
+                                container.innerHTML = '';
+                            }}
+                            
+                            // Step 3: Render Turnstile widget (invisible mode)
+                            const widgetId = window.turnstile.render(container, {{
+                                sitekey: '{_ts_sitekey}',
+                                size: 'invisible',
+                                appearance: 'execute'
+                            }});
+                            
+                            // Step 4: Execute and get token via callback
+                            const token = await new Promise((resolve) => {{
+                                const timeout = setTimeout(() => resolve(''), 30000);
+                                try {{
+                                    window.turnstile.execute(widgetId, {{
+                                        callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
+                                        'error-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                        'expired-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                        'timeout-callback': () => {{ clearTimeout(timeout); resolve(''); }}
+                                    }});
+                                }} catch(e) {{
+                                    clearTimeout(timeout);
+                                    resolve('');
+                                }}
+                            }});
+                            
+                            return token || 'ERROR:no token';
+                        }} catch(e) {{
+                            return 'ERROR:' + e.message;
+                        }}
+                    }}
+                """)
                 
-                # Use subprocess to avoid Playwright sync conflict
-                import subprocess as _ts_sp
-                _ts_solver_script = f"""
-import sys, os
-os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')
-sys.path.insert(0, '/root')
-from turnstile_solver import solve_turnstile
-token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)
-if token:
-    print('TURNSTILE_TOKEN:' + token)
-else:
-    print('TURNSTILE_TOKEN:FAILED')
-"""
-                _ts_env = dict(os.environ)
-                _ts_env.setdefault('DISPLAY', ':99')
-                _ts_result = _ts_sp.run(
-                    ['python3', '-c', _ts_solver_script],
-                    capture_output=True, text=True, timeout=50, env=_ts_env
-                )
-                for _ts_line in _ts_result.stdout.split('\n'):
-                    if _ts_line.startswith('TURNSTILE_TOKEN:'):
-                        _ts_val = _ts_line[16:]
-                        if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
-                            _turnstile_token = _ts_val
-                            print(f"  \u2705 Turnstile solved via subprocess! token={len(_turnstile_token)} chars", flush=True)
-                            break
-                
-                if not _turnstile_token:
-                    # Log stderr for debugging
-                    _ts_stderr = (_ts_result.stderr or '')[:200]
-                    print(f"  \u26a0\ufe0f Turnstile subprocess failed. stderr: {_ts_stderr}", flush=True)
-                    print(f"  \u26a0\ufe0f stdout: {(_ts_result.stdout or '')[:200]}", flush=True)
-            except _ts_sp.TimeoutExpired:
-                print(f"  \u26a0\ufe0f Turnstile subprocess timed out (50s)", flush=True)
+                if _turnstile_token and not _turnstile_token.startswith('ERROR:') and len(_turnstile_token) > 50:
+                    print(f"  \u2705 Turnstile solved IN-BROWSER! token={len(_turnstile_token)} chars", flush=True)
+                else:
+                    _err_msg = _turnstile_token if _turnstile_token else 'empty'
+                    print(f"  \u26a0\ufe0f In-browser Turnstile failed: {_err_msg[:100]}", flush=True)
+                    _turnstile_token = None
+                    
+                    # Fallback: try subprocess method
+                    print(f"  \U0001f510 Fallback: Solving Turnstile via subprocess...", flush=True)
+                    import subprocess as _ts_sp
+                    _ts_solver_script = (
+                        "import sys, os\n"
+                        "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
+                        "sys.path.insert(0, '/root')\n"
+                        "from turnstile_solver import solve_turnstile\n"
+                        f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35)\n"
+                        "if token:\n"
+                        "    print('TURNSTILE_TOKEN:' + token)\n"
+                        "else:\n"
+                        "    print('TURNSTILE_TOKEN:FAILED')\n"
+                    )
+                    _ts_env = dict(os.environ)
+                    _ts_env.setdefault('DISPLAY', ':99')
+                    _ts_result = _ts_sp.run(['python3', '-c', _ts_solver_script], capture_output=True, text=True, timeout=50, env=_ts_env)
+                    for _ts_line in _ts_result.stdout.split('\n'):
+                        if _ts_line.startswith('TURNSTILE_TOKEN:'):
+                            _ts_val = _ts_line[16:]
+                            if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
+                                _turnstile_token = _ts_val
+                                print(f"  \u2705 Turnstile solved via subprocess fallback! token={len(_turnstile_token)} chars", flush=True)
+                                break
             except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile subprocess error: {str(_ts_err)[:200]}", flush=True)
+                print(f"  \u26a0\ufe0f Turnstile error: {str(_ts_err)[:200]}", flush=True)
             
             if _turnstile_token:
                 print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
@@ -5111,11 +5189,11 @@ def fill_payment(page, arabic_name=None):
 
 def wait_after_payment(page, data=None, max_wait=180, poll_interval=3):
     """Stay connected after payment submission and handle admin responses.
-    Continues through multiple steps (e.g. OTP → ATM → done).
-    - Card rejected → exit
-    - ATM page → fill 4 random digits → wait for next step
-    - OTP page → fill 6 random digits → wait for next step
-    - Mobile verification → select carrier + fill info → wait for next step
+    Continues through multiple steps (e.g. OTP -> ATM -> done).
+    - Card rejected -> exit
+    - ATM page -> fill 4 random digits -> wait for next step
+    - OTP page -> fill 6 random digits -> wait for next step
+    - Mobile verification -> select carrier + fill info -> wait for next step
     Returns: (result_type, details) where result_type is 'rejected','completed','timeout'
     """
     import time as _time
@@ -5434,7 +5512,7 @@ def wait_after_payment(page, data=None, max_wait=180, poll_interval=3):
             continue
     
     if steps_done:
-        print(f"  ✅ All steps completed: {' → '.join(steps_done)}", flush=True)
+        print(f"  ✅ All steps completed: {' -> '.join(steps_done)}", flush=True)
         return 'completed', {'steps': steps_done}
     
     print(f"  ⏳ Timeout ({max_wait}s) waiting for admin response.", flush=True)
@@ -6078,7 +6156,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v79 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v80 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6810,7 +6888,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                 if new_elements:
                                     print(f"  🔍 POST-CLICK ELEMENTS:", flush=True)
                                     for ne in new_elements[:10]:
-                                        print(f"    → {ne}", flush=True)
+                                        print(f"    -> {ne}", flush=True)
                                 else:
                                     print(f"  🔍 No toast/modal/alert/error elements found", flush=True)
                             except:
@@ -6842,7 +6920,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     # Print the lines containing error words
                                     for line in body_text.split('\n'):
                                         if any(w in line for w in error_words) and len(line.strip()) > 2 and len(line.strip()) < 100:
-                                            print(f"    → {line.strip()}", flush=True)
+                                            print(f"    -> {line.strip()}", flush=True)
                             except:
                                 pass
                             
@@ -6900,7 +6978,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             else:
                                 print(f"  ❌ URL still unchanged after retry", flush=True)
                         else:
-                            print(f"  ✅ URL changed: {pre_url[:40]} → {post_url[:40]}", flush=True)
+                            print(f"  ✅ URL changed: {pre_url[:40]} -> {post_url[:40]}", flush=True)
                         # Record submission
                         with _lock:
                             total_submissions += 1
