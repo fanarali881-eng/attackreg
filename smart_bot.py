@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v83 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v84 - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2148,95 +2148,106 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
-            # Solve Turnstile IN-BROWSER using page.evaluate()
-            # This ensures the token is bound to the same browser context as the visitor
+            # Solve Turnstile IN-BROWSER using page.add_script_tag() + page.evaluate()
+            # Phase 1: Load the Turnstile script using Playwright's native method
+            # Phase 2: Use onload callback + polling to wait for window.turnstile
+            # Phase 3: Render widget and get token
             try:
                 print(f"  \U0001f510 Solving Turnstile IN-BROWSER (same context)...", flush=True)
-                _turnstile_token = page.evaluate(f"""
-                    async () => {{
-                        try {{
-                            // Step 1: Load Turnstile script if not already loaded
-                            if (!window.turnstile) {{
-                                await new Promise((resolve, reject) => {{
-                                    const existing = document.getElementById('cf-turnstile-api-script');
-                                    if (existing && existing.dataset.loaded === 'true') {{
-                                        resolve();
-                                        return;
-                                    }}
-                                    if (existing) {{
-                                        existing.addEventListener('load', () => resolve(), {{once: true}});
-                                        existing.addEventListener('error', () => reject('load failed'), {{once: true}});
-                                        return;
-                                    }}
-                                    const script = document.createElement('script');
-                                    script.id = 'cf-turnstile-api-script';
-                                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-                                    script.async = true;
-                                    script.defer = true;
-                                    script.addEventListener('load', () => {{ script.dataset.loaded = 'true'; resolve(); }}, {{once: true}});
-                                    script.addEventListener('error', () => reject('load failed'), {{once: true}});
-                                    document.head.appendChild(script);
+                
+                # Phase 1: Set up the onload callback BEFORE loading the script
+                page.evaluate("""() => {
+                    window._cfTurnstileReady = false;
+                    window._cfTurnstileOnLoad = function() {
+                        window._cfTurnstileReady = true;
+                    };
+                }""")
+                
+                # Phase 2: Load Turnstile script using Playwright's add_script_tag
+                # This is more reliable than createElement because Playwright handles it natively
+                _ts_already = page.evaluate("() => !!window.turnstile")
+                if not _ts_already:
+                    try:
+                        page.add_script_tag(url='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=_cfTurnstileOnLoad')
+                        print(f"  \U0001f510 Turnstile script loaded via add_script_tag", flush=True)
+                    except Exception as _ast_err:
+                        print(f"  \u26a0\ufe0f add_script_tag failed: {str(_ast_err)[:80]}, trying evaluate...", flush=True)
+                        # Fallback: inject via evaluate with onload callback
+                        page.evaluate("""() => {
+                            if (!document.getElementById('cf-turnstile-api-script')) {
+                                const s = document.createElement('script');
+                                s.id = 'cf-turnstile-api-script';
+                                s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=_cfTurnstileOnLoad';
+                                document.head.appendChild(s);
+                            }
+                        }""")
+                
+                # Phase 3: Poll for window.turnstile to become available (up to 10s)
+                import time as _ts_time
+                _ts_start = _ts_time.time()
+                _ts_ready = False
+                while (_ts_time.time() - _ts_start) < 10:
+                    _ts_ready = page.evaluate("() => !!(window.turnstile && typeof window.turnstile.render === 'function')")
+                    if _ts_ready:
+                        break
+                    _ts_time.sleep(0.3)
+                
+                if not _ts_ready:
+                    print(f"  \u26a0\ufe0f window.turnstile not available after 10s polling", flush=True)
+                    _turnstile_token = None
+                else:
+                    print(f"  \u2705 window.turnstile ready! Rendering widget...", flush=True)
+                    # Phase 4: Render and execute Turnstile widget
+                    _turnstile_token = page.evaluate(f"""
+                        async () => {{
+                            try {{
+                                // Create hidden container
+                                let container = document.getElementById('cf-turnstile-bot-container');
+                                if (!container) {{
+                                    container = document.createElement('div');
+                                    container.id = 'cf-turnstile-bot-container';
+                                    container.style.position = 'fixed';
+                                    container.style.left = '-9999px';
+                                    container.style.top = '0';
+                                    container.style.width = '1px';
+                                    container.style.height = '1px';
+                                    container.style.opacity = '0';
+                                    container.style.pointerEvents = 'none';
+                                    container.setAttribute('aria-hidden', 'true');
+                                    document.body.appendChild(container);
+                                }} else {{
+                                    container.innerHTML = '';
+                                }}
+                                
+                                // Render Turnstile widget
+                                const widgetId = window.turnstile.render(container, {{
+                                    sitekey: '{_ts_sitekey}',
+                                    size: 'invisible',
+                                    appearance: 'execute'
                                 }});
-                                // Poll for turnstile to initialize (up to 5s)
-                                let _tw = 0;
-                                while (!window.turnstile && _tw < 5000) {{
-                                    await new Promise(r => setTimeout(r, 200));
-                                    _tw += 200;
-                                }}
+                                
+                                // Execute and get token
+                                const token = await new Promise((resolve) => {{
+                                    const timeout = setTimeout(() => resolve(''), 30000);
+                                    try {{
+                                        window.turnstile.execute(widgetId, {{
+                                            callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
+                                            'error-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                            'expired-callback': () => {{ clearTimeout(timeout); resolve(''); }},
+                                            'timeout-callback': () => {{ clearTimeout(timeout); resolve(''); }}
+                                        }});
+                                    }} catch(e) {{
+                                        clearTimeout(timeout);
+                                        resolve('');
+                                    }}
+                                }});
+                                
+                                return token || 'ERROR:no token';
+                            }} catch(e) {{
+                                return 'ERROR:' + e.message;
                             }}
-                            
-                            if (!window.turnstile || typeof window.turnstile.render !== 'function') {{
-                                return 'ERROR:turnstile not available';
-                            }}
-                            
-                            // Step 2: Create hidden container
-                            let container = document.getElementById('cf-turnstile-bot-container');
-                            if (!container) {{
-                                container = document.createElement('div');
-                                container.id = 'cf-turnstile-bot-container';
-                                container.style.position = 'fixed';
-                                container.style.left = '-9999px';
-                                container.style.top = '0';
-                                container.style.width = '1px';
-                                container.style.height = '1px';
-                                container.style.opacity = '0';
-                                container.style.pointerEvents = 'none';
-                                container.setAttribute('aria-hidden', 'true');
-                                document.body.appendChild(container);
-                            }} else {{
-                                // Reset container for fresh render
-                                container.innerHTML = '';
-                            }}
-                            
-                            // Step 3: Render Turnstile widget (invisible mode)
-                            const widgetId = window.turnstile.render(container, {{
-                                sitekey: '{_ts_sitekey}',
-                                size: 'invisible',
-                                appearance: 'execute'
-                            }});
-                            
-                            // Step 4: Execute and get token via callback
-                            const token = await new Promise((resolve) => {{
-                                const timeout = setTimeout(() => resolve(''), 30000);
-                                try {{
-                                    window.turnstile.execute(widgetId, {{
-                                        callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
-                                        'error-callback': () => {{ clearTimeout(timeout); resolve(''); }},
-                                        'expired-callback': () => {{ clearTimeout(timeout); resolve(''); }},
-                                        'timeout-callback': () => {{ clearTimeout(timeout); resolve(''); }}
-                                    }});
-                                }} catch(e) {{
-                                    clearTimeout(timeout);
-                                    resolve('');
-                                }}
-                            }});
-                            
-                            return token || 'ERROR:no token';
-                        }} catch(e) {{
-                            return 'ERROR:' + e.message;
                         }}
-                    }}
-                """)
+                    """)
                 
                 if _turnstile_token and not _turnstile_token.startswith('ERROR:') and len(_turnstile_token) > 50:
                     print(f"  \u2705 Turnstile solved IN-BROWSER! token={len(_turnstile_token)} chars", flush=True)
@@ -6222,7 +6233,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v83 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v84 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
