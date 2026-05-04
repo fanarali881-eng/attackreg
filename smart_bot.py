@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82p6 - CapSolver API for Turnstile (no subprocess needed)
+Smart Universal Form Bot v83 - No pre-session Turnstile (session works without it!)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -1116,7 +1116,7 @@ def register_visitor(page, proxy_config=None, target_url=None):
                     return {'status': 'turnstile_failed', 'message': 'Cannot solve Turnstile for register'}
             
             if _reg_status == 429:
-                _wait = random.uniform(20, 45) * (attempt + 1)
+                _wait = random.uniform(60, 120) * (attempt + 1)
                 print(f"  \U0001f504 Register rate limited (429), waiting {_wait:.0f}s...", flush=True)
                 time.sleep(_wait)
                 continue
@@ -2124,110 +2124,12 @@ def api_direct_booking(page, proxy_config=None):
             
             print(f"  \U0001f464 Visitor: id={visitor_id}, token={'yes' if visitor_token else 'no'}, fp={'yes' if visitor_fingerprint else 'no'}", flush=True)
             
-            # === TURNSTILE TOKEN: Solve IN-BROWSER (same context as visitor) ===
-            # The API validates that the Turnstile token comes from the same browser context
-            # as the visitor registration. So we MUST solve it in the same page.
+            # === v83: Session endpoint does NOT require turnstile_token! ===
+            # Tested: POST /sessions without turnstile_token returns HTTP 201 directly.
+            # Only if server returns 428 TURNSTILE_REQUIRED do we solve and retry.
             _turnstile_token = None
-            _ts_sitekey = None
+            _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'  # Hardcoded fallback
             _ts_site_url = page.url.split('?')[0]
-            _ts_origin = '/'.join(_ts_site_url.split('/')[:3])
-            
-            # Auto-detect Turnstile sitekey from the site's JS bundle
-            try:
-                import urllib.request as _ts_urllib, re as _ts_re, ssl as _ts_ssl
-                _ts_ctx = _ts_ssl.create_default_context()
-                _ts_ctx.check_hostname = False
-                _ts_ctx.verify_mode = _ts_ssl.CERT_NONE
-                _ts_req = _ts_urllib.Request(_ts_origin + '/', headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'})
-                _ts_html = _ts_urllib.urlopen(_ts_req, timeout=10, context=_ts_ctx).read().decode('utf-8', errors='ignore')
-                _ts_js_srcs = _ts_re.findall(r'src=["\']([^"\']*(?:main|index|app)[^"\']*\.js)["\']', _ts_html)
-                _ts_main_refs = _ts_re.findall(r'["\']([^"\']*\/assets\/main-[^"\']*\.js)["\']', _ts_html)
-                _ts_all_js = list(set(_ts_main_refs + _ts_js_srcs))
-                print(f"  \U0001f510 Scanning {len(_ts_all_js)} JS files for Turnstile sitekey...", flush=True)
-                for _ts_js_src in _ts_all_js:
-                    try:
-                        _ts_js_url = _ts_js_src if _ts_js_src.startswith('http') else (_ts_origin + _ts_js_src)
-                        _ts_js_req = _ts_urllib.Request(_ts_js_url, headers={'User-Agent': 'Mozilla/5.0'})
-                        _ts_js_text = _ts_urllib.urlopen(_ts_js_req, timeout=15, context=_ts_ctx).read().decode('utf-8', errors='ignore')
-                        _ts_key_m = _ts_re.search(r'0x4A[A-Za-z0-9_-]{15,}', _ts_js_text)
-                        if _ts_key_m:
-                            _ts_sitekey = _ts_key_m.group(0)
-                            print(f"  \U0001f510 Auto-detected Turnstile sitekey: {_ts_sitekey}", flush=True)
-                            break
-                        _inner_main = _ts_re.findall(r'assets/main-[^"\'\,\s]+\.js', _ts_js_text)
-                        for _inner_src in _inner_main:
-                            try:
-                                _inner_url = _inner_src if _inner_src.startswith('http') else (_ts_origin + '/' + _inner_src)
-                                _inner_req = _ts_urllib.Request(_inner_url, headers={'User-Agent': 'Mozilla/5.0'})
-                                _inner_text = _ts_urllib.urlopen(_inner_req, timeout=15, context=_ts_ctx).read().decode('utf-8', errors='ignore')
-                                _inner_key = _ts_re.search(r'0x4A[A-Za-z0-9_-]{15,}', _inner_text)
-                                if _inner_key:
-                                    _ts_sitekey = _inner_key.group(0)
-                                    print(f"  \U0001f510 Auto-detected Turnstile sitekey (inner): {_ts_sitekey}", flush=True)
-                                    break
-                            except:
-                                pass
-                        if _ts_sitekey:
-                            break
-                    except:
-                        pass
-            except Exception as _ts_detect_err:
-                print(f"  \u26a0\ufe0f Turnstile sitekey detection failed: {str(_ts_detect_err)[:80]}", flush=True)
-            
-            if not _ts_sitekey:
-                _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
-                print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
-            
-            # v82p6: Solve Turnstile via CapSolver API (no IP dependency)
-            # CapSolver solves Turnstile from their servers - fast and reliable
-            try:
-                print(f"  \U0001f510 Solving Turnstile via CapSolver API...", flush=True)
-                import urllib.request, json as _json_ts, ssl as _ssl_ts
-                _cs_payload = _json_ts.dumps({
-                    'clientKey': CAPSOLVER_API_KEY,
-                    'task': {
-                        'type': 'AntiTurnstileTaskProxyLess',
-                        'websiteURL': _ts_site_url,
-                        'websiteKey': _ts_sitekey,
-                    }
-                }).encode('utf-8')
-                _cs_ctx = _ssl_ts.create_default_context()
-                _cs_ctx.check_hostname = False
-                _cs_ctx.verify_mode = _ssl_ts.CERT_NONE
-                _cs_req = urllib.request.Request('https://api.capsolver.com/createTask', data=_cs_payload, headers={'Content-Type': 'application/json'})
-                with urllib.request.urlopen(_cs_req, timeout=30, context=_cs_ctx) as _cs_resp:
-                    _cs_result = _json_ts.loads(_cs_resp.read().decode('utf-8'))
-                _cs_task_id = _cs_result.get('taskId')
-                if _cs_task_id:
-                    print(f"  \u23f3 CapSolver task: {_cs_task_id} - polling...", flush=True)
-                    for _cs_poll in range(20):
-                        time.sleep(3)
-                        _cs_poll_payload = _json_ts.dumps({'clientKey': CAPSOLVER_API_KEY, 'taskId': _cs_task_id}).encode('utf-8')
-                        _cs_poll_req = urllib.request.Request('https://api.capsolver.com/getTaskResult', data=_cs_poll_payload, headers={'Content-Type': 'application/json'})
-                        with urllib.request.urlopen(_cs_poll_req, timeout=30, context=_cs_ctx) as _cs_poll_resp:
-                            _cs_poll_result = _json_ts.loads(_cs_poll_resp.read().decode('utf-8'))
-                        if _cs_poll_result.get('status') == 'ready':
-                            _turnstile_token = _cs_poll_result.get('solution', {}).get('token', '')
-                            if _turnstile_token and len(_turnstile_token) > 50:
-                                print(f"  \u2705 Turnstile solved via CapSolver! token={len(_turnstile_token)} chars (polls={_cs_poll+1})", flush=True)
-                            break
-                        elif _cs_poll_result.get('status') == 'failed':
-                            print(f"  \u274c CapSolver failed: {_cs_poll_result.get('errorDescription', '')}", flush=True)
-                            break
-                elif _cs_result.get('solution', {}).get('token'):
-                    _turnstile_token = _cs_result['solution']['token']
-                    print(f"  \u2705 Turnstile solved instantly! token={len(_turnstile_token)} chars", flush=True)
-                else:
-                    print(f"  \u274c CapSolver no taskId: {_cs_result.get('errorDescription', '')}", flush=True)
-                if not _turnstile_token:
-                    print(f"  \u26a0\ufe0f CapSolver failed to produce token", flush=True)
-            except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile CapSolver error: {str(_ts_err)[:200]}", flush=True)
-            
-            if _turnstile_token:
-                print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
-            else:
-                print(f"  \u26a0\ufe0f No Turnstile token - session will likely fail", flush=True)
             
             # Add random delay before session request
             _session_delay = random.uniform(1, 3)
@@ -2247,8 +2149,8 @@ def api_direct_booking(page, proxy_config=None):
                 session_body['visitor_token'] = visitor_token
             if visitor_fingerprint:
                 session_body['visitor_fingerprint'] = visitor_fingerprint
-            if _turnstile_token:
-                session_body['turnstile_token'] = _turnstile_token
+            # v83: Don't send turnstile_token initially - server doesn't require it
+            # Will only add if server returns 428 TURNSTILE_REQUIRED
             
             status, resp = browser_api_post('/sessions', session_body)
             print(f"  \U0001f4e1 Session (browser): HTTP {status}", flush=True)
@@ -2271,10 +2173,20 @@ def api_direct_booking(page, proxy_config=None):
                     session_id = resp['data'].get('sessionId') or resp['data'].get('session_id') or resp['data'].get('id')
             
             if not session_id:
-                # Check if Captcha failed - can retry with fresh token
+                # v83: Check for 428 TURNSTILE_REQUIRED or IP_BANNED
                 _resp_str = str(resp)
-                if 'Captcha failed' in _resp_str or 'Captcha token' in _resp_str:
-                    print(f"  \u26a0\ufe0f Captcha failed/expired - solving fresh token...", flush=True)
+                _resp_code = ''
+                if isinstance(resp, dict):
+                    _resp_code = str(resp.get('error', {}).get('code', '') if isinstance(resp.get('error'), dict) else resp.get('code', ''))
+                
+                # Handle IP_BANNED - need to rotate proxy
+                if 'IP_BANNED' in _resp_str or 'IP_BANNED' in _resp_code:
+                    print(f"  \U0001f6ab Session IP_BANNED! Need fresh proxy IP.", flush=True)
+                    return False, data, card_data
+                
+                # Handle 428 TURNSTILE_REQUIRED - solve and retry
+                if status == 428 or 'TURNSTILE_REQUIRED' in _resp_str or 'TURNSTILE_REQUIRED' in _resp_code:
+                    print(f"  \U0001f510 Server requires Turnstile (428) - solving via CapSolver...", flush=True)
                     # Solve a fresh Turnstile token via CapSolver and retry once
                     try:
                         import urllib.request as _retry_urllib
@@ -2318,8 +2230,16 @@ def api_direct_booking(page, proxy_config=None):
                     except Exception as _retry_err:
                         print(f"  \u26a0\ufe0f Retry CapSolver failed: {str(_retry_err)[:100]}", flush=True)
                 
+                # Also handle 'Captcha failed' as equivalent to 428 (legacy behavior)
+                if not session_id and ('Captcha failed' in _resp_str or 'Captcha token' in _resp_str):
+                    print(f"  \u26a0\ufe0f Captcha failed (may be IP issue) - treating as failure", flush=True)
+                
+                # Handle VISITOR_PROOF_INVALID - fingerprint mismatch
+                if not session_id and 'VISITOR_PROOF_INVALID' in _resp_str:
+                    print(f"  \u26a0\ufe0f Visitor proof invalid - fingerprint mismatch, need re-register", flush=True)
+                
                 if not session_id:
-                    print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
+                    print(f"  \u274c Session failed: HTTP {status} | {str(resp)[:300]}", flush=True)
                     return False, data, card_data
             
             print(f"  \u2705 Session created: {session_id}", flush=True)
@@ -6126,7 +6046,7 @@ def find_booking_page(page, target_url, api_bypass_setup=None, api_bypass_active
 def run_smart_bot(target_url, duration_min=5, num_instances=3):
     """Run the smart form bot for specified duration"""
     # Cap instances to avoid proxy overload (too many browsers exhaust PacketStream IPs)
-    MAX_INSTANCES = 5
+    MAX_INSTANCES = 2  # v83: Reduced to avoid Cloudflare 429 rate limiting
     if num_instances > MAX_INSTANCES:
         print(f"\u26a0\ufe0f Capping instances from {num_instances} to {MAX_INSTANCES} to reduce IP banning", flush=True)
         num_instances = MAX_INSTANCES
@@ -6191,7 +6111,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
     # Threading lock for shared state
     _lock = threading.Lock()
 
-    print(f"Smart Bot v82 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (STAGGERED + PROXY-SELLER)")
+    print(f"Smart Bot v83 starting - URL: {target_url} | Duration: {duration_min}min | Instances: {num_instances} (LOW-RATE + PROXY-SELLER)")
     update_status()
 
     # Detect manus.space once before threads start
@@ -6544,7 +6464,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # === FAST PATH for manus.space API-DIRECT sites ===
                         # Skip form-finding and unnecessary steps - go straight to API
                         if is_manus_space:
-                            time.sleep(random.uniform(1, 2))  # Brief wait for page JS to load
+                            time.sleep(random.uniform(5, 15))  # v83: Longer wait to avoid rate limiting
                             
                             # Register visitor FIRST to get visitor_token for session creation
                             _reg_result = None
@@ -6598,7 +6518,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     total_errors += 1
                                     print(f'  \u274c [T{thread_id}] API-DIRECT failed after 3 attempts (errors: {total_errors})', flush=True)
                             # Delay between submissions to avoid rate limiting
-                            time.sleep(random.uniform(20, 50))
+                            time.sleep(random.uniform(45, 90))  # v83: Longer delay to avoid 429
                             page.close()
                             continue
 
@@ -7135,7 +7055,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
         t = threading.Thread(target=_worker_thread, args=(t_id,), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(random.uniform(15, 45))  # Stagger thread starts - spread load across time to avoid 429
+        time.sleep(random.uniform(45, 90))  # v83: Longer stagger to avoid rate limiting
 
     # Wait for all threads to finish
     for t in threads:
