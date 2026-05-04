@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82p3 - Same-context new tab Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82p4 - Same-context route() Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2171,10 +2171,11 @@ def api_direct_booking(page, proxy_config=None):
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
             # Solve Turnstile in a NEW TAB within the SAME browser context
-            # This ensures the token is solved from the SAME IP as the main page
-            # (browser context maintains persistent proxy connection = same IP)
+            # Uses page.route() to intercept the URL and serve local Turnstile HTML
+            # This is the SAME technique as turnstile_solver.py but within the existing context
+            # (same context = same proxy connection = same IP = token accepted)
             try:
-                print(f"  \U0001f510 Solving Turnstile in same-context new tab...", flush=True)
+                print(f"  \U0001f510 Solving Turnstile in same-context new tab (route method)...", flush=True)
                 
                 # Get the browser context from the page
                 _ts_context = page.context
@@ -2182,70 +2183,46 @@ def api_direct_booking(page, proxy_config=None):
                 # Create a new page (tab) in the same context
                 _ts_page = _ts_context.new_page()
                 
-                # Set content to a local HTML page with Turnstile auto-render
-                _ts_html_content = f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Turnstile</title>
-                    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-                </head>
-                <body>
-                    <div class="cf-turnstile" data-sitekey="{_ts_sitekey}" data-size="invisible" data-appearance="execute"></div>
-                    <input type="hidden" name="cf-turnstile-response" value="">
-                </body>
-                </html>
-                """
+                # Build local Turnstile HTML (same as turnstile_solver.py)
+                _ts_solver_url = _ts_origin + '/turnstile-solver-internal'
+                _ts_html_body = (
+                    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+                    '<title>Solver</title>'
+                    '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async></script>'
+                    '</head><body>'
+                    f'<div class="cf-turnstile" style="width:70px" data-sitekey="{_ts_sitekey}"></div>'
+                    '</body></html>'
+                )
                 
-                _ts_page.set_content(_ts_html_content)
+                # Route: intercept the solver URL and return our HTML
+                _ts_page.route(_ts_solver_url, lambda route: route.fulfill(body=_ts_html_body, status=200))
                 
-                # Wait for Turnstile to load and become available (up to 20s)
-                _ts_loaded = False
-                for _ts_i in range(40):  # 40 * 500ms = 20s
-                    _ts_check = _ts_page.evaluate("() => !!(window.turnstile && typeof window.turnstile.render === 'function')")
-                    if _ts_check:
-                        _ts_loaded = True
-                        break
-                    time.sleep(0.5)
+                # Navigate to the intercepted URL (Turnstile sees real origin)
+                _ts_page.goto(_ts_solver_url, timeout=30000)
+                time.sleep(2)
                 
-                if _ts_loaded:
-                    print(f"  \U0001f510 Turnstile loaded in new tab! Solving...", flush=True)
-                    # Render and execute the widget
-                    _turnstile_token = _ts_page.evaluate(f"""
-                        async () => {{
-                            try {{
-                                // Create container
-                                let container = document.getElementById('ts-container');
-                                if (!container) {{
-                                    container = document.createElement('div');
-                                    container.id = 'ts-container';
-                                    document.body.appendChild(container);
-                                }}
-                                
-                                const widgetId = window.turnstile.render(container, {{
-                                    sitekey: '{_ts_sitekey}',
-                                    size: 'invisible',
-                                    appearance: 'execute'
-                                }});
-                                
-                                const token = await new Promise((resolve) => {{
-                                    const timeout = setTimeout(() => resolve('TIMEOUT'), 30000);
-                                    window.turnstile.execute(widgetId, {{
-                                        callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
-                                        'error-callback': () => {{ clearTimeout(timeout); resolve('ERROR'); }},
-                                        'expired-callback': () => {{ clearTimeout(timeout); resolve('EXPIRED'); }},
-                                        'timeout-callback': () => {{ clearTimeout(timeout); resolve('TIMEOUT'); }}
-                                    }});
-                                }});
-                                
-                                return token;
-                            }} catch(e) {{
-                                return 'ERROR:' + e.message;
-                            }}
-                        }}
-                    """)
-                else:
-                    print(f"  \u26a0\ufe0f Turnstile didn't load in new tab after 20s", flush=True)
+                # Wait for Turnstile to auto-solve (polls cf-turnstile-response input)
+                _ts_solved = False
+                for _ts_attempt in range(20):  # 20 * 1.5s = 30s max
+                    try:
+                        _ts_val = _ts_page.input_value('[name=cf-turnstile-response]', timeout=2000)
+                        if _ts_val and len(_ts_val) > 50:
+                            _turnstile_token = _ts_val
+                            _ts_solved = True
+                            print(f"  \u2705 Turnstile solved in same-context tab! token={len(_turnstile_token)} chars", flush=True)
+                            break
+                    except:
+                        pass
+                    # Click the widget to trigger it (for non-auto-execute modes)
+                    if _ts_attempt < 5:
+                        try:
+                            _ts_page.locator('//div[@class="cf-turnstile"]').click(timeout=1000)
+                        except:
+                            pass
+                    time.sleep(1.5)
+                
+                if not _ts_solved:
+                    print(f"  \u26a0\ufe0f Same-context Turnstile didn't solve in 30s", flush=True)
                     _turnstile_token = None
                 
                 # Close the helper tab
@@ -2254,13 +2231,7 @@ def api_direct_booking(page, proxy_config=None):
                 except:
                     pass
                 
-                if _turnstile_token and not _turnstile_token.startswith('ERROR') and _turnstile_token not in ('TIMEOUT', 'EXPIRED', '') and len(_turnstile_token) > 50:
-                    print(f"  \u2705 Turnstile solved in same-context tab! token={len(_turnstile_token)} chars", flush=True)
-                else:
-                    _err_msg = _turnstile_token if _turnstile_token else 'empty'
-                    print(f"  \u26a0\ufe0f Same-context Turnstile failed: {_err_msg[:100]}", flush=True)
-                    _turnstile_token = None
-                    
+                if not _turnstile_token:
                     # Fallback: try subprocess method (different IP but might still work)
                     print(f"  \U0001f510 Fallback: Solving Turnstile via subprocess...", flush=True)
                     import subprocess as _ts_sp
