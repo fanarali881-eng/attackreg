@@ -958,7 +958,7 @@ def register_visitor(page, proxy_config=None, target_url=None):
     
     # Step 1: Poll localStorage - the site JS auto-registers and our route interceptor
     # captures the response and stores visitor_id in localStorage
-    for poll in range(30):  # Poll up to 30 times (total ~30 seconds) - give site JS time to register
+    for poll in range(3):  # v83: Only poll 3 times (3s) since page auto-register is blocked
         try:
             result = page.evaluate("""
                 () => {
@@ -980,7 +980,7 @@ def register_visitor(page, proxy_config=None, target_url=None):
                     }
                 }
             """)
-            if result and result.get('vid'):
+            if result and result.get('vid') and result.get('vid') != 'pending':
                 vid = result['vid']
                 vtk = result.get('vtk', '')
                 # Ensure fingerprint exists
@@ -2179,6 +2179,11 @@ def api_direct_booking(page, proxy_config=None):
                 # v83: Handle 429 rate limit - need to rotate proxy
                 if status == 429:
                     print(f"  \U0001f6ab Session rate limited (429)! Need fresh proxy IP.", flush=True)
+                    return False, data, card_data
+                
+                # v83: Handle network error (Failed to fetch) - proxy IP likely blocked
+                if status == 0:
+                    print(f"  \U0001f6ab Session network error (proxy blocked)! Need fresh proxy IP.", flush=True)
                     return False, data, card_data
                 
                 # Handle IP_BANNED - need to rotate proxy
