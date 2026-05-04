@@ -90,7 +90,7 @@ export default function Home() {
 
   // ===== SMART BOT MODE =====
   const [mode, setMode] = useState('attack'); // 'attack' or 'smart'
-  const [sesInstances, setSesInstances] = useState('7');
+  const [sesInstances, setSesInstances] = useState('2');
   const [sesDuration, setSesDuration] = useState('10');
   const [sesPhase, setSesPhase] = useState('idle'); // idle, deploying, running, finished
   const [sesStatus, setSesStatus] = useState([]);
@@ -884,7 +884,7 @@ export default function Home() {
               </div>
               <div>
                 <label style={{...st.label, color:'#f97316'}}>🌐 متصفحات لكل سيرفر</label>
-                <input type="number" value={sesInstances} onChange={(e) => setSesInstances(e.target.value)} min="1" max="10" style={{...st.input, textAlign:'center', fontSize:'16px', borderColor:'#f97316'}} disabled={sesPhase === 'running'} />
+                <input type="number" value={sesInstances} onChange={(e) => setSesInstances(e.target.value)} min="1" max="3" style={{...st.input, textAlign:'center', fontSize:'16px', borderColor:'#f97316'}} disabled={sesPhase === 'running'} />
               </div>
             </div>
 

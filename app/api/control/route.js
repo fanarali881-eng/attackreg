@@ -156,7 +156,7 @@ export async function POST(req) {
 
     } else if (action === 'start-sesallameh') {
       const safeDuration = sanitizeNumber(durationMin, 5, 1, 1440);
-      const safeInstances = sanitizeNumber(instances, 3, 1, 10);
+      const safeInstances = sanitizeNumber(instances, 2, 1, 3);  // v83: Max 3 to avoid rate limiting
 
       // Build proxy env vars
       let proxyEnv = '';
@@ -181,7 +181,7 @@ export async function POST(req) {
       const safeUrl = sanitizeUrl(url);
       if (!safeUrl) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
       const safeDuration = sanitizeNumber(durationMin, 5, 1, 1440);
-      const safeInstances = sanitizeNumber(instances, 3, 1, 10);
+      const safeInstances = sanitizeNumber(instances, 2, 1, 3);  // v83: Max 3 to avoid rate limiting
 
       let proxyEnv = '';
       if (proxies && proxies.length > 0) {

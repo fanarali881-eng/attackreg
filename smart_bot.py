@@ -1116,10 +1116,9 @@ def register_visitor(page, proxy_config=None, target_url=None):
                     return {'status': 'turnstile_failed', 'message': 'Cannot solve Turnstile for register'}
             
             if _reg_status == 429:
-                _wait = random.uniform(60, 120) * (attempt + 1)
-                print(f"  \U0001f504 Register rate limited (429), waiting {_wait:.0f}s...", flush=True)
-                time.sleep(_wait)
-                continue
+                # v83: Return rate_limited status so outer loop can rotate IP
+                print(f"  \U0001f6ab Register rate limited (429) - need IP rotation!", flush=True)
+                return {'status': 'rate_limited', 'message': '429 rate limited'}
             
             if _reg_status == 403:
                 _err_code = ''
@@ -6341,9 +6340,23 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     # All fetch() calls from page.evaluate go through the browser's proxy automatically
                     # We just add a route to log API calls (no interception needed)
                     if is_manus_space and proxy_config:
+                        # v83: Flag to control when bot's own register is active
+                        _bot_register_active = [False]
+                        
                         def _manus_api_interceptor(route):
                             url = route.request.url
                             method = route.request.method
+                            
+                            # v83: BLOCK page's auto-register calls to prevent wasting rate limit
+                            # Only allow when bot explicitly enables _bot_register_active
+                            if '/visitors/register' in url and method == 'POST' and not _bot_register_active[0]:
+                                route.fulfill(
+                                    status=201,
+                                    content_type='application/json',
+                                    body='{"success":true,"data":{"visitor_id":"pending","visitor_token":"pending"}}'
+                                )
+                                return
+                            
                             print(f'  \U0001f50c API call: {method} {url[:80]}', flush=True)
                             
                             # For register calls, intercept the response to capture visitor data
@@ -6469,16 +6482,30 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             # Register visitor FIRST to get visitor_token for session creation
                             _reg_result = None
                             try:
+                                # v83: Enable bot register flag so interceptor allows it through
+                                if '_bot_register_active' in dir():
+                                    _bot_register_active[0] = True
                                 _reg_result = register_visitor(page, proxy_config=_rotated_proxy if '_rotated_proxy' in dir() else proxy_config, target_url=target_url)
+                                if '_bot_register_active' in dir():
+                                    _bot_register_active[0] = False
                                 time.sleep(random.uniform(0.5, 1))
                             except Exception as _rv_err:
+                                if '_bot_register_active' in dir():
+                                    _bot_register_active[0] = False
                                 print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
                             
-                            # === IP_BANNED on register: Don't abort - try session with turnstile anyway ===
-                            # The register endpoint is optional. The session endpoint only needs turnstile_token.
-                            # If register is banned, we skip it and proceed to session creation.
-                            if isinstance(_reg_result, dict) and _reg_result.get('status') == 'ip_banned':
-                                print(f'  \u26a0\ufe0f [T{thread_id}] Register IP_BANNED - will try session with turnstile token anyway', flush=True)
+                            # === v83: Handle rate_limited and ip_banned - rotate IP ===
+                            if isinstance(_reg_result, dict) and _reg_result.get('status') in ('rate_limited', 'ip_banned'):
+                                _fail_reason = _reg_result.get('status')
+                                print(f'  \U0001f504 [T{thread_id}] Register {_fail_reason} - rotating IP...', flush=True)
+                                try:
+                                    page.close()
+                                    context.close()
+                                    browser.close()
+                                except:
+                                    pass
+                                time.sleep(random.uniform(3, 8))  # Brief pause before new IP
+                                break  # Break inner loop to get new browser + new sticky session IP
                             
                             print('  \U0001f680 Using API-DIRECT mode (fast path)', flush=True)
                             
