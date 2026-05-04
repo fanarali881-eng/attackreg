@@ -6585,7 +6585,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             # Register visitor FIRST to get visitor_token for session creation
                             _reg_result = None
                             try:
-                                _reg_result = register_visitor(page, proxy_config=proxy_config, target_url=target_url)
+                                _reg_result = register_visitor(page, proxy_config=_rotated_proxy if '_rotated_proxy' in dir() else proxy_config, target_url=target_url)
                                 time.sleep(random.uniform(0.5, 1))
                             except Exception as _rv_err:
                                 print(f'  \u26a0\ufe0f register_visitor error: {_rv_err}', flush=True)
@@ -6603,7 +6603,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                             data = {}
                             card_data = {}
                             for _api_attempt in range(3):  # Max 3 attempts with increasing delay
-                                api_success, data, card_data = api_direct_booking(page, proxy_config=proxy_config)
+                                api_success, data, card_data = api_direct_booking(page, proxy_config=_rotated_proxy if '_rotated_proxy' in dir() else proxy_config)
                                 if api_success:
                                     break
                                 if _api_attempt < 2:
@@ -6641,7 +6641,7 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                         # === NORMAL PATH for non-manus.space sites (unchanged) ===
                         # === ANTI-DETECTION: Register visitor + Start heartbeat + Simulate human ===
                         try:
-                            register_visitor(page, proxy_config=proxy_config, target_url=target_url)
+                            register_visitor(page, proxy_config=_rotated_proxy if '_rotated_proxy' in dir() else proxy_config, target_url=target_url)
                             time.sleep(random.uniform(1, 2))
                             start_heartbeat(page, interval=15)
                             simulate_human_interaction(page)
