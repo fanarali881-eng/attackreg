@@ -6501,6 +6501,35 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
 
                         time.sleep(2)
 
+                        # === v83: Get cf_clearance for dataflowptech.com ===
+                        # The /sessions endpoint requires cf_clearance cookie for dataflowptech.com
+                        # We need to visit that domain in the same browser context to solve its CF challenge
+                        if is_manus_space:
+                            try:
+                                print('  \U0001f310 Getting CF clearance for dataflowptech.com...', flush=True)
+                                _api_page = context.new_page()
+                                _api_page.goto('https://dataflowptech.com/api/v1/sessions/current', timeout=30000, wait_until='domcontentloaded')
+                                # Wait for CF challenge to resolve (up to 15s)
+                                for _cf_i in range(15):
+                                    time.sleep(1)
+                                    try:
+                                        _api_body = _api_page.evaluate("() => document.body ? document.body.innerText : ''")
+                                        # If we get JSON response or non-CF page, challenge is solved
+                                        if 'moment' not in _api_body.lower() and 'لحظة' not in _api_body and 'just' not in _api_body.lower() and 'Checking' not in _api_body:
+                                            print(f'  \u2705 CF clearance for dataflowptech.com obtained ({_cf_i+1}s)', flush=True)
+                                            break
+                                    except:
+                                        pass
+                                    # Click turnstile if needed
+                                    if _cf_i % 4 == 3:
+                                        try:
+                                            _api_page.mouse.click(170, 275)
+                                        except:
+                                            pass
+                                _api_page.close()
+                            except Exception as _cf_api_err:
+                                print(f'  \u26a0\ufe0f CF clearance for API domain failed: {str(_cf_api_err)[:80]}', flush=True)
+
                         # === FAST PATH for manus.space API-DIRECT sites ===
                         # Skip form-finding and unnecessary steps - go straight to API
                         if is_manus_space:
