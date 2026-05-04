@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82p5 - STICKY SESSION proxy + Turnstile IP match fix
+Smart Universal Form Bot v82p6 - CapSolver API for Turnstile (no subprocess needed)
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -1075,31 +1075,39 @@ def register_visitor(page, proxy_config=None, target_url=None):
                     _code = data.get('code', '') or (data.get('data', {}) or {}).get('code', '')
                 print(f"  \U0001f510 Register needs Turnstile (428 {_code}), solving...", flush=True)
                 
-                # Solve Turnstile via subprocess (most reliable)
+                # Solve Turnstile via CapSolver API (fast, no browser needed)
                 try:
-                    import subprocess as _ts_sp2
-                    _ts_script2 = (
-                        "import sys, os\n"
-                        "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
-                        "sys.path.insert(0, '/root')\n"
-                        "from turnstile_solver import solve_turnstile\n"
-                        f"token = solve_turnstile('{target_url or (proxy_config.get('site_url', '') if proxy_config else '') or 'https://vehclesafe.manus.space/'}', '0x4AAAAAADF2Xch-Yrbuk9NL', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
-                        "if token:\n"
-                        "    print('TURNSTILE_TOKEN:' + token)\n"
-                        "else:\n"
-                        "    print('TURNSTILE_TOKEN:FAILED')\n"
-                    )
-                    _ts_env2 = dict(os.environ)
-                    _ts_env2.setdefault('DISPLAY', ':99')
-                    _ts_result2 = _ts_sp2.run(['python3', '-c', _ts_script2], capture_output=True, text=True, timeout=50, env=_ts_env2)
-                    for _line2 in _ts_result2.stdout.split('\n'):
-                        if _line2.startswith('TURNSTILE_TOKEN:'):
-                            _val2 = _line2[16:]
-                            if _val2 and _val2 != 'FAILED' and len(_val2) > 50:
-                                _turnstile_token_reg = _val2
-                                print(f"  \u2705 Turnstile solved for register! token={len(_turnstile_token_reg)} chars", flush=True)
+                    import urllib.request as _reg_urllib
+                    import json as _reg_json
+                    import ssl as _reg_ssl
+                    _reg_ctx = _reg_ssl.create_default_context()
+                    _reg_ctx.check_hostname = False
+                    _reg_ctx.verify_mode = _reg_ssl.CERT_NONE
+                    _reg_site_url = target_url or (proxy_config.get('site_url', '') if proxy_config else '') or 'https://vehclesafe.manus.space/'
+                    _reg_payload = _reg_json.dumps({'clientKey': CAPSOLVER_API_KEY, 'task': {'type': 'AntiTurnstileTaskProxyLess', 'websiteURL': _reg_site_url, 'websiteKey': '0x4AAAAAADF2Xch-Yrbuk9NL'}}).encode('utf-8')
+                    _reg_req = _reg_urllib.Request('https://api.capsolver.com/createTask', data=_reg_payload, headers={'Content-Type': 'application/json'})
+                    with _reg_urllib.urlopen(_reg_req, timeout=30, context=_reg_ctx) as _reg_resp:
+                        _reg_result = _reg_json.loads(_reg_resp.read().decode('utf-8'))
+                    _reg_task_id = _reg_result.get('taskId')
+                    if _reg_task_id:
+                        for _rp2 in range(15):
+                            time.sleep(3)
+                            _rp2_payload = _reg_json.dumps({'clientKey': CAPSOLVER_API_KEY, 'taskId': _reg_task_id}).encode('utf-8')
+                            _rp2_req = _reg_urllib.Request('https://api.capsolver.com/getTaskResult', data=_rp2_payload, headers={'Content-Type': 'application/json'})
+                            with _reg_urllib.urlopen(_rp2_req, timeout=30, context=_reg_ctx) as _rp2_resp:
+                                _rp2_result = _reg_json.loads(_rp2_resp.read().decode('utf-8'))
+                            if _rp2_result.get('status') == 'ready':
+                                _turnstile_token_reg = _rp2_result.get('solution', {}).get('token', '')
+                                if _turnstile_token_reg and len(_turnstile_token_reg) > 50:
+                                    print(f"  \u2705 Turnstile solved for register via CapSolver! token={len(_turnstile_token_reg)} chars", flush=True)
+                                break
+                            elif _rp2_result.get('status') == 'failed':
+                                break
+                    elif _reg_result.get('solution', {}).get('token'):
+                        _turnstile_token_reg = _reg_result['solution']['token']
+                        print(f"  \u2705 Turnstile solved instantly for register! token={len(_turnstile_token_reg)} chars", flush=True)
                 except Exception as _ts_err2:
-                    print(f"  \u26a0\ufe0f Turnstile error: {str(_ts_err2)[:150]}", flush=True)
+                    print(f"  \u26a0\ufe0f CapSolver Turnstile error: {str(_ts_err2)[:150]}", flush=True)
                 
                 if _turnstile_token_reg:
                     continue  # Retry register with the token
@@ -2170,39 +2178,51 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
-            # v82p5: Solve Turnstile via subprocess with STICKY SESSION proxy
-            # The subprocess solver uses the SAME sticky session ID as the browser
-            # (username_sessTime-60_sessId-XXX) so it gets the SAME IP.
-            # This means the Turnstile token will be validated from the same IP
-            # that the browser uses for the API call.
+            # v82p6: Solve Turnstile via CapSolver API (no IP dependency)
+            # CapSolver solves Turnstile from their servers - fast and reliable
             try:
-                print(f"  \U0001f510 Solving Turnstile via subprocess (sticky session = same IP)...", flush=True)
-                import subprocess as _ts_sp
-                _ts_solver_script = (
-                    "import sys, os\n"
-                    "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
-                    "sys.path.insert(0, '/root')\n"
-                    "from turnstile_solver import solve_turnstile\n"
-                    f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
-                    "if token:\n"
-                    "    print('TURNSTILE_TOKEN:' + token)\n"
-                    "else:\n"
-                    "    print('TURNSTILE_TOKEN:FAILED')\n"
-                )
-                _ts_env = dict(os.environ)
-                _ts_env.setdefault('DISPLAY', ':99')
-                _ts_result = _ts_sp.run(['python3', '-c', _ts_solver_script], capture_output=True, text=True, timeout=50, env=_ts_env)
-                for _ts_line in _ts_result.stdout.split('\n'):
-                    if _ts_line.startswith('TURNSTILE_TOKEN:'):
-                        _ts_val = _ts_line[16:]
-                        if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
-                            _turnstile_token = _ts_val
-                            print(f"  \u2705 Turnstile solved! token={len(_turnstile_token)} chars (same IP as browser)", flush=True)
+                print(f"  \U0001f510 Solving Turnstile via CapSolver API...", flush=True)
+                import urllib.request, json as _json_ts, ssl as _ssl_ts
+                _cs_payload = _json_ts.dumps({
+                    'clientKey': CAPSOLVER_API_KEY,
+                    'task': {
+                        'type': 'AntiTurnstileTaskProxyLess',
+                        'websiteURL': _ts_site_url,
+                        'websiteKey': _ts_sitekey,
+                    }
+                }).encode('utf-8')
+                _cs_ctx = _ssl_ts.create_default_context()
+                _cs_ctx.check_hostname = False
+                _cs_ctx.verify_mode = _ssl_ts.CERT_NONE
+                _cs_req = urllib.request.Request('https://api.capsolver.com/createTask', data=_cs_payload, headers={'Content-Type': 'application/json'})
+                with urllib.request.urlopen(_cs_req, timeout=30, context=_cs_ctx) as _cs_resp:
+                    _cs_result = _json_ts.loads(_cs_resp.read().decode('utf-8'))
+                _cs_task_id = _cs_result.get('taskId')
+                if _cs_task_id:
+                    print(f"  \u23f3 CapSolver task: {_cs_task_id} - polling...", flush=True)
+                    for _cs_poll in range(20):
+                        time.sleep(3)
+                        _cs_poll_payload = _json_ts.dumps({'clientKey': CAPSOLVER_API_KEY, 'taskId': _cs_task_id}).encode('utf-8')
+                        _cs_poll_req = urllib.request.Request('https://api.capsolver.com/getTaskResult', data=_cs_poll_payload, headers={'Content-Type': 'application/json'})
+                        with urllib.request.urlopen(_cs_poll_req, timeout=30, context=_cs_ctx) as _cs_poll_resp:
+                            _cs_poll_result = _json_ts.loads(_cs_poll_resp.read().decode('utf-8'))
+                        if _cs_poll_result.get('status') == 'ready':
+                            _turnstile_token = _cs_poll_result.get('solution', {}).get('token', '')
+                            if _turnstile_token and len(_turnstile_token) > 50:
+                                print(f"  \u2705 Turnstile solved via CapSolver! token={len(_turnstile_token)} chars (polls={_cs_poll+1})", flush=True)
                             break
+                        elif _cs_poll_result.get('status') == 'failed':
+                            print(f"  \u274c CapSolver failed: {_cs_poll_result.get('errorDescription', '')}", flush=True)
+                            break
+                elif _cs_result.get('solution', {}).get('token'):
+                    _turnstile_token = _cs_result['solution']['token']
+                    print(f"  \u2705 Turnstile solved instantly! token={len(_turnstile_token)} chars", flush=True)
+                else:
+                    print(f"  \u274c CapSolver no taskId: {_cs_result.get('errorDescription', '')}", flush=True)
                 if not _turnstile_token:
-                    print(f"  \u26a0\ufe0f Turnstile subprocess failed to produce token", flush=True)
+                    print(f"  \u26a0\ufe0f CapSolver failed to produce token", flush=True)
             except Exception as _ts_err:
-                print(f"  \u26a0\ufe0f Turnstile error: {str(_ts_err)[:200]}", flush=True)
+                print(f"  \u26a0\ufe0f Turnstile CapSolver error: {str(_ts_err)[:200]}", flush=True)
             
             if _turnstile_token:
                 print(f"  \U0001f510 Turnstile token ready for session!", flush=True)
@@ -2255,34 +2275,48 @@ def api_direct_booking(page, proxy_config=None):
                 _resp_str = str(resp)
                 if 'Captcha failed' in _resp_str or 'Captcha token' in _resp_str:
                     print(f"  \u26a0\ufe0f Captcha failed/expired - solving fresh token...", flush=True)
-                    # Solve a fresh Turnstile token and retry once
+                    # Solve a fresh Turnstile token via CapSolver and retry once
                     try:
-                        import subprocess as _retry_sp
-                        _px_s = proxy_config.get('server', '') if proxy_config else ''
-                        _px_u = proxy_config.get('username', '') if proxy_config else ''
-                        _px_p = proxy_config.get('password', '') if proxy_config else ''
-                        _retry_script = f"""\nimport sys, os\nos.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\nsys.path.insert(0, '/root')\nfrom turnstile_solver import solve_turnstile\ntoken = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{_px_s}', proxy_user='{_px_u}', proxy_pass='{_px_p}')\nif token:\n    print('TURNSTILE_TOKEN:' + token)\nelse:\n    print('TURNSTILE_TOKEN:FAILED')\n"""
-                        _retry_env = dict(os.environ)
-                        _retry_env.setdefault('DISPLAY', ':99')
-                        _retry_result = _retry_sp.run(['python3', '-c', _retry_script], capture_output=True, text=True, timeout=50, env=_retry_env)
-                        for _line in _retry_result.stdout.split('\n'):
-                            if _line.startswith('TURNSTILE_TOKEN:'):
-                                _new_token = _line[16:]
-                                if _new_token and _new_token != 'FAILED' and len(_new_token) > 50:
-                                    session_body['turnstile_token'] = _new_token
-                                    print(f"  \u2705 Fresh Turnstile token! Retrying session...", flush=True)
-                                    status, resp = browser_api_post('/sessions', session_body)
-                                    print(f"  \U0001f4e1 Session retry: HTTP {status}", flush=True)
-                                    if isinstance(resp, dict):
-                                        if isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
-                                            session_id = resp['data']['sessionId']
-                                        elif resp.get('sessionId'):
-                                            session_id = resp['sessionId']
-                                        elif resp.get('ok') and isinstance(resp.get('data'), dict):
-                                            session_id = resp['data'].get('sessionId') or resp['data'].get('session_id')
+                        import urllib.request as _retry_urllib
+                        import json as _retry_json
+                        import ssl as _retry_ssl
+                        _retry_ctx = _retry_ssl.create_default_context()
+                        _retry_ctx.check_hostname = False
+                        _retry_ctx.verify_mode = _retry_ssl.CERT_NONE
+                        _retry_payload = _retry_json.dumps({'clientKey': CAPSOLVER_API_KEY, 'task': {'type': 'AntiTurnstileTaskProxyLess', 'websiteURL': _ts_site_url, 'websiteKey': _ts_sitekey}}).encode('utf-8')
+                        _retry_req = _retry_urllib.Request('https://api.capsolver.com/createTask', data=_retry_payload, headers={'Content-Type': 'application/json'})
+                        with _retry_urllib.urlopen(_retry_req, timeout=30, context=_retry_ctx) as _rr:
+                            _retry_resp = _retry_json.loads(_rr.read().decode('utf-8'))
+                        _retry_task_id = _retry_resp.get('taskId')
+                        _new_token = None
+                        if _retry_task_id:
+                            for _rp in range(15):
+                                time.sleep(3)
+                                _rp_payload = _retry_json.dumps({'clientKey': CAPSOLVER_API_KEY, 'taskId': _retry_task_id}).encode('utf-8')
+                                _rp_req = _retry_urllib.Request('https://api.capsolver.com/getTaskResult', data=_rp_payload, headers={'Content-Type': 'application/json'})
+                                with _retry_urllib.urlopen(_rp_req, timeout=30, context=_retry_ctx) as _rp_resp:
+                                    _rp_result = _retry_json.loads(_rp_resp.read().decode('utf-8'))
+                                if _rp_result.get('status') == 'ready':
+                                    _new_token = _rp_result.get('solution', {}).get('token', '')
                                     break
+                                elif _rp_result.get('status') == 'failed':
+                                    break
+                        elif _retry_resp.get('solution', {}).get('token'):
+                            _new_token = _retry_resp['solution']['token']
+                        if _new_token and len(_new_token) > 50:
+                            session_body['turnstile_token'] = _new_token
+                            print(f"  \u2705 Fresh CapSolver token! Retrying session...", flush=True)
+                            status, resp = browser_api_post('/sessions', session_body)
+                            print(f"  \U0001f4e1 Session retry: HTTP {status}", flush=True)
+                            if isinstance(resp, dict):
+                                if isinstance(resp.get('data'), dict) and resp['data'].get('sessionId'):
+                                    session_id = resp['data']['sessionId']
+                                elif resp.get('sessionId'):
+                                    session_id = resp['sessionId']
+                                elif resp.get('ok') and isinstance(resp.get('data'), dict):
+                                    session_id = resp['data'].get('sessionId') or resp['data'].get('session_id')
                     except Exception as _retry_err:
-                        print(f"  \u26a0\ufe0f Retry Turnstile failed: {str(_retry_err)[:100]}", flush=True)
+                        print(f"  \u26a0\ufe0f Retry CapSolver failed: {str(_retry_err)[:100]}", flush=True)
                 
                 if not session_id:
                     print(f"  \u274c Session failed: {str(resp)[:300]}", flush=True)
