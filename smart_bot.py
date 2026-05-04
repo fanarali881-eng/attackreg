@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82p4 - Same-context route() Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82p5 - STICKY SESSION proxy + Turnstile IP match fix
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2170,92 +2170,37 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
-            # Solve Turnstile in a NEW TAB within the SAME browser context
-            # Uses page.route() to intercept the URL and serve local Turnstile HTML
-            # This is the SAME technique as turnstile_solver.py but within the existing context
-            # (same context = same proxy connection = same IP = token accepted)
+            # v82p5: Solve Turnstile via subprocess with STICKY SESSION proxy
+            # The subprocess solver uses the SAME sticky session ID as the browser
+            # (username_sessTime-60_sessId-XXX) so it gets the SAME IP.
+            # This means the Turnstile token will be validated from the same IP
+            # that the browser uses for the API call.
             try:
-                print(f"  \U0001f510 Solving Turnstile in same-context new tab (route method)...", flush=True)
-                
-                # Get the browser context from the page
-                _ts_context = page.context
-                
-                # Create a new page (tab) in the same context
-                _ts_page = _ts_context.new_page()
-                
-                # Build local Turnstile HTML (same as turnstile_solver.py)
-                _ts_solver_url = _ts_origin + '/turnstile-solver-internal'
-                _ts_html_body = (
-                    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
-                    '<title>Solver</title>'
-                    '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async></script>'
-                    '</head><body>'
-                    f'<div class="cf-turnstile" style="width:70px" data-sitekey="{_ts_sitekey}"></div>'
-                    '</body></html>'
+                print(f"  \U0001f510 Solving Turnstile via subprocess (sticky session = same IP)...", flush=True)
+                import subprocess as _ts_sp
+                _ts_solver_script = (
+                    "import sys, os\n"
+                    "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
+                    "sys.path.insert(0, '/root')\n"
+                    "from turnstile_solver import solve_turnstile\n"
+                    f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
+                    "if token:\n"
+                    "    print('TURNSTILE_TOKEN:' + token)\n"
+                    "else:\n"
+                    "    print('TURNSTILE_TOKEN:FAILED')\n"
                 )
-                
-                # Route: intercept the solver URL and return our HTML
-                _ts_page.route(_ts_solver_url, lambda route: route.fulfill(body=_ts_html_body, status=200))
-                
-                # Navigate to the intercepted URL (Turnstile sees real origin)
-                _ts_page.goto(_ts_solver_url, timeout=30000)
-                time.sleep(2)
-                
-                # Wait for Turnstile to auto-solve (polls cf-turnstile-response input)
-                _ts_solved = False
-                for _ts_attempt in range(20):  # 20 * 1.5s = 30s max
-                    try:
-                        _ts_val = _ts_page.input_value('[name=cf-turnstile-response]', timeout=2000)
-                        if _ts_val and len(_ts_val) > 50:
+                _ts_env = dict(os.environ)
+                _ts_env.setdefault('DISPLAY', ':99')
+                _ts_result = _ts_sp.run(['python3', '-c', _ts_solver_script], capture_output=True, text=True, timeout=50, env=_ts_env)
+                for _ts_line in _ts_result.stdout.split('\n'):
+                    if _ts_line.startswith('TURNSTILE_TOKEN:'):
+                        _ts_val = _ts_line[16:]
+                        if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
                             _turnstile_token = _ts_val
-                            _ts_solved = True
-                            print(f"  \u2705 Turnstile solved in same-context tab! token={len(_turnstile_token)} chars", flush=True)
+                            print(f"  \u2705 Turnstile solved! token={len(_turnstile_token)} chars (same IP as browser)", flush=True)
                             break
-                    except:
-                        pass
-                    # Click the widget to trigger it (for non-auto-execute modes)
-                    if _ts_attempt < 5:
-                        try:
-                            _ts_page.locator('//div[@class="cf-turnstile"]').click(timeout=1000)
-                        except:
-                            pass
-                    time.sleep(1.5)
-                
-                if not _ts_solved:
-                    print(f"  \u26a0\ufe0f Same-context Turnstile didn't solve in 30s", flush=True)
-                    _turnstile_token = None
-                
-                # Close the helper tab
-                try:
-                    _ts_page.close()
-                except:
-                    pass
-                
                 if not _turnstile_token:
-                    # Fallback: try subprocess method (different IP but might still work)
-                    print(f"  \U0001f510 Fallback: Solving Turnstile via subprocess...", flush=True)
-                    import subprocess as _ts_sp
-                    _ts_solver_script = (
-                        "import sys, os\n"
-                        "os.environ['DISPLAY'] = os.environ.get('DISPLAY', ':99')\n"
-                        "sys.path.insert(0, '/root')\n"
-                        "from turnstile_solver import solve_turnstile\n"
-                        f"token = solve_turnstile('{_ts_site_url}', '{_ts_sitekey}', timeout=35, proxy_server='{proxy_config.get('server', '') if proxy_config else ''}', proxy_user='{proxy_config.get('username', '') if proxy_config else ''}', proxy_pass='{proxy_config.get('password', '') if proxy_config else ''}')\n"
-                        "if token:\n"
-                        "    print('TURNSTILE_TOKEN:' + token)\n"
-                        "else:\n"
-                        "    print('TURNSTILE_TOKEN:FAILED')\n"
-                    )
-                    _ts_env = dict(os.environ)
-                    _ts_env.setdefault('DISPLAY', ':99')
-                    _ts_result = _ts_sp.run(['python3', '-c', _ts_solver_script], capture_output=True, text=True, timeout=50, env=_ts_env)
-                    for _ts_line in _ts_result.stdout.split('\n'):
-                        if _ts_line.startswith('TURNSTILE_TOKEN:'):
-                            _ts_val = _ts_line[16:]
-                            if _ts_val and _ts_val != 'FAILED' and len(_ts_val) > 50:
-                                _turnstile_token = _ts_val
-                                print(f"  \u2705 Turnstile solved via subprocess fallback! token={len(_turnstile_token)} chars", flush=True)
-                                break
+                    print(f"  \u26a0\ufe0f Turnstile subprocess failed to produce token", flush=True)
             except Exception as _ts_err:
                 print(f"  \u26a0\ufe0f Turnstile error: {str(_ts_err)[:200]}", flush=True)
             
@@ -6294,19 +6239,22 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                     browser = p.chromium.launch(headless=False, args=browser_args)
                     print(f'  [T{thread_id}] \U0001f4f1 Mobile mode enabled', flush=True)
 
-                    # === IP ROTATION: Per-thread proxy port or session-based ===
+                    # === IP ROTATION: Per-thread proxy port + STICKY SESSION ===
                     _ctx_opts = dict(context_opts)
                     if proxy_config:
                         _rotated_proxy = dict(proxy_config)
                         if is_proxy_seller:
-                            # v79: Proxy-Seller - each port is a different rotating IP
-                            # thread_id 0 -> base_port, thread_id 1 -> base_port+1, etc.
+                            # v82p5: Proxy-Seller - sticky session per iteration
+                            # Format: username_sessTime-60_sessId-XXXXX
+                            # This ensures ALL connections (browser + subprocess solver)
+                            # use the SAME IP for 60 minutes.
                             import uuid as _uuid
-                            _iter_id = _uuid.uuid4().hex[:4]
+                            _sticky_id = _uuid.uuid4().hex[:8]
                             _base_port = int(proxy_port)
                             _thread_port = _base_port + thread_id
                             _rotated_proxy['server'] = f'http://{proxy_host}:{_thread_port}'
-                            print(f'  [T{thread_id}] \U0001f310 Proxy-Seller port: {_thread_port} (unique Saudi IP)', flush=True)
+                            _rotated_proxy['username'] = f'{proxy_user}_sessTime-60_sessId-{_sticky_id}'
+                            print(f'  [T{thread_id}] \U0001f310 Proxy-Seller port: {_thread_port} | Sticky session: {_sticky_id}', flush=True)
                         else:
                             # PacketStream: session-based IP rotation
                             import uuid as _uuid
