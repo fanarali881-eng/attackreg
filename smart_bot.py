@@ -1887,12 +1887,10 @@ def api_direct_booking(page, proxy_config=None):
                         print(f"    \u274c Domain not allowed! Check admin panel.", flush=True)
                         return status_code, resp_data
                     
-                    # 429 Rate limited - use aggressive backoff to avoid overwhelming API
-                    if _http_code == 429 and _attempt < max_retries - 1:
-                        _wait = random.uniform(20, 60) * (_attempt + 1)
-                        print(f"    \U0001f504 Rate limited, retry #{_attempt+1} (wait {_wait:.1f}s)", flush=True)
-                        time.sleep(_wait)
-                        continue
+                    # v83: 429 Rate limited - return immediately so outer loop rotates IP
+                    if _http_code == 429:
+                        print(f"    \U0001f6ab Rate limited (429) on {endpoint} - need IP rotation!", flush=True)
+                        return 429, resp_data
                     
                     return status_code, resp_data
                 else:
@@ -2177,6 +2175,11 @@ def api_direct_booking(page, proxy_config=None):
                 _resp_code = ''
                 if isinstance(resp, dict):
                     _resp_code = str(resp.get('error', {}).get('code', '') if isinstance(resp.get('error'), dict) else resp.get('code', ''))
+                
+                # v83: Handle 429 rate limit - need to rotate proxy
+                if status == 429:
+                    print(f"  \U0001f6ab Session rate limited (429)! Need fresh proxy IP.", flush=True)
+                    return False, data, card_data
                 
                 # Handle IP_BANNED - need to rotate proxy
                 if 'IP_BANNED' in _resp_str or 'IP_BANNED' in _resp_code:
