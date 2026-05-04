@@ -1897,6 +1897,10 @@ def api_direct_booking(page, proxy_config=None):
                     # Network error
                     _err_msg = result.get('error', 'unknown') if isinstance(result, dict) else 'unknown'
                     print(f"    \u26a0\ufe0f browser-fetch error: {_err_msg[:100]}", flush=True)
+                    # v83: On 'Failed to fetch' for session/register endpoints, return immediately
+                    # The IP is likely blocked - no point retrying with same IP
+                    if 'Failed to fetch' in _err_msg and ('/sessions' in endpoint or '/register' in endpoint):
+                        return 0, resp_data
                     if _attempt < max_retries - 1:
                         time.sleep(random.uniform(2, 4))
                         # Try reloading page to refresh connection
@@ -6414,6 +6418,21 @@ def run_smart_bot(target_url, duration_min=5, num_instances=3):
                                     print(f'  \u26a0\ufe0f Register intercept error: {str(_intercept_err)[:80]}', flush=True)
                                     route.continue_()
                                     return
+                            
+                            # v83: For /sessions endpoint, use route.fetch() like register
+                            # route.continue_() fails with 'Failed to fetch' on some IPs
+                            # route.fetch() goes through Playwright's network stack differently
+                            if '/sessions' in url and method == 'POST':
+                                try:
+                                    resp = route.fetch(headers={**route.request.headers, **_extra_headers})
+                                    body = resp.body()
+                                    body_text = body.decode('utf-8', errors='replace') if body else ''
+                                    print(f'  \U0001f50c Session response (route.fetch): HTTP {resp.status} | {body_text[:200]}', flush=True)
+                                    route.fulfill(response=resp)
+                                    return
+                                except Exception as _sess_err:
+                                    print(f'  \u26a0\ufe0f Session route.fetch error: {str(_sess_err)[:100]}', flush=True)
+                                    # Fall through to route.continue_()
                             
                             # All other API calls - pass through with X-Forwarded-For
                             route.continue_(headers={**route.request.headers, **_extra_headers})
