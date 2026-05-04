@@ -1,5 +1,5 @@
 """
-Smart Universal Form Bot v82p - IN-BROWSER Turnstile + Proxy-Seller + per-thread IP rotation
+Smart Universal Form Bot v82p3 - Same-context new tab Turnstile + Proxy-Seller + per-thread IP rotation
 Uses Patchright (undetected Chrome) + dynamic form field detection
 Works on ANY booking/registration site - auto-detects API, Turnstile, and Origin
 Bypasses Cloudflare Turnstile via subprocess solver with auto-detected sitekey
@@ -2170,99 +2170,98 @@ def api_direct_booking(page, proxy_config=None):
                 _ts_sitekey = '0x4AAAAAADF2Xch-Yrbuk9NL'
                 print(f"  \u26a0\ufe0f Using fallback Turnstile sitekey: {_ts_sitekey}", flush=True)
             
-            # Solve Turnstile IN-BROWSER using the site's own Turnstile widget
-            # The site loads Turnstile itself - we just need to wait for it and call execute
+            # Solve Turnstile in a NEW TAB within the SAME browser context
+            # This ensures the token is solved from the SAME IP as the main page
+            # (browser context maintains persistent proxy connection = same IP)
             try:
-                print(f"  \U0001f510 Solving Turnstile IN-BROWSER (site's own widget)...", flush=True)
+                print(f"  \U0001f510 Solving Turnstile in same-context new tab...", flush=True)
                 
-                # Wait for the site's Turnstile to be ready (up to 20s)
-                _ts_ready = False
-                for _ts_wait in range(40):  # 40 * 500ms = 20s
-                    _ts_check = page.evaluate("() => !!(window.turnstile && typeof window.turnstile.execute === 'function')")
+                # Get the browser context from the page
+                _ts_context = page.context
+                
+                # Create a new page (tab) in the same context
+                _ts_page = _ts_context.new_page()
+                
+                # Set content to a local HTML page with Turnstile auto-render
+                _ts_html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Turnstile</title>
+                    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                </head>
+                <body>
+                    <div class="cf-turnstile" data-sitekey="{_ts_sitekey}" data-size="invisible" data-appearance="execute"></div>
+                    <input type="hidden" name="cf-turnstile-response" value="">
+                </body>
+                </html>
+                """
+                
+                _ts_page.set_content(_ts_html_content)
+                
+                # Wait for Turnstile to load and become available (up to 20s)
+                _ts_loaded = False
+                for _ts_i in range(40):  # 40 * 500ms = 20s
+                    _ts_check = _ts_page.evaluate("() => !!(window.turnstile && typeof window.turnstile.render === 'function')")
                     if _ts_check:
-                        _ts_ready = True
+                        _ts_loaded = True
                         break
                     time.sleep(0.5)
                 
-                if not _ts_ready:
-                    print(f"  \u26a0\ufe0f Site's Turnstile not loaded after 20s, loading manually...", flush=True)
-                    # Try to trigger the site's own Turnstile loading mechanism
-                    page.evaluate(f"""
-                        () => {{
-                            if (document.getElementById('cf-turnstile-api-script')) return 'already';
-                            const s = document.createElement('script');
-                            s.id = 'cf-turnstile-api-script';
-                            s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=_cfTurnstileOnLoad';
-                            s.async = true;
-                            window._cfTurnstileOnLoad = window._cfTurnstileOnLoad || function(){{}};
-                            document.head.appendChild(s);
-                            return 'injected';
-                        }}
-                    """)
-                    # Wait another 15s for it to load
-                    for _ts_wait2 in range(30):
-                        _ts_check2 = page.evaluate("() => !!(window.turnstile && typeof window.turnstile.render === 'function')")
-                        if _ts_check2:
-                            _ts_ready = True
-                            break
-                        time.sleep(0.5)
-                
-                if _ts_ready:
-                    _turnstile_token = page.evaluate(f"""
+                if _ts_loaded:
+                    print(f"  \U0001f510 Turnstile loaded in new tab! Solving...", flush=True)
+                    # Render and execute the widget
+                    _turnstile_token = _ts_page.evaluate(f"""
                         async () => {{
                             try {{
-                                // Create hidden container for our widget
-                                let container = document.getElementById('cf-turnstile-bot-container');
+                                // Create container
+                                let container = document.getElementById('ts-container');
                                 if (!container) {{
                                     container = document.createElement('div');
-                                    container.id = 'cf-turnstile-bot-container';
-                                    container.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-                                    container.setAttribute('aria-hidden', 'true');
+                                    container.id = 'ts-container';
                                     document.body.appendChild(container);
-                                }} else {{
-                                    container.innerHTML = '';
                                 }}
                                 
-                                // Render invisible widget (same params as the site uses)
                                 const widgetId = window.turnstile.render(container, {{
                                     sitekey: '{_ts_sitekey}',
                                     size: 'invisible',
                                     appearance: 'execute'
                                 }});
                                 
-                                // Execute and get token
                                 const token = await new Promise((resolve) => {{
-                                    const timeout = setTimeout(() => resolve(''), 30000);
-                                    try {{
-                                        window.turnstile.execute(widgetId, {{
-                                            callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
-                                            'error-callback': () => {{ clearTimeout(timeout); resolve(''); }},
-                                            'expired-callback': () => {{ clearTimeout(timeout); resolve(''); }},
-                                            'timeout-callback': () => {{ clearTimeout(timeout); resolve(''); }}
-                                        }});
-                                    }} catch(e) {{
-                                        clearTimeout(timeout);
-                                        resolve('');
-                                    }}
+                                    const timeout = setTimeout(() => resolve('TIMEOUT'), 30000);
+                                    window.turnstile.execute(widgetId, {{
+                                        callback: (t) => {{ clearTimeout(timeout); resolve(String(t || '').trim()); }},
+                                        'error-callback': () => {{ clearTimeout(timeout); resolve('ERROR'); }},
+                                        'expired-callback': () => {{ clearTimeout(timeout); resolve('EXPIRED'); }},
+                                        'timeout-callback': () => {{ clearTimeout(timeout); resolve('TIMEOUT'); }}
+                                    }});
                                 }});
                                 
-                                return token || 'ERROR:no token';
+                                return token;
                             }} catch(e) {{
                                 return 'ERROR:' + e.message;
                             }}
                         }}
                     """)
                 else:
-                    _turnstile_token = 'ERROR:turnstile never loaded'
+                    print(f"  \u26a0\ufe0f Turnstile didn't load in new tab after 20s", flush=True)
+                    _turnstile_token = None
                 
-                if _turnstile_token and not _turnstile_token.startswith('ERROR:') and len(_turnstile_token) > 50:
-                    print(f"  \u2705 Turnstile solved IN-BROWSER! token={len(_turnstile_token)} chars", flush=True)
+                # Close the helper tab
+                try:
+                    _ts_page.close()
+                except:
+                    pass
+                
+                if _turnstile_token and not _turnstile_token.startswith('ERROR') and _turnstile_token not in ('TIMEOUT', 'EXPIRED', '') and len(_turnstile_token) > 50:
+                    print(f"  \u2705 Turnstile solved in same-context tab! token={len(_turnstile_token)} chars", flush=True)
                 else:
                     _err_msg = _turnstile_token if _turnstile_token else 'empty'
-                    print(f"  \u26a0\ufe0f In-browser Turnstile failed: {_err_msg[:100]}", flush=True)
+                    print(f"  \u26a0\ufe0f Same-context Turnstile failed: {_err_msg[:100]}", flush=True)
                     _turnstile_token = None
                     
-                    # Fallback: try subprocess method
+                    # Fallback: try subprocess method (different IP but might still work)
                     print(f"  \U0001f510 Fallback: Solving Turnstile via subprocess...", flush=True)
                     import subprocess as _ts_sp
                     _ts_solver_script = (
